@@ -8,7 +8,7 @@ name: CI
 # Windows one: a bundle is the interpreter and every compiled extension for
 # the machine that built it, and nothing cross-compiles that.
 #
-#   a tag `v*`            tests on three systems, builds both installers,
+#   a tag `v*`            tests on three systems, builds the installers,
 #                         creates the release and attaches them
 #   Run workflow (manual) the same, without the release: the installers are
 #                         left as artefacts of the run
@@ -101,6 +101,10 @@ jobs:
     #
     # Apple Silicon only. numba, which FlowSOM and UMAP are compiled with,
     # no longer publishes wheels for Intel Macs.
+    #
+    # Linux is built on the oldest Ubuntu offered: a bundle takes the C
+    # library from the machine it runs on, and one built against a newer
+    # library than the user's does not start.
     name: Package · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     needs: test
@@ -112,7 +116,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-22.04]
 
     steps:
       - uses: actions/checkout@v4
@@ -124,6 +128,15 @@ jobs:
         if: runner.os == 'Windows'
         with:
           dotnet-version: "8.0"
+
+      - name: Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libdbus-1-3 libglib2.0-0 xvfb
 
       - name: Install
         run: |
@@ -137,8 +150,36 @@ jobs:
         run: bash packaging/make_dmg.sh "$PWD/dist"
 
       - name: Application
-        if: runner.os == 'Windows'
+        if: runner.os != 'macOS'
         run: python -m PyInstaller packaging/milc.spec --noconfirm
+
+      - name: The application works
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a ./dist/MIL-C/MIL-C selftest
+          xvfb-run -a ./dist/MIL-C/MIL-C gui --quit-after 3
+
+      - name: Package and archive
+        if: runner.os == 'Linux'
+        run: bash packaging/make_linux.sh
+
+      # what a person does with each, and then the program run from where
+      # it landed: the package through apt, which also checks that every
+      # dependency it names exists; the archive through its own script
+      - name: The package installs, and the archive
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y ./dist/MIL-C-*.deb
+          test -f /usr/share/applications/mil-c.desktop
+          xvfb-run -a milc selftest
+          sudo apt-get remove -y mil-c
+          test ! -e /opt/MIL-C
+          mkdir unpacked && tar -xzf dist/MIL-C-*.tar.gz -C unpacked
+          bash unpacked/MIL-C-*/install.sh
+          test -f "$HOME/.local/share/applications/mil-c.desktop"
+          xvfb-run -a "$HOME/.local/bin/milc" gui --quit-after 3
+          bash unpacked/MIL-C-*/install.sh --remove
+          test ! -e "$HOME/.local/opt/MIL-C"
 
       # the bundle either runs UMAP, tSNE and FlowSOM and writes a figure or
       # it does not, and this is the only way to find out without a person.
@@ -187,7 +228,7 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          built=(dist/*.dmg dist/*.msi dist/*.zip)
+          built=(dist/*.dmg dist/*.msi dist/*.zip dist/*.deb dist/*.tar.gz)
           [ ${#built[@]} -gt 0 ] || { echo "nothing was built" >&2; exit 1; }
           status=0
           for file in "${built[@]}"; do
@@ -208,6 +249,8 @@ jobs:
             dist/*.dmg
             dist/*.msi
             dist/*.zip
+            dist/*.deb
+            dist/*.tar.gz
           if-no-files-found: error
 
       # a build artefact expires; a release does not. A tag makes the
@@ -219,7 +262,7 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          built=(dist/*.dmg dist/*.msi dist/*.zip)
+          built=(dist/*.dmg dist/*.msi dist/*.zip dist/*.deb dist/*.tar.gz)
           [ ${#built[@]} -gt 0 ] || { echo "nothing was built" >&2; exit 1; }
           # each runner has only its own installer, and whichever arrives
           # first is the one that creates the release
@@ -252,7 +295,8 @@ jobs:
         run: |
           mkdir -p assets && cd assets
           gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
-            --pattern '*.dmg' --pattern '*.msi' --pattern '*.zip'
+            --pattern '*.dmg' --pattern '*.msi' --pattern '*.zip' \
+            --pattern '*.deb' --pattern '*.tar.gz'
           sha256sum MIL-C-* > SHA256SUMS
           cat SHA256SUMS
           gh release upload "${GITHUB_REF_NAME}" SHA256SUMS --clobber \

@@ -66,6 +66,10 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   **Compensation…** lists every sample with where its matrix comes from (file, workspace,
   edited, shared); type over any cell and apply it to the samples selected or to all, or go
   back to the original. The caption under the plot says which matrix is in use.
+- When the values under the gates change after the fact — another matrix, or the samples
+  themselves batch-normalised — the tab says the gates were drawn on the old values until you
+  press Reviewed, and a line above the tabs says the concatenated events are out of date until
+  they are concatenated again.
 - Export the population shown, of the samples selected or of all, as FCS or CSV.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
 - What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
@@ -190,8 +194,15 @@ and 2,100 events, five markers). The tests in `tests/test_real.py` assert these 
 
 ## Install and run
 
-**Installers** are on the releases page: a disk image for macOS (Apple Silicon) and an installer
-for Windows, with a portable `.zip` beside it for machines where an installer cannot run.
+**Installers** are on the releases page: a disk image for macOS (Apple Silicon), an installer
+for Windows with a portable `.zip` beside it for machines where an installer cannot run, and
+for Linux (x86-64, Ubuntu 22.04 or anything as recent) a `.deb` and a `.tar.gz`:
+
+```bash
+sudo apt install ./MIL-C-0.1.0-linux-x86_64.deb      # Debian, Ubuntu, Mint: menu entry and `milc`
+tar -xzf MIL-C-0.1.0-linux-x86_64.tar.gz && MIL-C-0.1.0/install.sh   # any other, into ~/.local
+```
+
 Nothing is signed. On macOS, right-click ▸ Open the first time; on Windows, choose "More info",
 then "Run anyway". The first UMAP after installing takes a while longer than the ones after it:
 the numerical code is compiled once and kept.
@@ -275,9 +286,10 @@ milc/
 run.py              what a packaged MIL-C starts from
 packaging/
   make_icon.py      the mark and the application icon
-  milc.spec         the PyInstaller build, for macOS and Windows
+  milc.spec         the PyInstaller build, for macOS, Windows and Linux
   make_dmg.sh       the macOS disk image
   milc.wxs          the Windows installer (WiX)
+  make_linux.sh     the Linux package (.deb) and archive (.tar.gz)
 tests/              pytest; test_real.py runs only where the acquisitions are
 ```
 
@@ -287,9 +299,10 @@ tests/              pytest; test_real.py runs only where the acquisitions are
 bash packaging/make_dmg.sh      # macOS: builds MIL-C.app, tests it, wraps it in dist/*.dmg
 ```
 
-The Windows installer cannot be built on a Mac: a bundle is the interpreter and every compiled
-extension for the machine that built it. `.github/workflows/ci.yml` builds both on GitHub's
-machines — on a tag `v*`, which also creates the release, or on request from the Actions tab.
+The Windows and Linux ones cannot be built on a Mac: a bundle is the interpreter and every
+compiled extension for the machine that built it. `.github/workflows/ci.yml` builds all three
+on GitHub's machines (`packaging/make_linux.sh` wraps the Linux one, and the build installs the
+package and the archive before it lets them out) — on a tag `v*`, which also creates the release, or on request from the Actions tab.
 Every build is asked to run the whole route on invented data (`MIL-C selftest`) and to open its
 window before it is wrapped.
 

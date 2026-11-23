@@ -167,7 +167,7 @@ material de divulgação.
 | Colaboração em nuvem | N | N | OMIQ, Cytobank, CellEngine |
 | macOS em Apple Silicon, nativo | N (pendente, segundo o fabricante) | **S** | os de navegador |
 | Windows | S | **S** | quase todos |
-| Linux | ? | P (pelo código, sem instalador) | os de navegador, R, Python |
+| Linux | ? | **S** (`.deb` e `.tar.gz`) | os de navegador, R, Python |
 | Sem internet, sem licença que expira | P (24 h; token de 14 dias) | **S** | FCS Express, Kaluza |
 | Gratuito e de código aberto | N | **S** | Cytoflow, FlowKit, R; Floreada é gratuito |
 
@@ -300,23 +300,39 @@ o PeacoQC pega (na `7Ctrl5` ele tira 19% e o MIL-C 1%).
 
 ### Próximas implementações, na ordem em que eu faria
 
+Feito desde a lista anterior: a janela cabe numa tela de 1.280 pontos (as barras de controles
+passam para a linha de baixo; o mínimo caiu de 1.684 para 994); mudar a compensação, ou
+normalizar as amostras, avisa que o concatenado ficou velho e que os gates precisam ser
+revistos, e refaz o ajuste da normalização; instalador para Linux (`.deb` e `.tar.gz`).
+
+Prioritárias:
+
 1. **Limpeza: derivas moderadas.** Julgar a trajetória suavizada, como o PeacoQC, em vez da
    mediana corrida de 5 janelas; e pôr os limites (MAD, janelas consecutivas) no diálogo, que
    hoje só usa os padrões.
-2. **Depois de mudar a matriz de compensação**, avisar que o concatenado e a normalização
-   ficaram velhos; hoje só as amostras carregadas e as contagens são refeitas.
-3. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
-4. **Distribuição.** Publicar a versão 0.1.0; instalador para Linux; assinatura dos instaladores
-   (hoje o macOS e o Windows avisam na primeira abertura).
-5. **Expressão diferencial ao lado do diffcyt** em si, com os pesos e o `duplicateCorrelation`
-   dele; e o estimador novo do limma para graus de liberdade desiguais.
-6. **Eixos com a escala do workspace**: hoje a escala declarada no `.wsp` vale para testar os
-   gates, não para desenhar os eixos.
-7. **Acabamento do relatório**: nome da prancha em cada página; o motivo de um arquivo não ter
-   sido conferido pela limpeza; `milc analyze` escrevendo abundância e expressão diferencial.
+2. **Autocompensação por single stains** (e AutoSpill): calcular a matriz a partir dos controles
+   de uma cor, em vez de só ler e editar a que veio do aparelho.
+3. **Quadrantes deslocados e gates automáticos**: o quadrante com braços inclinados do FlowJo, e
+   gates achados pelo programa (o vale de um histograma, o contorno de uma população).
+4. **Proliferação, ciclo celular e cinética**: os modelos de diluição de corante, as fases
+   G1/S/G2 e a mediana no tempo.
+5. **Escrever workspace do FlowJo e GatingML**: levar os gates feitos aqui para o FlowJo e para
+   outros programas; hoje só se lê.
+6. **Unmixing espectral**, para citômetros espectrais.
 
-Mais adiante, sem mudança: proliferação, ciclo celular e cinética; autocompensação e AutoSpill;
-GatingML; autogating; unmixing espectral; trilha de auditoria.
+Em seguida:
+
+7. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
+8. **Distribuição.** Publicar a versão 0.1.0; assinatura dos instaladores (hoje o macOS e o
+   Windows avisam na primeira abertura).
+9. **Expressão diferencial ao lado do diffcyt** em si, com os pesos e o `duplicateCorrelation`
+   dele; e o estimador novo do limma para graus de liberdade desiguais.
+10. **Eixos com a escala do workspace**: hoje a escala declarada no `.wsp` vale para testar os
+    gates, não para desenhar os eixos.
+11. **Acabamento do relatório**: nome da prancha em cada página; o motivo de um arquivo não ter
+    sido conferido pela limpeza; `milc analyze` escrevendo abundância e expressão diferencial.
+
+Mais adiante: autogating por modelo; trilha de auditoria.
 
 ## Fontes
 

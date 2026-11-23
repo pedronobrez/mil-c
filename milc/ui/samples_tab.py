@@ -14,6 +14,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from .. import sampling
 from ..session import ALL_EVENTS, Session, suggest_pattern
 from . import style, worker
+from .flow import ElidedLabel
 
 MODES = [
     (sampling.EQUAL_PER_SAMPLE, "Same number from every sample"),
@@ -42,9 +43,9 @@ class SamplesTab(QtWidgets.QWidget):
         self._filling = False
         self._busy = False
 
-        self.folder_label = QtWidgets.QLabel("No folder open")
+        self.folder_label = ElidedLabel("No folder open")
         self.folder_label.setProperty("role", "strong")
-        self.wsp_label = QtWidgets.QLabel("")
+        self.wsp_label = ElidedLabel("")
         self.wsp_label.setProperty("role", "caption")
         self.add_column_button = QtWidgets.QPushButton("Add column…")
         self.add_column_button.setToolTip(

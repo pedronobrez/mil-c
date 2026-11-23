@@ -156,6 +156,12 @@ class Session:
         self.normalization_check: dict | None = None
         #: the curves in use, with what they were fitted for: see `_fitted`
         self._fit: tuple | None = None
+        #: why the concatenated events no longer match the samples ("" if
+        #: they do): the values under them changed after they were taken
+        self.dataset_stale = ""
+        #: why the gates should be looked at again ("" if there is no
+        #: reason): they were drawn on values that have since changed
+        self.review = ""
         #: how quality control was last applied — the limits of `qc.check`,
         #: the parameters judged (None: all) and the samples it could check;
         #: None where it is not applied, or was before this was kept
@@ -173,6 +179,7 @@ class Session:
     def open_folder(self, folder: str) -> None:
         self.folder = folder
         self.entries, self._counts, self.dataset = [], {}, None
+        self.dataset_stale = self.review = ""
         for path in sorted(glob.glob(os.path.join(folder, "*.fcs"))):
             try:
                 kv = read_header(path)
@@ -360,6 +367,8 @@ class Session:
         for e in entries:
             e.sample = None
         self._counts.clear()
+        self._fit = None      # the curves were fitted on the values as they were compensated
+        self._values_changed("the compensation changed")
         self.save_project()
 
     def distinct_matrices(self) -> int:
@@ -441,6 +450,7 @@ class Session:
         self.scales = {c: from_spec(spec) for c, spec in data.get("scales", {}).items()}
         self.normalization = data.get("normalization") or None
         self.quality_settings = data.get("quality") or None
+        self.review = str(data.get("review") or "")
         saved = data.get("compensation")
         if saved:
             try:
@@ -470,6 +480,24 @@ class Session:
             if file in left_out:
                 e.include = False
 
+    def _has_gates(self) -> bool:
+        return any(e.gates is not None and e.gates.children for e in self.entries)
+
+    def _values_changed(self, what: str) -> None:
+        """The values every gate cuts and every concatenation is taken from
+        are no longer what they were: say so until something is done about
+        it — the events concatenated again, the gates looked at."""
+        if self.dataset is not None:
+            self.dataset_stale = what
+        if self._has_gates():
+            self.review = what
+
+    def clear_review(self) -> None:
+        """The gates were looked at."""
+        if self.review:
+            self.review = ""
+            self.save_project()
+
     def save_project(self) -> None:
         """Written when the user changes something, never just for opening
         a folder: a folder that was only looked at is left as it was."""
@@ -484,6 +512,7 @@ class Session:
             "scales": {c: to_spec(t) for c, t in self.scales.items()},
             "normalization": self.normalization,
             "quality": self.quality_settings,
+            "review": self.review,
             "compensation": ({"channels": self.matrix.channels,
                               "matrix": np.asarray(self.matrix.matrix).tolist()}
                              if self.matrix is not None else None),
@@ -798,6 +827,7 @@ class Session:
                 s.meta = {c: e.meta.get(c, "") for c in self.columns}
                 samples.append(s)
         self.dataset = concatenate(samples, p, self.population, self.seed)
+        self.dataset_stale = ""
         cleaned = self.quality_record(samples)
         if cleaned:
             self.dataset.provenance["quality"] = cleaned
@@ -911,6 +941,7 @@ class Session:
         are read, so the Gates and Statistics tabs show normalised values
         too — and gates then cut normalised values."""
         was = bool(self.normalization and self.normalization.get("everywhere"))
+        before = self.normalization
         self.normalization = ({"batch": batch, "reference": list(reference),
                                "clusters": int(clusters)}
                               if batch and reference and reference[0] else None)
@@ -922,6 +953,11 @@ class Session:
             for e in self.entries:
                 e.sample = None
             self._counts.clear()
+            if self.normalization != before:
+                self._values_changed(
+                    "the values were batch-normalised" if everywhere and not was else
+                    "the batch normalisation was turned off" if was and not everywhere else
+                    "the batch normalisation changed")
         self._fit = None
         self.save_project()
 

@@ -18,6 +18,7 @@ from ..session import Session
 from . import palette, style, theme
 from .ramp_picker import RampPicker
 from .cluster_tools import ClusterTools, cluster_categories
+from .flow import captioned, flow, together
 from .cluster_views import FrequencyView, HeatmapView, TreeView
 from .scatter import Categories, MapView
 
@@ -108,32 +109,19 @@ class ClustersTab(QtWidgets.QWidget):
             "with a heatmap and a volcano")
         self.clear_button = QtWidgets.QPushButton("Clear selection")
 
-        # two rows — how it looks, and what is compared: one was wider than
-        # any laptop's screen
-        def row(*items) -> QtWidgets.QHBoxLayout:
-            lay = QtWidgets.QHBoxLayout()
-            for label, widget in items:
-                if label:
-                    cap = QtWidgets.QLabel(label)
-                    cap.setProperty("role", "caption")
-                    lay.addWidget(cap)
-                lay.addWidget(widget)
-                lay.addSpacing(10)
-            return lay
-
-        bar = row((None, self.clustering_caption), (None, self.clustering),
-                  ("Map", self.embedding), ("Heatmap", self.stat), ("Colours", self.ramp),
-                  (None, self.per_marker), (None, self.all_markers), ("Tree", self.tree_color))
-        bar.addStretch(1)
-        # in this row because the other has no room: it sets the tab's width
-        bar.addWidget(self.expression_button)
-        bar.addSpacing(10)
-        bar.addWidget(self.clear_button)
-        pairing_row = row(("Compare", self.group_by), ("within each", self.facet_by),
-                          ("Test", self.test), (None, self.correction),
-                          ("Paired by", self.paired_by), (None, self.results_button),
-                          (None, self.prism_button), (None, self.abundance_button))
-        pairing_row.addWidget(self.pairing, 1)
+        # two rows — how it looks, and what is compared — each going on to
+        # another line where the window is narrow
+        bar = flow(together(self.clustering_caption, self.clustering),
+                   captioned("Map", self.embedding), captioned("Heatmap", self.stat),
+                   captioned("Colours", self.ramp), self.per_marker, self.all_markers,
+                   captioned("Tree", self.tree_color), self.clear_button)
+        pairing_row = flow(captioned("Compare", self.group_by),
+                           captioned("within each", self.facet_by),
+                           captioned("Test", self.test, self.correction),
+                           captioned("Paired by", self.paired_by),
+                           together(self.results_button, self.prism_button),
+                           together(self.abundance_button, self.expression_button),
+                           self.pairing)
 
         self.map = MapView()
         self.heatmap = HeatmapView()
@@ -163,8 +151,8 @@ class ClustersTab(QtWidgets.QWidget):
         body = QtWidgets.QWidget()
         inner = QtWidgets.QVBoxLayout(body)
         inner.setContentsMargins(0, 0, 0, 0)
-        inner.addLayout(bar)
-        inner.addLayout(pairing_row)
+        inner.addWidget(bar)
+        inner.addWidget(pairing_row)
         inner.addWidget(grid, 1)
         inner.addWidget(self.summary)
         self.tools = ClusterTools(self)

@@ -1,4 +1,4 @@
-# PyInstaller build, shared by macOS and Windows.
+# PyInstaller build, shared by macOS, Windows and Linux.
 #
 # What is not obvious, and fails late — the bundle builds, and then the first
 # UMAP does not run:
@@ -25,7 +25,9 @@ WINDOWS = sys.platform.startswith("win")
 
 ROOT = Path(SPECPATH).parent
 ICONS = Path(SPECPATH) / "icons"
-ICON = str(ICONS / ("MIL-C.ico" if WINDOWS else "MIL-C.icns"))
+# Linux has no icon inside an executable: the menu entry names one
+ICON = (str(ICONS / "MIL-C.ico") if WINDOWS else
+        str(ICONS / "MIL-C.icns") if MACOS else None)
 
 # read rather than repeat: a version written twice disagrees with itself
 VERSION = re.search(r'__version__ = "([^"]+)"',

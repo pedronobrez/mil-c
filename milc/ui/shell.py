@@ -42,7 +42,18 @@ class MainShell(QtWidgets.QMainWindow):
         self.clusters = ClustersTab(self.session)
         self.tabs.addTab(self.explore, "Explore")
         self.tabs.addTab(self.clusters, "Clusters")
-        self.setCentralWidget(self.tabs)
+        self.stale = QtWidgets.QLabel("")
+        self.stale.setProperty("role", "warning")
+        self.stale.setWordWrap(True)
+        self.stale.setContentsMargins(16, 6, 16, 0)
+        self.stale.hide()
+        centre = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(centre)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.stale)
+        lay.addWidget(self.tabs, 1)
+        self.setCentralWidget(centre)
         self.statusBar().setSizeGripEnabled(False)
 
         self.samples.open_button.clicked.connect(self.choose_folder)
@@ -65,6 +76,9 @@ class MainShell(QtWidgets.QMainWindow):
         for tab in (self.samples, self.gates, self.statistics):
             self.clusters.sigGatesChanged.connect(tab.refresh)
         self.samples.sigConcatenated.connect(self._concatenated)
+        for changed in (self.gates.sigGatesChanged, self.samples.sigNormalisationChanged,
+                        self.samples.sigConcatenated):
+            changed.connect(self.show_stale)
 
         menu = self.menuBar().addMenu("&File")
         self._action(menu, "Open folder…", self.choose_folder, QtGui.QKeySequence.StandardKey.Open)
@@ -172,6 +186,7 @@ class MainShell(QtWidgets.QMainWindow):
         self.statistics.refresh()
         self.explore.dataset_changed()
         self.clusters.refresh()
+        self.show_stale()
         self.tabs.setCurrentWidget(self.samples)
         n = len(self.session.entries)
         self.status(f"{n} file(s) in {folder}" if n else f"No .fcs files in {folder}")
@@ -246,6 +261,16 @@ class MainShell(QtWidgets.QMainWindow):
         expression.to_csv(os.path.join(folder, "cluster_expression.csv"), "cluster")
         freq.to_csv(os.path.join(folder, "cluster_frequency.csv"), "cluster")
         self.status(f"Wrote cluster_expression.csv and cluster_frequency.csv to {folder}")
+
+    def show_stale(self) -> None:
+        """Above the tabs, for as long as the concatenated events are older
+        than the values they were taken from."""
+        why = self.session.dataset_stale
+        self.stale.setText(
+            f"The concatenated events were taken before {why}: Explore and Clusters still "
+            "show the old values. Concatenate again in Samples to bring them up to date."
+            if why else "")
+        self.stale.setVisible(bool(why))
 
     def _concatenated(self) -> None:
         self.explore.dataset_changed()

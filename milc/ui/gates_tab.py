@@ -28,6 +28,7 @@ from ..gating import TimeGate, time_node
 from ..session import Session
 from ..transforms import Arcsinh, Biex, Log, Logicle, decade_ticks, display_range, same
 from . import palette, style, theme
+from .flow import captioned, flow, together
 from .view_dialogs import BackgateDialog, MatrixDialog, OverlayChoice, draw_distributions
 
 HISTOGRAM = "#histogram"
@@ -225,22 +226,12 @@ class GatesTab(QtWidgets.QWidget):
         self.export_button = QtWidgets.QPushButton("Export…")
         self.export_button.setToolTip("The events of the population shown, of the samples "
                                       "selected or of all, as FCS or CSV files")
-        bar = QtWidgets.QHBoxLayout()
-        for text, w, extra in (("X", self.x_axis, self.x_scale), ("Y", self.y_axis, self.y_scale),
-                               ("Plot", self.kind, None), ("Colour by", self.colour_by, None)):
-            cap = QtWidgets.QLabel(text)
-            cap.setProperty("role", "caption")
-            bar.addWidget(cap)
-            bar.addWidget(w)
-            if extra is not None:
-                bar.addWidget(extra)
-            bar.addSpacing(10)
-        bar.addWidget(self.overlay)
-        bar.addStretch(1)
-        bar.addWidget(self.quality_button)
-        bar.addWidget(self.compensation_button)
-        bar.addWidget(self.export_button)
-        bar.addWidget(self.figure_button)
+        bar = flow(captioned("X", self.x_axis, self.x_scale),
+                   captioned("Y", self.y_axis, self.y_scale),
+                   captioned("Plot", self.kind), captioned("Colour by", self.colour_by),
+                   self.overlay,
+                   together(self.quality_button, self.compensation_button,
+                            self.export_button, self.figure_button))
         self.box = _DrawBox()
         self.plot = pg.PlotWidget(viewBox=self.box)
         self.plot.setBackground(theme.background())
@@ -253,7 +244,21 @@ class GatesTab(QtWidgets.QWidget):
         self.stack.addWidget(self.empty)
         self.stack.addWidget(self.plot)
         right = QtWidgets.QVBoxLayout()
-        right.addLayout(bar)
+        self.review = QtWidgets.QLabel("")
+        self.review.setProperty("role", "warning")
+        self.review.setWordWrap(True)
+        self.reviewed_button = QtWidgets.QPushButton("Reviewed")
+        self.reviewed_button.setToolTip("The gates were looked at and are where they "
+                                        "should be: stop saying so")
+        self.reviewed_button.clicked.connect(self.reviewed)
+        self.review_bar = QtWidgets.QWidget()
+        said = QtWidgets.QHBoxLayout(self.review_bar)
+        said.setContentsMargins(0, 0, 0, 0)
+        said.addWidget(self.review, 1)
+        said.addWidget(self.reviewed_button)
+        self.review_bar.hide()
+        right.addWidget(self.review_bar)
+        right.addWidget(bar)
         looks = QtWidgets.QHBoxLayout()
         looks.addWidget(self.caption, 1)
         looks.addWidget(self.matrix_button)
@@ -308,6 +313,7 @@ class GatesTab(QtWidgets.QWidget):
 
     def refresh(self) -> None:
         """After a folder or a workspace was opened."""
+        self.show_review()
         self._filling = True
         self.samples.clear()
         self.entries = self.session.usable()
@@ -609,7 +615,22 @@ class GatesTab(QtWidgets.QWidget):
             finally:
                 self._keep_axes = False
         self.samples.setCurrentRow(row, QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
+        self.show_review()
         self.sigGatesChanged.emit()
+
+    def show_review(self) -> None:
+        """Say that the gates were drawn on other values than those shown
+        now, for as long as the session has a reason to."""
+        why = self.session.review
+        self.review.setText(
+            f"These gates were drawn before {why}: each cuts the values as they are now, "
+            "and may no longer sit on its population. Look at them, then press Reviewed."
+            if why else "")
+        self.review_bar.setVisible(bool(why))
+
+    def reviewed(self) -> None:
+        self.session.clear_review()
+        self.show_review()
 
     def matrix_source(self) -> str:
         """Which matrix the sample being looked at is compensated with:
