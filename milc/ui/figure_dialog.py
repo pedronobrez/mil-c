@@ -54,6 +54,8 @@ class FigureDialog(QtWidgets.QDialog):
         self.setWindowTitle("Figure")
         self.content = content
         self.name = name
+        #: the plot this came from, for the plate to ask again; `open_for` sets it
+        self.source = None
         self.style = last_style()
         # the look is remembered; this figure's own words are not
         self.style.title, self.style.xlabel, self.style.ylabel = "", None, None
@@ -168,7 +170,12 @@ class FigureDialog(QtWidgets.QDialog):
         self.export_button = QtWidgets.QPushButton("Export…")
         self.export_button.setProperty("primary", True)
         self.close_button = QtWidgets.QPushButton("Close")
+        self.plate_button = QtWidgets.QPushButton("Add to plate")
+        self.plate_button.setToolTip("As a panel of the page of several: View ▸ Plate…")
+        self.plate_button.setVisible(self._plate_owner() is not None)
+        self.plate_button.clicked.connect(self.add_to_plate)
         buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(self.plate_button)
         buttons.addStretch(1)
         buttons.addWidget(self.close_button)
         buttons.addWidget(self.export_button)
@@ -485,6 +492,22 @@ class FigureDialog(QtWidgets.QDialog):
         settings().setValue(SETTING_FOLDER, os.path.dirname(path))
         self.note.setText(f"Wrote {path}")
 
+    def _plate_owner(self):
+        """Whoever above this dialog collects panels: the main window."""
+        w = self.parentWidget()
+        while w is not None and not hasattr(w, "add_to_plate"):
+            w = w.parentWidget()
+        return w
+
+    def add_to_plate(self) -> None:
+        """This figure, as it looks now, as a panel of the plate."""
+        owner = self._plate_owner()
+        if owner is None:
+            return
+        self._from_widgets()
+        letter = owner.add_to_plate(self.content, self.style, self.source, self.name)
+        self.note.setText(f"Added to the plate as panel {letter}: View ▸ Plate…")
+
     def accept(self) -> None:
         self._from_widgets()
         self.remember()
@@ -498,5 +521,6 @@ def open_for(view, parent, name: str = "figure") -> FigureDialog | None:
     if content is None:
         return None
     dialog = FigureDialog(content, parent, name)
+    dialog.source = view
     dialog.exec()
     return dialog
