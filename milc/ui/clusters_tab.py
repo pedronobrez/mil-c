@@ -101,6 +101,11 @@ class ClustersTab(QtWidgets.QWidget):
         self.abundance_button.setToolTip(
             "Two of the groups compared on the clusters' cell counts, by a negative-binomial "
             "model in the manner of diffcyt and edgeR, with a volcano")
+        self.expression_button = QtWidgets.QPushButton("Differential expression…")
+        self.expression_button.setToolTip(
+            "Two of the groups compared on what each cluster's cells express: the median "
+            "of each marker per sample, by limma's moderated t in the manner of diffcyt, "
+            "with a heatmap and a volcano")
         self.clear_button = QtWidgets.QPushButton("Clear selection")
 
         # two rows — how it looks, and what is compared: one was wider than
@@ -120,6 +125,9 @@ class ClustersTab(QtWidgets.QWidget):
                   ("Map", self.embedding), ("Heatmap", self.stat), ("Colours", self.ramp),
                   (None, self.per_marker), (None, self.all_markers), ("Tree", self.tree_color))
         bar.addStretch(1)
+        # in this row because the other has no room: it sets the tab's width
+        bar.addWidget(self.expression_button)
+        bar.addSpacing(10)
         bar.addWidget(self.clear_button)
         pairing_row = row(("Compare", self.group_by), ("within each", self.facet_by),
                           ("Test", self.test), (None, self.correction),
@@ -188,6 +196,7 @@ class ClustersTab(QtWidgets.QWidget):
         self.results_button.clicked.connect(self.show_results)
         self.prism_button.clicked.connect(self._ask_prism)
         self.abundance_button.clicked.connect(lambda: self.abundance_dialog().exec())
+        self.expression_button.clicked.connect(lambda: self.expression_dialog().exec())
         palette.notifier.changed.connect(self._recolour)
         self.refresh()
 
@@ -544,6 +553,12 @@ class ClustersTab(QtWidgets.QWidget):
         dialog, not yet shown."""
         from .abundance_dialog import AbundanceDialog
         return AbundanceDialog.for_tab(self)
+
+    def expression_dialog(self):
+        """Differential expression within the clusters, between the
+        groups the tab compares now: the dialog, not yet shown."""
+        from .expression_dialog import ExpressionDialog
+        return ExpressionDialog.for_tab(self)
 
     def _draw_tree(self) -> None:
         if self._filling:
