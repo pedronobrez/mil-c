@@ -176,6 +176,10 @@ class GateNode:
     #: tree was imported: what ours is checked against
     reference_count: int | None = None
     parent: "GateNode | None" = field(default=None, repr=False, compare=False)
+    #: what a user should be told about where this gate came from, when
+    #: it was imported by a rule not checked against the program that
+    #: wrote it; empty when there is nothing to say
+    note: str = ""
 
     def add(self, child: "GateNode") -> "GateNode":
         child.parent = self
@@ -248,7 +252,7 @@ def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
             g = QuadrantGate(list(g.dims), g.x, g.y, g.quadrant, g.group, g.inside)
         elif isinstance(g, BooleanGate):
             g = BooleanGate(g.op, list(g.operands), inside=g.inside)
-        out = GateNode(node.name, g,
+        out = GateNode(node.name, g, note=node.note,
                        reference_count=node.reference_count if keep_counts else None)
         for child in node.children:
             out.add(clone(child))
@@ -268,6 +272,8 @@ def _scale_in(spec):
 
 def tree_to_dict(tree: GateNode) -> dict:
     out: dict = {"name": tree.name, "children": [tree_to_dict(c) for c in tree.children]}
+    if tree.note:
+        out["note"] = tree.note
     g = tree.gate
     if isinstance(g, RectangleGate):
         out["gate"] = {"type": "rectangle", "dims": g.dims, "mins": g.mins,
@@ -311,7 +317,7 @@ def tree_from_dict(d: dict) -> GateNode:
                             g.get("group", ""), g.get("inside", True))
     elif g and g["type"] == "boolean":
         gate = BooleanGate(g["op"], list(g["operands"]))
-    node = GateNode(d.get("name", ""), gate)
+    node = GateNode(d.get("name", ""), gate, note=d.get("note", ""))
     for child in d.get("children", []):
         node.add(tree_from_dict(child))
     return node
