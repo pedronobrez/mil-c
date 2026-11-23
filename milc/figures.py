@@ -1,0 +1,522 @@
+"""
+Figures for paper: what a plot shows (a *content*), how it should look (a
+`FigureStyle`), and one function that draws the two into a matplotlib
+figure and writes it — SVG, PDF, PNG or TIFF, at the size in millimetres a
+journal asks for.
+
+The window's own plots are for looking; these are for printing. Both are
+drawn from the same content objects, so what is exported is what was on
+the screen, restyled. Text stays text in SVG and PDF, so a label can still
+be edited in Illustrator or Inkscape.
+
+No Qt here, and matplotlib is imported only when a figure is drawn.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field, fields
+
+import numpy as np
+
+from . import cluster_stats
+
+#: Paul Tol's qualitative colours: distinguishable with the common
+#: colour-vision deficiencies
+CATEGORICAL = ["#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377",
+               "#EE7733", "#009988", "#882255", "#999933", "#332288", "#BBBBBB"]
+
+COLORMAPS = ["viridis", "magma", "inferno", "plasma", "cividis", "turbo",
+             "Blues", "Reds", "Greys", "coolwarm", "RdBu_r"]
+
+FORMATS = {"svg": "SVG, vector (*.svg)", "pdf": "PDF, vector (*.pdf)",
+           "png": "PNG (*.png)", "tiff": "TIFF (*.tiff)"}
+
+
+def categorical(n: int) -> list[str]:
+    return [CATEGORICAL[i % len(CATEGORICAL)] for i in range(n)]
+
+
+# --- what a plot shows ---------------------------------------------------------
+
+@dataclass
+class Categories:
+    """Each event in one of `names`, by index."""
+    codes: np.ndarray
+    names: list[str]
+    colors: list[str]
+    title: str = ""
+
+    def counts(self) -> np.ndarray:
+        return np.bincount(self.codes, minlength=len(self.names))
+
+
+@dataclass
+class Values:
+    """Each event a number, coloured along a ramp between `lo` and `hi`."""
+    values: np.ndarray
+    title: str = ""
+    lo: float | None = None
+    hi: float | None = None
+    #: [(value, label)] for the colour bar, where the values are on a
+    #: scale of their own
+    ticks: list | None = None
+
+    def limits(self) -> tuple[float, float]:
+        v = self.values[np.isfinite(self.values)]
+        if v.size == 0:
+            return 0.0, 1.0
+        # the extreme percent on either side would spend the whole ramp
+        lo = np.percentile(v, 1) if self.lo is None else self.lo
+        hi = np.percentile(v, 99) if self.hi is None else self.hi
+        return (float(lo), float(hi)) if hi > lo else (float(lo), float(lo) + 1.0)
+
+
+def categories_of(labels, title: str = "", order: list[str] | None = None) -> Categories:
+    """From per-event labels of any kind; numbers sort as numbers."""
+    labels = np.asarray(labels)
+    names, codes = np.unique(labels, return_inverse=True)
+    names = [str(n) for n in names]
+    if order is None:
+        try:
+            rank = np.argsort([float(n) for n in names], kind="stable")
+        except ValueError:
+            rank = np.arange(len(names))
+    else:
+        rank = np.array([names.index(n) for n in order if n in names]
+                        + [i for i, n in enumerate(names) if n not in order])
+    remap = np.empty(len(names), dtype=np.int64)
+    remap[rank] = np.arange(len(names))
+    names = [names[i] for i in rank]
+    return Categories(remap[codes], names, categorical(len(names)), title)
+
+
+@dataclass
+class MapContent:
+    x: np.ndarray
+    y: np.ndarray
+    xlabel: str = ""
+    ylabel: str = ""
+    color: Categories | Values | None = None
+    split: Categories | None = None
+    #: [(position, label)] where an axis is not a plain number: a marker on
+    #: a biexponential scale, ticked in decades
+    xticks: list | None = None
+    yticks: list | None = None
+
+
+@dataclass
+class HeatmapContent:
+    table: cluster_stats.Table
+    per_column: bool = True
+
+
+@dataclass
+class FrequencyContent:
+    freq: cluster_stats.Table
+    #: the group of each column of `freq`
+    groups: list[str]
+
+
+@dataclass
+class TreeContent:
+    tree: dict
+    #: one of `tree["markers"]`, or None for the metacluster
+    color_by: str | None = None
+
+
+def category_names(content) -> list[tuple[str, str]]:
+    """(name, default colour) of what the content colours by category —
+    what a person may want to rename or recolour."""
+    if isinstance(content, MapContent) and isinstance(content.color, Categories):
+        return list(zip(content.color.names, content.color.colors))
+    if isinstance(content, FrequencyContent):
+        names = cluster_stats.ordered(content.groups)
+        return list(zip(names, categorical(len(names))))
+    if isinstance(content, TreeContent) and content.color_by is None:
+        t = content.tree
+        ids = sorted({int(c) for c in t["cluster"][t["sizes"] > 0]})
+        return list(zip([str(i) for i in ids], categorical(len(ids))))
+    return []
+
+
+def uses_colormap(content) -> bool:
+    return (isinstance(content, HeatmapContent)
+            or (isinstance(content, MapContent) and isinstance(content.color, Values))
+            or (isinstance(content, TreeContent) and content.color_by is not None))
+
+
+# --- how it should look ----------------------------------------------------------
+
+@dataclass
+class FigureStyle:
+    width_mm: float = 120.0
+    height_mm: float = 90.0
+    #: for PNG and TIFF; a vector file has no resolution
+    dpi: int = 300
+    font: str = "Arial"
+    font_size: float = 8.0
+    title: str = ""
+    #: None: the content's own
+    xlabel: str | None = None
+    ylabel: str | None = None
+    #: diameter in points
+    point_size: float = 2.5
+    opacity: float = 0.85
+    #: open (left and bottom), box, none
+    frame: str = "open"
+    ticks: bool = True
+    grid: bool = False
+    #: right, bottom, inside, none
+    legend: str = "right"
+    legend_title: str | None = None
+    legend_counts: bool = False
+    #: category name → colour, where it differs from the default
+    colors: dict[str, str] = field(default_factory=dict)
+    #: category name → what to print instead
+    labels: dict[str, str] = field(default_factory=dict)
+    colormap: str = "viridis"
+    #: numbers in the heatmap's cells
+    annotate: bool = True
+    transparent: bool = False
+    #: points as a bitmap inside a vector file: for maps of very many
+    #: events, where a million circles make an SVG nobody can open
+    rasterize: bool = False
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FigureStyle":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in (d or {}).items() if k in known})
+
+    def color(self, name: str, default: str) -> str:
+        return self.colors.get(name) or default
+
+    def label(self, name: str) -> str:
+        return self.labels.get(name) or (name if name != "" else "—")
+
+
+#: what a preset carries: the look, not this figure's own words
+PRESET_FIELDS = [f.name for f in fields(FigureStyle)
+                 if f.name not in ("title", "xlabel", "ylabel", "legend_title")]
+
+
+# --- drawing -----------------------------------------------------------------------
+
+def _figure(style: FigureStyle):
+    from matplotlib.figure import Figure
+    fig = Figure(figsize=(style.width_mm / 25.4, style.height_mm / 25.4),
+                 layout="constrained")
+    if style.transparent:
+        fig.patch.set_alpha(0.0)
+    return fig
+
+
+def _rc(style: FigureStyle) -> dict:
+    return {
+        "font.family": [style.font, "DejaVu Sans"], "font.size": style.font_size,
+        "axes.titlesize": style.font_size + 1, "axes.labelsize": style.font_size,
+        "xtick.labelsize": style.font_size - 1, "ytick.labelsize": style.font_size - 1,
+        "legend.fontsize": style.font_size - 1, "legend.title_fontsize": style.font_size - 1,
+        "axes.linewidth": 0.6, "xtick.major.width": 0.6, "ytick.major.width": 0.6,
+        "xtick.major.size": 2.5, "ytick.major.size": 2.5,
+        # text stays text, and keeps its font
+        "svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42,
+        "mathtext.default": "regular", "axes.unicode_minus": False,
+    }
+
+
+def _frame(ax, style: FigureStyle) -> None:
+    if style.transparent:
+        ax.patch.set_alpha(0.0)
+    if style.frame == "open":
+        ax.spines[["top", "right"]].set_visible(False)
+    elif style.frame == "none":
+        ax.spines[:].set_visible(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+    if not style.ticks:
+        ax.set_xticks([])
+        ax.set_yticks([])
+    if style.grid and style.frame != "none":
+        ax.grid(True, linewidth=0.3, color="#d0d0d0")
+        ax.set_axisbelow(True)
+
+
+def _legend(fig, axes, handles, style: FigureStyle, title: str) -> None:
+    if style.legend == "none" or not handles:
+        return
+    title = style.legend_title if style.legend_title is not None else title
+    kw = dict(title=title or None, frameon=False, handletextpad=0.4,
+              borderaxespad=0.2, labelspacing=0.35)
+    if style.legend == "inside":
+        axes[0].legend(handles=handles, loc="best", **kw)
+    elif style.legend == "bottom":
+        fig.legend(handles=handles, loc="outside lower center",
+                   ncols=min(len(handles), 5), columnspacing=1.0, **kw)
+    else:
+        fig.legend(handles=handles, loc="outside right upper", **kw)
+
+
+_SUPERSCRIPT = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁻", "0123456789-")
+
+
+def _tick_text(label: str) -> str:
+    """`10³` as mathtext: few fonts carry every superscript digit, and a
+    missing one prints as an empty box."""
+    if label.startswith("10") and len(label) > 2 and label[2:].translate(_SUPERSCRIPT) != label[2:]:
+        return "$10^{%s}$" % label[2:].translate(_SUPERSCRIPT)
+    return label
+
+
+def _dot(color: str, label: str):
+    from matplotlib.lines import Line2D
+    return Line2D([], [], marker="o", linestyle="", markersize=4.5,
+                  markerfacecolor=color, markeredgewidth=0, label=label)
+
+
+def _draw_map(fig, c: MapContent, style: FigureStyle) -> None:
+    from matplotlib import colormaps
+    from matplotlib.colors import Normalize, to_rgba
+
+    n = c.x.size
+    order = np.random.default_rng(0).permutation(n)  # as on the screen
+    groups = ([(None, np.ones(n, dtype=bool))] if c.split is None else
+              [(name, c.split.codes == i) for i, name in enumerate(c.split.names)])
+    # up to four panels read best side by side; more than that, a grid
+    cols = len(groups) if len(groups) <= 4 else int(np.ceil(np.sqrt(len(groups))))
+    rows = -(-len(groups) // cols)
+    grid = fig.subplots(rows, cols, sharex=True, sharey=True, squeeze=False)
+    axes = [grid[k // cols][k % cols] for k in range(len(groups))]
+    for extra in grid.ravel()[len(groups):]:
+        extra.set_visible(False)
+
+    mappable = None
+    if isinstance(c.color, Categories):
+        table = np.array([to_rgba(style.color(nm, col), style.opacity)
+                          for nm, col in zip(c.color.names, c.color.colors)])
+        rgba = table[c.color.codes]
+    elif isinstance(c.color, Values):
+        lo, hi = c.color.limits()
+        norm = Normalize(lo, hi, clip=True)
+        cmap = colormaps[style.colormap]
+        rgba = cmap(norm(np.nan_to_num(c.color.values, nan=lo)))
+        rgba[:, 3] = style.opacity
+        from matplotlib.cm import ScalarMappable
+        mappable = ScalarMappable(norm, cmap)
+    else:
+        rgba = np.tile(to_rgba(style.color("", "#234b8c"), style.opacity), (n, 1))
+
+    area = style.point_size ** 2
+    for ax, (name, member) in zip(axes, groups):
+        if name is not None:
+            rest = order[~member[order]]
+            ax.scatter(c.x[rest], c.y[rest], s=area, c="#d9dbe0", linewidths=0,
+                       rasterized=style.rasterize)
+            count = f" ({int(member.sum()):,d})" if style.legend_counts else ""
+            ax.set_title(style.label(name) + count)
+        sel = order[member[order]]
+        ax.scatter(c.x[sel], c.y[sel], s=area, c=rgba[sel], linewidths=0,
+                   rasterized=style.rasterize)
+        if c.xticks:
+            ax.set_xticks([p for p, _ in c.xticks], [_tick_text(t) for _, t in c.xticks])
+        if c.yticks:
+            ax.set_yticks([p for p, _ in c.yticks], [_tick_text(t) for _, t in c.yticks])
+        _frame(ax, style)
+    xlabel = c.xlabel if style.xlabel is None else style.xlabel
+    ylabel = c.ylabel if style.ylabel is None else style.ylabel
+    if style.frame != "none":
+        for k, ax in enumerate(axes):
+            if k // cols == rows - 1 or k + cols >= len(groups):
+                ax.set_xlabel(xlabel)
+            if k % cols == 0:
+                ax.set_ylabel(ylabel)
+
+    if isinstance(c.color, Categories):
+        counts = c.color.counts()
+        handles = [_dot(style.color(nm, col),
+                        style.label(nm) + (f" ({int(k):,d})" if style.legend_counts else ""))
+                   for nm, col, k in zip(c.color.names, c.color.colors, counts)]
+        _legend(fig, axes, handles, style, c.color.title)
+    elif mappable is not None and style.legend != "none":
+        bar = fig.colorbar(mappable, ax=axes, shrink=0.7, aspect=22, pad=0.02,
+                           location="bottom" if style.legend == "bottom" else "right")
+        bar.set_label(style.legend_title if style.legend_title is not None
+                      else c.color.title)
+        if c.color.ticks:
+            inside = [(p, _tick_text(t)) for p, t in c.color.ticks
+                      if mappable.norm.vmin <= p <= mappable.norm.vmax]
+            if len(inside) >= 2:
+                bar.set_ticks([p for p, _ in inside], labels=[t for _, t in inside])
+        bar.outline.set_linewidth(0.5)
+
+
+def _draw_heatmap(fig, c: HeatmapContent, style: FigureStyle) -> None:
+    from matplotlib import colormaps
+    t = c.table
+    shade = cluster_stats.scaled(t, c.per_column)
+    ax = fig.subplots()
+    cmap = colormaps[style.colormap]
+    im = ax.imshow(shade, cmap=cmap, vmin=0, vmax=1, aspect="auto")
+    ax.set_xticks(range(len(t.columns)),
+                  [style.label(n.split()[0] if n else n) for n in t.columns],
+                  rotation=45 if len(t.columns) > 6 else 0,
+                  ha="right" if len(t.columns) > 6 else "center")
+    ax.set_yticks(range(len(t.rows)), [style.label(r) for r in t.rows])
+    ax.set_ylabel("Cluster" if style.ylabel is None else style.ylabel)
+    ax.set_xlabel("" if style.xlabel is None else style.xlabel)
+    ax.tick_params(length=0)
+    ax.spines[:].set_visible(style.frame == "box")
+    if style.annotate:
+        for r in range(shade.shape[0]):
+            for k in range(shade.shape[1]):
+                red, green, blue, _ = cmap(float(np.clip(shade[r, k], 0, 1)))
+                dark = 0.299 * red + 0.587 * green + 0.114 * blue < 0.55
+                ax.text(k, r, f"{t.values[r, k]:.0f}", ha="center", va="center",
+                        fontsize=style.font_size - 1.5,
+                        color="white" if dark else "black")
+    if style.legend != "none":
+        bar = fig.colorbar(im, ax=ax, shrink=0.7, aspect=22, pad=0.02, ticks=[0, 1],
+                           location="bottom" if style.legend == "bottom" else "right")
+        bar.ax.set_yticklabels(["min", "max"]) if style.legend != "bottom" else \
+            bar.ax.set_xticklabels(["min", "max"])
+        default = "Per marker" if c.per_column else "Whole table"
+        bar.set_label(style.legend_title if style.legend_title is not None else default)
+        bar.outline.set_linewidth(0.5)
+
+
+def _draw_frequencies(fig, c: FrequencyContent, style: FigureStyle) -> None:
+    from matplotlib.patches import Patch
+    ax = fig.subplots()
+    names = cluster_stats.ordered(c.groups)
+    colors = categorical(len(names))
+    n_clusters = len(c.freq.rows)
+    width = 0.8 / max(len(names), 1)
+    rng = np.random.default_rng(0)
+    handles = []
+    for j, (g, default) in enumerate(zip(names, colors)):
+        color = style.color(g, default)
+        cols = [k for k, x in enumerate(c.groups) if x == g]
+        vals = c.freq.values[:, cols]
+        vals = vals[:, ~np.isnan(vals).all(axis=0)]
+        if vals.shape[1] == 0:
+            continue
+        x = np.arange(n_clusters) - 0.4 + width * (j + 0.5)
+        mean = vals.mean(axis=1)
+        ax.bar(x, mean, width * 0.9, color=color, alpha=0.6, edgecolor=color, linewidth=0.6)
+        if vals.shape[1] > 1:
+            ax.errorbar(x, mean, yerr=vals.std(axis=1, ddof=1), fmt="none",
+                        ecolor="black", elinewidth=0.6, capsize=1.5, capthick=0.6)
+        jitter = (rng.random(vals.shape) - 0.5) * width * 0.5
+        ax.scatter((x[:, None] + jitter).ravel(), vals.ravel(),
+                   s=max(style.point_size, 1.5) ** 2, facecolors="white",
+                   edgecolors="black", linewidths=0.5, zorder=3)
+        suffix = f" (n={vals.shape[1]})" if style.legend_counts else ""
+        handles.append(Patch(facecolor=color, alpha=0.6, edgecolor=color,
+                             label=style.label(g) + suffix))
+    ax.set_xticks(range(n_clusters), [style.label(r) for r in c.freq.rows])
+    ax.set_xlabel("Cluster" if style.xlabel is None else style.xlabel)
+    ax.set_ylabel("% of the sample's events" if style.ylabel is None else style.ylabel)
+    ax.set_xlim(-0.6, n_clusters - 0.4)
+    ax.set_ylim(bottom=0)
+    _frame(ax, style)
+    _legend(fig, [ax], handles, style, "")
+
+
+def _draw_tree(fig, c: TreeContent, style: FigureStyle) -> None:
+    from matplotlib import colormaps
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.collections import LineCollection
+    from matplotlib.colors import Normalize
+    t = c.tree
+    ax = fig.subplots()
+    pos, sizes, cluster = t["pos"], t["sizes"], t["cluster"]
+    used = np.flatnonzero(sizes > 0)
+    if len(t["edges"]):
+        ax.add_collection(LineCollection(pos[t["edges"]], colors="#b8bcc4",
+                                         linewidths=0.7, zorder=1))
+    area = (style.point_size * (1.2 + 3.5 * np.sqrt(sizes[used] / sizes[used].max()))) ** 2
+    if c.color_by in t["markers"]:
+        m = t["medians"][used, t["markers"].index(c.color_by)]
+        norm = Normalize(np.nanmin(m), np.nanmax(m))
+        ax.scatter(pos[used, 0], pos[used, 1], s=area, c=m, cmap=style.colormap,
+                   norm=norm, edgecolors="white", linewidths=0.4, zorder=2)
+        if style.legend != "none":
+            bar = fig.colorbar(ScalarMappable(norm, colormaps[style.colormap]), ax=ax,
+                               shrink=0.6, aspect=22, pad=0.02,
+                               location="bottom" if style.legend == "bottom" else "right")
+            bar.set_label(style.legend_title if style.legend_title is not None
+                          else c.color_by.split()[0])
+            bar.outline.set_linewidth(0.5)
+    else:
+        named = dict(category_names(c))
+        colors = [style.color(str(int(k)), named[str(int(k))]) for k in cluster[used]]
+        ax.scatter(pos[used, 0], pos[used, 1], s=area, c=colors,
+                   edgecolors="white", linewidths=0.4, zorder=2)
+        handles = [_dot(style.color(nm, col), style.label(nm)) for nm, col in named.items()]
+        _legend(fig, [ax], handles, style, "Cluster")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.margins(0.08)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.spines[:].set_visible(style.frame == "box")
+    if style.transparent:
+        ax.patch.set_alpha(0.0)
+
+
+_DRAW = {MapContent: _draw_map, HeatmapContent: _draw_heatmap,
+         FrequencyContent: _draw_frequencies, TreeContent: _draw_tree}
+
+
+class _drawn:
+    """`with _drawn(content, style) as fig:` — the figure, built and still
+    under the style's settings, which matplotlib reads again when it
+    writes (the SVG font handling among them)."""
+
+    def __init__(self, content, style: FigureStyle):
+        self.content, self.style = content, style
+
+    def __enter__(self):
+        import matplotlib
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        self._rc = matplotlib.rc_context(_rc(self.style))
+        self._rc.__enter__()
+        fig = _figure(self.style)
+        _DRAW[type(self.content)](fig, self.content, self.style)
+        if self.style.title:
+            fig.suptitle(self.style.title, fontsize=self.style.font_size + 1.5)
+        FigureCanvasAgg(fig)
+        return fig
+
+    def __exit__(self, *exc):
+        return self._rc.__exit__(*exc)
+
+
+def save(content, style: FigureStyle, path: str) -> None:
+    """The format is the file's extension: .svg, .pdf, .png, .tif(f)."""
+    ext = path.rsplit(".", 1)[-1].lower()
+    fmt = {"tif": "tiff"}.get(ext, ext)
+    if fmt not in FORMATS:
+        raise ValueError(f"cannot write .{ext}: use " + ", ".join("." + f for f in FORMATS))
+    kw = {"pil_kwargs": {"compression": "tiff_lzw"}} if fmt == "tiff" else {}
+    with _drawn(content, style) as fig:
+        fig.savefig(path, format=fmt, dpi=style.dpi, transparent=style.transparent, **kw)
+
+
+def preview_png(content, style: FigureStyle, dpi: int = 110) -> bytes:
+    """The figure as it will be exported, small: drawn by the code that
+    writes the file, so the preview cannot disagree with it."""
+    import io
+    buf = io.BytesIO()
+    with _drawn(content, style) as fig:
+        fig.savefig(buf, format="png", dpi=dpi, transparent=False)
+    return buf.getvalue()
+
+
+def fonts() -> list[str]:
+    """The font families matplotlib can actually draw with here."""
+    from matplotlib import font_manager
+    return sorted(set(font_manager.get_font_names()), key=str.lower)

@@ -1,0 +1,35 @@
+# Acquisitions and everything derived from them: never committed.
+# Raw data is large, and unpublished results do not belong in a history
+# that may one day be public — removing them afterwards does not remove them.
+Data/
+data/
+exemplos/
+*.fcs
+*.wsp
+*.npz
+*.csv
+
+# FlowJo's plugins, kept here for reference: other people's software
+plugins/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Packaging
+build/
+dist/
+*.dmg
+*.msi
+*.exe
+
+# macOS
+.DS_Store
+
+# Local notes about the data
+NOTES.local.md
