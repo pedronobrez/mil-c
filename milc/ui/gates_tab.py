@@ -445,6 +445,17 @@ class GatesTab(QtWidgets.QWidget):
         looks.addWidget(self.caption, 1)
         looks.addWidget(self.matrix_button)
         looks.addWidget(self.backgate_button)
+        self.model_button = QtWidgets.QPushButton("Model…")
+        self.model_button.setToolTip(
+            "Fit a model to the population shown, in every sample selected: the "
+            "generations of a dye's dilution, the phases of the cell cycle, or a "
+            "parameter through the time of the acquisition")
+        models = QtWidgets.QMenu(self.model_button)
+        for kind in ("Proliferation", "Cell cycle", "Kinetics"):
+            models.addAction(kind + "…").triggered.connect(
+                lambda _checked=False, k=kind: self.open_model(k))
+        self.model_button.setMenu(models)
+        looks.addWidget(self.model_button)
         right.addLayout(looks)
         right.addWidget(self.stack, 1)
 
@@ -742,6 +753,15 @@ class GatesTab(QtWidgets.QWidget):
         dialog = self.backgate_dialog()
         if dialog is not None:
             dialog.exec()
+
+    def open_model(self, kind: str, show: bool = True):
+        """Proliferation, Cell cycle or Kinetics of the population shown,
+        on the parameter across, for the samples selected."""
+        from .model_dialogs import dialog_for
+        dialog = dialog_for(self, kind)
+        if dialog is not None and show:
+            dialog.exec()
+        return dialog
 
     def content(self):
         """What is on the plot, for a figure."""
