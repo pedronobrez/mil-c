@@ -59,6 +59,9 @@ class MainShell(QtWidgets.QMainWindow):
         self.explore.sigStatus.connect(self.status)
         self.explore.sigResults.connect(self.clusters.refresh)
         self.clusters.sigStatus.connect(self.status)
+        self.clusters.sigClustersChanged.connect(self.explore._draw)
+        for tab in (self.samples, self.gates, self.statistics):
+            self.clusters.sigGatesChanged.connect(tab.refresh)
         self.samples.sigConcatenated.connect(self._concatenated)
 
         menu = self.menuBar().addMenu("&File")

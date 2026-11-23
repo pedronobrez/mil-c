@@ -228,7 +228,8 @@ def category_names(content) -> list[tuple[str, str]]:
     if isinstance(content, TreeContent) and content.color_by is None:
         t = content.tree
         ids = sorted({int(c) for c in t["cluster"][t["sizes"] > 0]})
-        return list(zip([str(i) for i in ids], categorical(len(ids))))
+        names = t.get("names", {})
+        return list(zip([names.get(i, str(i)) for i in ids], categorical(len(ids))))
     return []
 
 
@@ -579,7 +580,8 @@ def _draw_tree(fig, c: TreeContent, style: FigureStyle) -> None:
             bar.outline.set_linewidth(0.5)
     else:
         named = dict(category_names(c))
-        colors = [style.color(str(int(k)), named[str(int(k))]) for k in cluster[used]]
+        of = dict(zip(sorted({int(k) for k in cluster[used]}), named))   # cluster → its name
+        colors = [style.color(of[int(k)], named[of[int(k)]]) for k in cluster[used]]
         ax.scatter(pos[used, 0], pos[used, 1], s=area, c=colors,
                    edgecolors="white", linewidths=0.4, zorder=2)
         handles = [_dot(style.color(nm, col), style.label(nm)) for nm, col in named.items()]

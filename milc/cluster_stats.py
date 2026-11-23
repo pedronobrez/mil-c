@@ -21,6 +21,18 @@ class Table:
     rows: list[str]
     columns: list[str]
     values: np.ndarray
+    #: the clusters the rows stand for, where the rows carry their names
+    ids: list[int] | None = None
+
+    def row_of(self, cluster) -> int | None:
+        """Where a cluster is in the table, or None."""
+        if cluster is None:
+            return None
+        ids = self.ids if self.ids is not None else [int(r) for r in self.rows]
+        return ids.index(cluster) if cluster in ids else None
+
+    def cluster_at(self, row: int) -> int:
+        return self.ids[row] if self.ids is not None else int(self.rows[row])
 
     def to_csv(self, path: str, corner: str = "") -> None:
         with open(path, "w", encoding=CSV_ENCODING) as f:
