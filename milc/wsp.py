@@ -5,6 +5,20 @@ and the gating tree with the counts FlowJo reported.
 
 Nothing is written back. Plugin nodes (UMAP, FlowSOM, ClusterExplorer) are
 skipped: their results are recomputed here, not imported.
+
+Rectangles and polygons are read by rules checked against FlowJo's own
+counts on a real experiment (tests/test_real.py). Quadrants, combinations
+(and, or, not) and ellipses are not: no workspace of ours holds one. They
+are read the way two other readers of the format do — FlowKit (Python)
+and CytoML with cytolib (Bioconductor) — where the two agree, and the
+workspaces FlowKit publishes with its tests were looked at to see what
+FlowJo 10.6 to 10.8 really writes. So three things hold:
+
+  - a population read that way says so in its `note`;
+  - what could not be read with confidence is not read, and is listed in
+    `Workspace.skipped` with the reason;
+  - FlowJo's count is beside every population, and `count_mismatches`
+    lists those whose count here is not FlowJo's. That is the check.
 """
 
 from __future__ import annotations
@@ -18,7 +32,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .compensation import Compensation
-from .gating import GateNode, PolygonGate, RectangleGate, tree_to_dict
+from .gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
+                     PolygonGate, QuadrantGate, RectangleGate, tree_to_dict)
 from .transforms import Biex, Linear
 
 
@@ -37,6 +52,40 @@ def _children(e, name: str):
 def _child(e, name: str):
     found = _children(e, name)
     return found[0] if found else None
+
+
+#: begins the `note` of every population read by a rule taken from other
+#: readers of the format, not checked here against FlowJo's counts
+UNVERIFIED = "read from the workspace by a rule not yet checked against FlowJo"
+
+#: how far a count may be from FlowJo's before it is worth a look: what was
+#: measured on 72 rectangles and polygons, with its margin. FlowJo counts on
+#: a 256-bin grid by a rule not reproduced, so equality is not expected.
+COUNT_TOLERANCE = 0.012
+COUNT_SLACK = 3
+
+
+@dataclass
+class Skipped:
+    """A population of the workspace that was not read."""
+    #: the sample or the group whose tree it is in
+    owner: str
+    path: str
+    #: the workspace's own word for it: `EllipsoidGate`, `OrNode`…
+    kind: str
+    reason: str
+    #: how many populations under it went with it
+    below: int = 0
+
+
+@dataclass
+class Mismatch:
+    """A population counted differently here and in FlowJo."""
+    path: str
+    count: int
+    flowjo: int
+    #: the population's `note`: whether its gate was read by an unchecked rule
+    note: str = ""
 
 
 @dataclass
@@ -68,6 +117,8 @@ class Workspace:
     #: the gates FlowJo keeps on a group, by the group's name: what it
     #: applies to every sample put in that group
     groups: dict[str, GateNode] = field(default_factory=dict)
+    #: every population that was left unread, and why
+    skipped: list[Skipped] = field(default_factory=list)
 
     def gated(self) -> list[WspSample]:
         return [s for s in self.samples
@@ -103,6 +154,7 @@ class Workspace:
 def read_wsp(path: str) -> Workspace:
     root = ET.parse(path).getroot()
     samples = []
+    skipped: list[Skipped] = []
     sample_list = _child(root, "SampleList")
     for s in (_children(sample_list, "Sample") if sample_list is not None else []):
         dataset = _child(s, "DataSet")
@@ -114,7 +166,7 @@ def read_wsp(path: str) -> Workspace:
         tree = GateNode(name=node.get("name", ""),
                         reference_count=_int(node.get("count")))
         transforms = _read_transforms(_child(s, "Transformations"))
-        _read_populations(node, tree, transforms)
+        _read_populations(node, tree, transforms, skipped, tree.name)
         samples.append(WspSample(
             name=node.get("name", ""),
             uri=dataset.get("uri", ""),
@@ -128,7 +180,7 @@ def read_wsp(path: str) -> Workspace:
     groups_el = _child(root, "Groups")
     for g in (_children(groups_el, "GroupNode") if groups_el is not None else []):
         tree = GateNode(name=g.get("name", ""))
-        _read_populations(g, tree)
+        _read_populations(g, tree, None, skipped, tree.name)
         if tree.children:
             # the counts stored on a group's gates are one sample's, and
             # would be read as FlowJo's count for whichever file gets them
@@ -136,7 +188,7 @@ def read_wsp(path: str) -> Workspace:
                 node.reference_count = None
             groups[tree.name] = tree
     return Workspace(path=path, flowjo_version=root.get("flowJoVersion", ""),
-                     samples=samples, groups=groups)
+                     samples=samples, groups=groups, skipped=skipped)
 
 
 def signature(tree: GateNode) -> list:
@@ -148,6 +200,29 @@ def signature(tree: GateNode) -> list:
         return {"name": d["name"], "gate": gate,
                 "children": [plain(c) for c in d["children"]]}
     return [plain(tree_to_dict(c)) for c in tree.children]
+
+
+def unverified(tree: GateNode) -> list[GateNode]:
+    """The populations of a tree whose gates were read by a rule not
+    checked against FlowJo: the ones to warn about."""
+    return [node for node in tree.walk() if node.note.startswith(UNVERIFIED)]
+
+
+def count_mismatches(tree: GateNode, count, tolerance: float = COUNT_TOLERANCE,
+                     slack: int = COUNT_SLACK) -> list[Mismatch]:
+    """The populations whose count here is not the one FlowJo wrote in the
+    workspace, by more than the tolerance. `count` gives ours for a path
+    (`Sample.count`). For the gates no FlowJo file was at hand to test,
+    this is the only check there is."""
+    out = []
+    for node in tree.walk():
+        ref = node.reference_count
+        if node.gate is None or ref is None:
+            continue
+        ours = int(count(node.path))
+        if abs(ours - ref) > max(tolerance * ref, slack):
+            out.append(Mismatch(node.path, ours, ref, node.note))
+    return out
 
 
 def _int(text) -> int | None:
@@ -197,10 +272,19 @@ def _read_transforms(el) -> dict[str, object]:
     return out
 
 
+class _Unread(Exception):
+    """A gate left alone; the message is the reason."""
+
+
+def _vertices(el) -> np.ndarray:
+    return np.array([[float(_attrs(c)["value"]) for c in _children(v, "coordinate")]
+                     for v in (_children(el, "vertex") if el is not None else [])])
+
+
 def _read_gate(el, transforms=None):
-    shape = next(iter(el), None)
+    shape = next(iter(el), None) if el is not None else None
     if shape is None:
-        return None
+        raise _Unread("the workspace holds no gate for it")
     a = _attrs(shape)
     inside = a.get("eventsInside", "1") != "0"
     dims, mins, maxs = [], [], []
@@ -213,24 +297,215 @@ def _read_gate(el, transforms=None):
     if kind == "RectangleGate":
         return RectangleGate(dims, mins, maxs, inside)
     if kind == "PolygonGate":
-        verts = [[float(_attrs(c)["value"]) for c in _children(v, "coordinate")]
-                 for v in _children(shape, "vertex")]
         # FlowJo stores the vertices in the file's units and tests the
         # events where the polygon was drawn: on the axis' own scale
         scales = [t if isinstance(t, Biex) else None
                   for t in ((transforms or {}).get(d) for d in dims)]
-        return PolygonGate(dims, np.array(verts), inside,
+        return PolygonGate(dims, _vertices(shape), inside,
                            scales if any(s is not None for s in scales) else None)
-    return None  # ellipses, curly quadrants, booleans: not met yet
+    if kind == "EllipsoidGate":
+        return _read_ellipse(shape, dims, inside, transforms)
+    if kind == "CurlyQuad":
+        # CytoML redraws the curve with a constant of its own choosing
+        # (cytolib src/gate.cpp, CurlyQuadGate::interpolate: `multiplier =
+        # 0.001`) and FlowKit does not read it at all: nothing to go by
+        raise _Unread("the curve of a curly quadrant is not written in the workspace, "
+                      "and no reader of the format is known to reproduce it")
+    raise _Unread(f"a kind of gate ({kind}) that is not read")
 
 
-def _read_populations(el, parent: GateNode, transforms=None) -> None:
-    for sub in _children(el, "Subpopulations"):
-        for p in _children(sub, "Population"):
-            gate_el = _child(p, "Gate")
-            gate = _read_gate(gate_el, transforms) if gate_el is not None else None
-            if gate is None:
-                continue
-            node = parent.add(GateNode(name=p.get("name", "").strip(), gate=gate,
-                                       reference_count=_int(p.get("count"))))
-            _read_populations(p, node, transforms)
+def _read_ellipse(shape, dims, inside, transforms) -> EllipseGate:
+    """FlowJo's ellipse is not Gating-ML's (a mean and a covariance): it is
+    two foci and four points of the edge, and unlike every other gate they
+    are not in the file's units but on the 256 channels of the plot — each
+    axis' own scale, 0 at the bottom and 256 at the top.
+
+      - FlowKit, src/flowkit/_models/gates/_wsp_gates.py,
+        WSPEllipsoidGate.convert_to_polygon_gate: divides by 256 into the
+        transform's own range; centre and angle from the foci, the long
+        half-axis from the first pair of edge points, the short one from
+        that and the foci.
+      - cytolib, src/gate.cpp, ellipsoidGate::transforming, with CytoML,
+        inst/include/CytoML/winFlowJoWorkspace.hpp, getGate(wsEllipseGateNode&)
+        and cytolib src/ellipse2points.cpp, parseEllipse: the same 256
+        channels; centre, both half-axes and angle from the four edge
+        points alone, the longer pair being the long axis.
+
+    The ellipse is read when both readings give the same one to within a
+    channel, and left alone otherwise. In the two workspaces of FlowJo's
+    looked at they give the same one exactly: the edge points are in whole
+    channels and the foci are those of the two half-lengths — though the
+    second pair of points is not at right angles to the first. Measured once, 2026-11-23, on the workspace FlowKit
+    publishes with its file (data/simple_line_example/
+    single_ellipse_51_events.wsp, FlowJo 10.6.1, linear axes, 100 events):
+    this gives FlowJo's 51; half a channel more or less on the long axis
+    gives 52 or 49; taking the `distance` attribute for the sum of the
+    focal distances, which neither reader does, gives 66. Nothing was
+    measured on a biexponential axis, where the two readers also build
+    FlowJo's table at different resolutions (4096 and 256 steps) and can
+    differ by most of a channel near zero."""
+    if transforms is None:
+        raise _Unread("an ellipse is stored on the scale of each axis, and a group's "
+                      "gates come without the samples' scales")
+    scales = []
+    for d in dims:
+        t = transforms.get(d)
+        # FlowKit takes only 256-channel biexponentials (wsp_utils.py,
+        # _parse_wsp_transforms); on a linear axis it adds minRange where
+        # CytoML ignores it, so the two agree only when it is zero
+        if not (isinstance(t, Biex) and t.length == 256
+                or isinstance(t, Linear) and t.min == 0):
+            raise _Unread(f"an ellipse is stored on the scale of each axis, and that of "
+                          f"{d} is not one its conversion is known for")
+        scales.append(t)
+    foci, edge = _vertices(_child(shape, "foci")), _vertices(_child(shape, "edge"))
+    if len(dims) != 2 or foci.shape != (2, 2) or edge.shape != (4, 2):
+        raise _Unread("an ellipse without two foci and four edge points on two axes")
+    first, second = edge[:2], edge[2:]
+    if np.hypot(*(first[0] - first[1])) < np.hypot(*(second[0] - second[1])):
+        first, second = second, first
+    centre = foci.mean(axis=0)
+    along = foci[1] - foci[0]
+    c = np.hypot(*along) / 2
+    a = np.hypot(*(first[0] - first[1])) / 2
+    if c == 0:
+        along = first[1] - first[0]
+    if a <= c or a == 0:
+        raise _Unread("an ellipse whose foci do not lie inside its edge points")
+    b = np.sqrt(a * a - c * c)
+    along = along / np.hypot(*along)
+    arm = first[0] - centre
+    if (np.abs(edge.mean(axis=0) - centre).max() > 1
+            or abs(arm[0] * along[1] - arm[1] * along[0]) > 1
+            or abs(np.hypot(*(second[0] - second[1])) / 2 - b) > 1):
+        raise _Unread("its foci and its edge points do not describe the same ellipse "
+                      "to within a channel")
+    return EllipseGate(dims, [float(v) / 256 for v in centre], [float(a) / 256, float(b) / 256],
+                       float(np.arctan2(along[1], along[0])), inside, scales)
+
+
+def _join_quadrants(parent: GateNode) -> None:
+    """FlowJo writes a quadrant gate as four populations, each a rectangle
+    with one bound on each axis and the other side open; nothing else ties
+    them together (no `quadId` in the workspaces of FlowJo 10.6 and 10.8
+    that FlowKit publishes: data/simple_diamond_example/
+    simple_diamond_example_quad_gate.wsp, data/8_color_data_set/
+    reused_quad_gate_with_child.wsp).
+
+      - CytoML, inst/include/CytoML/winFlowJoWorkspace.hpp,
+        getGate(wsRectGateNode&): a rectangle on two axes with one bound
+        missing on each is a quadGate, the missing sides giving the
+        corner — no min on X and no max on Y is Q1, and so on round.
+      - FlowKit keeps them as the rectangles they are (tests/
+        workspace_tests.py, test_load_wsp_single_quad) and gets FlowJo's
+        four counts.
+
+    So the events of each corner are the rectangle's, as before. What is
+    added is knowing the four belong together, and only when they do:
+    four sisters on the same two axes, bounded at the same two values,
+    one in each corner."""
+    corners = {v: k for k, v in QUADRANTS.items()}
+    sets: dict[tuple, dict[tuple, GateNode | None]] = {}
+    for node in parent.children:
+        g = node.gate
+        if not (isinstance(g, RectangleGate) and len(g.dims) == 2 and g.inside
+                and all((lo is None) != (hi is None) for lo, hi in zip(g.mins, g.maxs))):
+            continue
+        high = tuple(lo is not None for lo in g.mins)
+        at = tuple(lo if lo is not None else hi for lo, hi in zip(g.mins, g.maxs))
+        members = sets.setdefault((tuple(g.dims), at), {})
+        # a corner taken twice is not a quadrant gate: None spoils the set
+        members[high] = None if high in members else node
+    for (dims, at), members in sets.items():
+        if len(members) != 4 or None in members.values():
+            continue
+        group = "|".join([parent.path, *dims, repr(at[0]), repr(at[1])])
+        for high, node in members.items():
+            node.gate = QuadrantGate(list(dims), at[0], at[1], corners[high], group)
+            node.note = f"{UNVERIFIED}: four open rectangles taken as one quadrant gate"
+
+
+_COMBINATIONS = {"AndNode": AND, "OrNode": OR, "NotNode": NOT}
+
+
+def _read_combination(p, parent: GateNode, sisters: list[str], known: list[str]) -> BooleanGate:
+    """A combination is a node of its own beside the populations, naming
+    what it is made of by path from the sample.
+
+      - FlowKit, src/flowkit/_utils/wsp_utils.py, _parse_boolean_node and
+        _recurse_wsp_sub_populations: AndNode, OrNode, NotNode; each
+        `Dependents/Dependent name=` a path split on `/`.
+      - CytoML, inst/include/CytoML/winFlowJoWorkspace.hpp,
+        getGate(wsPopNode&): the same; a NotNode has exactly one
+        Dependent, the others at least two.
+
+    The counts in FlowKit's data/8_color_data_set/
+    8_color_ICS_boolean_gate_testing.wsp (FlowJo 10.8.1) fit: of 81,992
+    CD4+ with 74 IL2+, the NotNode of IL2+ has 81,918; 62 and 607 with 6 in
+    both have 663 in either. A `BooleanGate` combines sisters, so that is
+    what is read; anything made of populations elsewhere is left."""
+    deps_el = _child(p, "Dependents")
+    deps = [d.get("name", "") for d in (_children(deps_el, "Dependent")
+                                        if deps_el is not None else [])]
+    op = _COMBINATIONS[_tag(p)]
+    if (len(deps) != 1) if op == NOT else (len(deps) < 2):
+        raise _Unread(f"it names {len(deps)} populations, which is not what "
+                      f"{'a negation' if op == NOT else 'a combination'} is made of")
+    prefix = parent.path + "/" if parent.path else ""
+    operands = []
+    for dep in deps:
+        name = dep[len(prefix):] if dep.startswith(prefix) else None
+        if name not in sisters:
+            raise _Unread(f"it is made of {dep}, which is not one of its sisters")
+        if sisters.count(name) > 1:
+            raise _Unread(f"it is made of {dep}, and two of its sisters have that name")
+        if name not in known:
+            raise _Unread(f"it is made of {dep}, which was not read, or is a "
+                          f"combination listed after it")
+        operands.append(name)
+    return BooleanGate(op, operands)
+
+
+def _read_populations(el, parent: GateNode, transforms=None,
+                      skipped: list[Skipped] | None = None, owner: str = "") -> None:
+    def is_node(e) -> bool:
+        return _tag(e) == "Population" or _tag(e) in _COMBINATIONS
+
+    nodes = [p for sub in _children(el, "Subpopulations") for p in sub if is_node(p)]
+    sisters = [p.get("name", "").strip() for p in nodes]
+    # the drawn gates first, as `GateNode.apply` takes them, so that a
+    # combination can be told whether what it names was read
+    gates: list = []
+    for p in nodes:
+        try:
+            gates.append(_read_gate(_child(p, "Gate"), transforms)
+                         if _tag(p) == "Population" else None)
+        except _Unread as why:
+            gates.append(why)
+    known = [name for name, g in zip(sisters, gates)
+             if g is not None and not isinstance(g, _Unread)]
+    read = []
+    for p, name, gate in zip(nodes, sisters, gates):
+        note = ""
+        if gate is None:
+            try:
+                gate = _read_combination(p, parent, sisters, known)
+                known.append(name)
+                note = f"{UNVERIFIED}: a combination of its sister populations"
+            except _Unread as why:
+                gate = why
+        if isinstance(gate, _Unread):
+            if skipped is not None:
+                gate_el = _child(p, "Gate")
+                shape = next(iter(gate_el), p) if gate_el is not None else p
+                skipped.append(Skipped(owner, "/".join(filter(None, [parent.path, name])),
+                                       _tag(shape), str(gate),
+                                       sum(is_node(d) for d in p.iter()) - 1))
+            continue
+        if isinstance(gate, EllipseGate):
+            note = f"{UNVERIFIED}: an ellipse converted from FlowJo's 256-channel grid"
+        read.append((p, parent.add(GateNode(name=name, gate=gate, note=note,
+                                            reference_count=_int(p.get("count"))))))
+    _join_quadrants(parent)
+    for p, node in read:
+        _read_populations(p, node, transforms, skipped, owner)
