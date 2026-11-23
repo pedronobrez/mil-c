@@ -147,6 +147,9 @@ class ClustersTab(QtWidgets.QWidget):
         self.empty = QtWidgets.QLabel(
             "Run FlowSOM or PhenoGraph in the Explore tab: the clusters appear here.")
         self.empty.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.empty.setWordWrap(True)      # or the sentence sets the window's width
+        self.empty.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                 QtWidgets.QSizePolicy.Policy.Preferred)
         self.empty.setProperty("role", "hint")
         body = QtWidgets.QWidget()
         inner = QtWidgets.QVBoxLayout(body)

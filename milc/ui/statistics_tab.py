@@ -132,6 +132,9 @@ class StatisticsTab(QtWidgets.QWidget):
             "Tick populations, parameters and statistics, then Compute.\n"
             "Counts and percentages are always there.")
         self.empty.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.empty.setWordWrap(True)      # or the sentence sets the window's width
+        self.empty.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                 QtWidgets.QSizePolicy.Policy.Preferred)
         self.empty.setProperty("role", "hint")
         self.stack = QtWidgets.QStackedWidget()
         self.stack.addWidget(self.empty)

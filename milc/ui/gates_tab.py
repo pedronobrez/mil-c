@@ -239,6 +239,9 @@ class GatesTab(QtWidgets.QWidget):
         self.plot.hideButtons()
         self.empty = QtWidgets.QLabel("Open a folder in the Samples tab, then choose a sample here.")
         self.empty.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.empty.setWordWrap(True)      # or the sentence sets the window's width
+        self.empty.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                 QtWidgets.QSizePolicy.Policy.Preferred)
         self.empty.setProperty("role", "hint")
         self.stack = QtWidgets.QStackedWidget()
         self.stack.addWidget(self.empty)
