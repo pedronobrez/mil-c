@@ -259,6 +259,9 @@ class FigureStyle:
     #: diameter in points
     point_size: float = 2.5
     opacity: float = 0.85
+    #: of the bars of a frequency chart: 1 is the colour as chosen — black is
+    #: black — and less lets the grid and the points show through
+    bar_opacity: float = 1.0
     #: open (left and bottom), box, none
     frame: str = "open"
     ticks: bool = True
@@ -499,6 +502,15 @@ def _draw_frequencies(fig, c: FrequencyContent, style: FigureStyle) -> None:
     _legend(fig, list(axes), handles, style, "")
 
 
+def _against(color: str, opacity: float) -> str:
+    """The colour of a whisker over a bar of `color`: black, unless the bar
+    is itself too dark for black to show on."""
+    from matplotlib.colors import to_rgb
+    r, g, b = to_rgb(color)
+    dark = (0.299 * r + 0.587 * g + 0.114 * b) < 0.25 and opacity > 0.5
+    return "#8a8a8a" if dark else "black"
+
+
 def _frequency_panel(ax, c: FrequencyContent, style: FigureStyle, keep: list[int],
                      first: bool) -> list:
     """One panel of bars: the samples in `keep`, by group."""
@@ -515,21 +527,23 @@ def _frequency_panel(ax, c: FrequencyContent, style: FigureStyle, keep: list[int
         vals = c.freq.values[:, cols]
         vals = vals[:, ~np.isnan(vals).all(axis=0)]
         if vals.shape[1] == 0:
-            handles.append(Patch(facecolor=color, alpha=0.6, edgecolor=color,
+            handles.append(Patch(facecolor=color, alpha=style.bar_opacity, edgecolor=color,
                                  label=style.label(g)))
             continue
         x = np.arange(n_clusters) - 0.4 + width * (j + 0.5)
         mean = vals.mean(axis=1)
-        ax.bar(x, mean, width * 0.9, color=color, alpha=0.6, edgecolor=color, linewidth=0.6)
+        ax.bar(x, mean, width * 0.9, color=color, alpha=style.bar_opacity, edgecolor=color,
+               linewidth=0.6)
         if vals.shape[1] > 1:
             ax.errorbar(x, mean, yerr=vals.std(axis=1, ddof=1), fmt="none",
-                        ecolor="black", elinewidth=0.6, capsize=1.5, capthick=0.6)
+                        ecolor=_against(color, style.bar_opacity), elinewidth=0.6,
+                        capsize=1.5, capthick=0.6)
         jitter = (rng.random(vals.shape) - 0.5) * width * 0.5
         ax.scatter((x[:, None] + jitter).ravel(), vals.ravel(),
                    s=max(style.point_size, 1.5) ** 2, facecolors="white",
                    edgecolors="black", linewidths=0.5, zorder=3)
         suffix = f" (n={vals.shape[1]})" if style.legend_counts else ""
-        handles.append(Patch(facecolor=color, alpha=0.6, edgecolor=color,
+        handles.append(Patch(facecolor=color, alpha=style.bar_opacity, edgecolor=color,
                              label=style.label(g) + suffix))
     ax.set_xticks(range(n_clusters), [style.label(r) for r in c.freq.rows])
     panel = c.facets[keep[0]] if c.facets and keep else None

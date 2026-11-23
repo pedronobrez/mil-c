@@ -52,8 +52,10 @@ class HeatmapView(_Clickable):
         super().__init__(parent)
         self.table = None
 
-    def show_table(self, table, per_column: bool = True, selected: int | None = None) -> None:
+    def show_table(self, table, per_column: bool = True, selected: int | None = None,
+                   numbers: bool = True) -> None:
         self.table = table
+        self.numbers = numbers
         self._per_column = per_column
         self.clear()
         self.setBackground(theme.background())
@@ -66,7 +68,7 @@ class HeatmapView(_Clickable):
         img = pg.ImageItem(shade.T[:, ::-1], levels=(0.0, 1.0), lut=lut)
         img.setRect(QtCore.QRectF(0, 0, cols, rows))
         self.addItem(img)
-        if rows * cols <= 400:
+        if numbers and rows * cols <= 400:
             font = QtGui.QFont()
             font.setPointSize(9)
             for r in range(rows):
@@ -181,7 +183,6 @@ class FrequencyView(pg.GraphicsLayoutWidget):
                 vals = freq.values[:, cols]
                 vals = vals[:, ~np.isnan(vals).all(axis=0)] if vals.size else vals
                 fill = QtGui.QColor(color)
-                fill.setAlpha(150)
                 if vals.shape[1] == 0:
                     if legend is not None:
                         ghost = pg.BarGraphItem(x=[0], height=[0], width=0,

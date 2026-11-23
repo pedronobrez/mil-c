@@ -61,6 +61,10 @@ class ClustersTab(QtWidgets.QWidget):
         self.stat = QtWidgets.QComboBox()
         self.stat.addItem("Median", "median")
         self.stat.addItem("Mean", "mean")
+        self.numbers = QtWidgets.QCheckBox("Numbers")
+        self.numbers.setChecked(True)
+        self.numbers.setToolTip("The value of each cell of the heatmap written in it, here "
+                                "and in its figure")
         self.per_marker = QtWidgets.QCheckBox("Colour per marker")
         self.per_marker.setChecked(True)
         self.per_marker.setToolTip(
@@ -121,7 +125,8 @@ class ClustersTab(QtWidgets.QWidget):
         # another line where the window is narrow
         bar = flow(together(self.clustering_caption, self.clustering),
                    captioned("Map", self.embedding), captioned("Heatmap", self.stat),
-                   captioned("Colours", self.ramp), self.per_marker, self.all_markers,
+                   captioned("Colours", self.ramp), self.per_marker, self.numbers,
+                   self.all_markers,
                    captioned("Tree", self.tree_color), self.clear_button)
         pairing_row = flow(captioned("Compare", self.group_by),
                            captioned("within each", self.facet_by), self.order_button,
@@ -183,6 +188,7 @@ class ClustersTab(QtWidgets.QWidget):
         self.embedding.currentIndexChanged.connect(self._draw_map)
         self.stat.currentIndexChanged.connect(self._draw_tables)
         self.per_marker.toggled.connect(self._draw_tables)
+        self.numbers.toggled.connect(self._draw_tables)
         self.all_markers.toggled.connect(self._draw_tables)
         self.group_by.currentIndexChanged.connect(self._draw_tables)
         self.group_by.currentIndexChanged.connect(self._summarise)
@@ -440,7 +446,8 @@ class ClustersTab(QtWidgets.QWidget):
         if tables is None:
             return
         expression, freq = tables
-        self.heatmap.show_table(expression, self.per_marker.isChecked(), self.selected)
+        self.heatmap.show_table(expression, self.per_marker.isChecked(), self.selected,
+                                self.numbers.isChecked())
         self._frequency = freq
         self.correction.setEnabled(bool(self.test.currentData()))
         self.paired_by.setEnabled(bool(self.test.currentData()))

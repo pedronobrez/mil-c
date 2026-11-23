@@ -306,6 +306,11 @@ normalizar as amostras, avisa que o concatenado ficou velho e que os gates preci
 revistos, e refaz o ajuste da normalização; instalador para Linux (`.deb` e `.tar.gz`); ordem
 dos grupos (contagem natural por padrão — 3, 7, 14 — e a ordem escolhida por coluna em
 "Order…", gravada no projeto; os arquivos também são listados em ordem de contagem).
+Também: cor por cluster ("Colour…" em Clusters); a população a concatenar fica gravada no
+projeto e o padrão é o fim da cadeia de gates; "Include" em Samples marca ou desmarca as
+amostras de um grupo de uma vez; as barras do gráfico de frequência saem na cor exata (antes
+tinham 60% de opacidade, e preto virava cinza), com a opacidade ajustável em Figure…; e
+"Numbers" liga ou desliga os valores nas células do heatmap, na tela e na figura.
 
 Prioritárias:
 

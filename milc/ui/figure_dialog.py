@@ -53,6 +53,7 @@ class FigureDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("Figure")
         self.content = content
+        self._bars = False
         self.name = name
         #: the plot this came from, for the plate to ask again; `open_for` sets it
         self.source = None
@@ -220,7 +221,9 @@ class FigureDialog(QtWidgets.QDialog):
         is_tree = isinstance(content, figures.TreeContent)
         is_heat = isinstance(content, figures.HeatmapContent)
         self._visible(self._row_point, not is_heat)
-        self._visible(self._row_opacity, is_map)
+        is_freq = isinstance(content, figures.FrequencyContent)
+        self._bars = is_freq       # the same box is the bars' opacity on a frequency chart
+        self._visible(self._row_opacity, is_map or is_freq)
         self.rasterize.setVisible(is_map)
         self._visible(self._row_cmap, figures.uses_colormap(content))
         self.annotate.setVisible(is_heat)
@@ -310,7 +313,7 @@ class FigureDialog(QtWidgets.QDialog):
         self.ticks.setChecked(s.ticks)
         self.grid.setChecked(s.grid)
         self.point_size.setValue(s.point_size)
-        self.opacity.setValue(s.opacity)
+        self.opacity.setValue(s.bar_opacity if self._bars else s.opacity)
         self.rasterize.setChecked(s.rasterize)
         self.legend.setCurrentIndex(max(self.legend.findData(s.legend), 0))
         self.legend_title.setText(s.legend_title or "")
@@ -348,7 +351,11 @@ class FigureDialog(QtWidgets.QDialog):
         s.ylabel = self.ylabel.text() or None
         s.frame = self.frame.currentData()
         s.ticks, s.grid = self.ticks.isChecked(), self.grid.isChecked()
-        s.point_size, s.opacity = self.point_size.value(), self.opacity.value()
+        s.point_size = self.point_size.value()
+        if self._bars:
+            s.bar_opacity = self.opacity.value()
+        else:
+            s.opacity = self.opacity.value()
         s.rasterize = self.rasterize.isChecked()
         s.legend = self.legend.currentData()
         s.legend_title = self.legend_title.text() or None
@@ -546,5 +553,7 @@ def open_for(view, parent, name: str = "figure") -> FigureDialog | None:
         return None
     dialog = FigureDialog(content, parent, name)
     dialog.source = view
+    if getattr(view, "numbers", None) is not None:      # a heatmap: as it is shown
+        dialog.annotate.setChecked(bool(view.numbers))
     dialog.exec()
     return dialog
