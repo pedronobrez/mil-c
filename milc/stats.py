@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .cluster_stats import CSV_ENCODING
 from .gating import GateNode
 
 
@@ -88,7 +89,7 @@ class StatsTable:
                 return f"{v:.6g}"
             text = str(v)
             return '"' + text.replace('"', '""') + '"' if any(c in text for c in ',"\n') else text
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=CSV_ENCODING) as f:
             f.write(",".join(cell(c) for c in self.columns) + "\n")
             for row in self.rows:
                 f.write(",".join(cell(v) for v in row) + "\n")

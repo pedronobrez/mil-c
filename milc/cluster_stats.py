@@ -10,6 +10,12 @@ from dataclasses import dataclass
 import numpy as np
 
 
+#: UTF-8 with a byte-order mark. Without the mark, Excel on Windows reads a
+#: CSV in the system's own code page and "CD8 · Median" arrives as
+#: "CD8 Â· Median"; with it, Excel, Prism, R and pandas all read UTF-8.
+CSV_ENCODING = "utf-8-sig"
+
+
 @dataclass
 class Table:
     rows: list[str]
@@ -17,7 +23,7 @@ class Table:
     values: np.ndarray
 
     def to_csv(self, path: str, corner: str = "") -> None:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=CSV_ENCODING) as f:
             f.write(",".join([corner] + [_q(c) for c in self.columns]) + "\n")
             for name, row in zip(self.rows, self.values):
                 f.write(",".join([_q(name)] + [f"{v:.6g}" for v in row]) + "\n")

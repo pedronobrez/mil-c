@@ -175,7 +175,7 @@ def cmd_analyze(a) -> int:
 
     ds.save(a.out + ".npz")
     keys = list(ds.derived)
-    with open(a.out + "_events.csv", "w", encoding="utf-8") as f:
+    with open(a.out + "_events.csv", "w", encoding=cluster_stats.CSV_ENCODING) as f:
         f.write(",".join(["sample", "event"] + keys) + "\n")
         cols = [ds.derived[k] for k in keys]
         for i in range(len(ds)):

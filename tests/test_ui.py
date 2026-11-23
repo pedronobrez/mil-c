@@ -128,7 +128,7 @@ def test_folder_to_map(app, folder):
     assert d.style.labels == {"Ctrl": "Control"}
     path = os.path.join(folder, "out.svg")
     d.write(path)
-    svg = open(path).read()
+    svg = open(path, encoding="utf-8").read()
     assert "Mine" in svg and "Control" in svg and "#112233" in svg
     d.store_preset("Paper")
     d.accept()

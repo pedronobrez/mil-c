@@ -266,7 +266,7 @@ def test_cluster_tables(tmp_path):
     assert n.values[0].tolist() == [2, 0] and np.isnan(mean.values[0, 1])
     assert sd.values[0, 0] == pytest.approx(np.std([200 / 3, 100 / 3], ddof=1))
     f.to_csv(str(tmp_path / "f.csv"), "cluster")
-    assert (tmp_path / "f.csv").read_text().splitlines()[0] == "cluster,s1,s2,empty"
+    assert (tmp_path / "f.csv").read_text(encoding="utf-8-sig").splitlines()[0] == "cluster,s1,s2,empty"
 
 
 def test_analyze_command(tmp_path):
@@ -284,9 +284,9 @@ def test_analyze_command(tmp_path):
     assert set(ds.derived) == {"UMAP1", "UMAP2", "FlowSOM", "FlowSOM_node"}
     assert ds.runs["FlowSOM"]["channels"] == ["FITC-A", "PE-A", "APC-A", "BV421-A"]
     assert len(ds.samples) == 4 and set(np.unique(ds.derived["FlowSOM"])) == {1, 2, 3}
-    lines = (tmp_path / "run_events.csv").read_text().splitlines()
+    lines = (tmp_path / "run_events.csv").read_text(encoding="utf-8-sig").splitlines()
     assert lines[0] == "sample,event,UMAP1,UMAP2,FlowSOM,FlowSOM_node" and len(lines) == 361
-    assert (tmp_path / "run_mfi.csv").read_text().startswith("cluster,CD8 FITC-A,CD4 PE-A,Foxp3,BV421-A")
+    assert (tmp_path / "run_mfi.csv").read_text(encoding="utf-8-sig").startswith("cluster,CD8 FITC-A,CD4 PE-A,Foxp3,BV421-A")
     with pytest.raises(KeyError):
         ds.resolve("CD")
 
@@ -345,7 +345,7 @@ def test_figure_files(tmp_path):
         # to the pixel, give or take the one matplotlib rounds away
         assert abs(im.size[0] - 85 / 25.4 * 300) <= 1 and abs(im.size[1] - 65 / 25.4 * 300) <= 1
         assert round(im.info["dpi"][0]) == 300
-    svg = (tmp_path / "f.svg").read_text()
+    svg = (tmp_path / "f.svg").read_text(encoding="utf-8")
     # text is text — editable — and says what was asked
     assert "<text" in svg and "Case-1" in svg and "T cells" in svg and "UMAP1" in svg
     assert "#c0392b" in svg.lower() and "Ctrl" in svg
@@ -357,7 +357,7 @@ def test_figure_files(tmp_path):
     # as a bitmap inside the vector file, the points are no longer paths
     style.rasterize = True
     figures.save(c, style, str(tmp_path / "r.svg"))
-    assert "<image" in (tmp_path / "r.svg").read_text() and "<image" not in svg
+    assert "<image" in (tmp_path / "r.svg").read_text(encoding="utf-8") and "<image" not in svg
 
 
 def test_every_kind_of_figure_draws(tmp_path):
@@ -397,7 +397,7 @@ def test_every_kind_of_figure_draws(tmp_path):
     assert figures.uses_colormap(contents["heat"]) and not figures.uses_colormap(contents["tree"])
     figures.save(contents["split"], figures.FigureStyle(font="DejaVu Sans"),
                  str(tmp_path / "s.svg"))
-    assert (tmp_path / "s.svg").read_text().count("Cluster") >= 1
+    assert (tmp_path / "s.svg").read_text(encoding="utf-8").count("Cluster") >= 1
 
     # a preset carries the look and none of a figure's own words
     s = figures.FigureStyle(title="x", colormap="magma")
@@ -458,11 +458,11 @@ def test_selftest_never_raises_when_logging(tmp_path, monkeypatch):
     from milc import cli
     log = tmp_path / "s.log"
     assert cli.main(["selftest", "--no-window", "--log", str(log)]) == 0
-    assert "self-test passed" in log.read_text()
+    assert "self-test passed" in log.read_text(encoding="utf-8")
     monkeypatch.setattr("milc.session.Session.run_umap",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no UMAP today")))
     assert cli.main(["selftest", "--no-window", "--log", str(log)]) == 1
-    assert "no UMAP today" in log.read_text() and "Traceback" in log.read_text()
+    assert "no UMAP today" in log.read_text(encoding="utf-8") and "Traceback" in log.read_text(encoding="utf-8")
 
 
 # --- statistics --------------------------------------------------------------
@@ -523,16 +523,17 @@ def test_statistics_table(tmp_path):
 
     path = tmp_path / "out.csv"
     t.to_csv(str(path))
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
     assert lines[0].startswith("Sample,Group,Population,Path,Count") and len(lines) == 7
     assert lines[1].split(",")[5] == ""                              # no value is an empty cell
+    assert path.read_bytes()[:3] == b"\xef\xbb\xbf"                   # the mark Excel needs
     assert t.to_text().splitlines()[0].split("\t")[-1] == "CD8 · CV"
 
     s.save_project()                                                 # the gates, for the command line
     out = tmp_path / "cli.csv"
     assert main(["stats", str(tmp_path), "--channels", "cd8,FSC-A", "--stats", "median,robust cv",
                  "--out", str(out)]) == 0
-    head = out.read_text().splitlines()[0]
+    head = out.read_text(encoding="utf-8-sig").splitlines()[0]
     assert head.endswith("CD8 · Median,CD8 · Robust CV,FSC-A · Median,FSC-A · Robust CV")
     assert main(["stats", str(tmp_path), "--channels", "nope"]) == 2
     assert main(["stats", str(tmp_path), "--stats", "mode"]) == 2
