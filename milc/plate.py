@@ -15,6 +15,7 @@ No Qt here, and matplotlib is imported only when a page is drawn.
 
 from __future__ import annotations
 
+import copy
 import textwrap
 from dataclasses import dataclass, field, replace
 
@@ -74,6 +75,8 @@ class Plate:
     #: A, B, C… at the top left of each panel, bold, `LETTER_EXTRA` points
     #: above the style's font size
     letters: bool = True
+    #: what the user calls it, among the plates of a project
+    name: str = ""
 
     def add(self, content, style: FigureStyle | None = None, title: str | None = None,
             source=None, name: str = "") -> Panel:
@@ -125,6 +128,13 @@ class Plate:
             return self.width_mm, self.height_mm
         return self.width_mm, round(self.rows() * self.width_mm / self.columns * 0.75, 1)
 
+    def copy(self, name: str = "") -> "Plate":
+        """Another plate of the same panels, to be changed apart from this
+        one. What the panels show is shared, not copied: a content is not
+        altered once it is on a plate."""
+        return replace(self, name=name, style=FigureStyle.from_dict(self.style.to_dict()),
+                       panels=[replace(p, style=copy.deepcopy(p.style)) for p in self.panels])
+
     def refresh(self) -> list[Panel]:
         """Ask every panel's source what it shows now. A source with
         nothing to show leaves the panel as it was, marked stale; those
@@ -154,25 +164,55 @@ def letter(index: int) -> str:
 def _draw(fig, plate: Plate) -> None:
     from matplotlib.transforms import offset_copy
     grid = fig.add_gridspec(plate.rows(), plate.columns)
+    heads = []
     pad = fig.get_layout_engine().get()["h_pad"]
     size = plate.style.font_size
     for k, (panel, (r, c, rs, cs)) in enumerate(zip(plate.panels, plate.cells())):
         sub = fig.add_subfigure(grid[r:r + rs, c:c + cs])
         figures._DRAW[type(panel.content)](sub, panel.content, plate.style_of(panel))
         if not plate.letters:
-            if panel.title:
-                sub.suptitle(panel.title, fontsize=size + 1.5)
+            heads.append((sub, [sub.suptitle(panel.title, fontsize=size + 1.5)]
+                          if panel.title else []))
             continue
         # the letter is the sub-figure's title, set to the left: the layout
         # then keeps a band for it above the plot, and the panel's own
         # title is written in that band
         inches = sub.bbox.width / fig.dpi
-        sub.suptitle(letter(k), x=pad / inches, ha="left", fontweight="bold",
-                     fontsize=size + LETTER_EXTRA)
+        head = [sub.suptitle(letter(k), x=pad / inches, ha="left", fontweight="bold",
+                             fontsize=size + LETTER_EXTRA)]
         if panel.title:
             top = offset_copy(sub.transSubfigure, fig, y=-pad, units="inches")
-            sub.text(0.5, 1.0, panel.title, ha="center", va="top", fontsize=size + 1.5,
-                     transform=top)
+            head.append(sub.text(0.5, 1.0, panel.title, ha="center", va="top",
+                                 fontsize=size + 1.5, transform=top))
+        heads.append((sub, head))
+    _fit_labels(fig, heads)
+
+
+def _fit_labels(fig, heads: list) -> None:
+    """In a short cell the name of the y axis can be longer than the axis:
+    the layout gives a label room across, never along, so it runs up into
+    the panel's letter or its title, or out of the cell. Such a label is
+    broken into the lines that make it fit beside its axis."""
+    renderer = fig.canvas.get_renderer()
+    # only a name as long as most of its cell is worth laying the page out
+    # to know: that costs about as much as drawing it
+    long = [(sub, head, ax) for sub, head in heads for ax in sub.get_axes()
+            if " " in ax.yaxis.label.get_text() and "\n" not in ax.yaxis.label.get_text()
+            and ax.yaxis.label.get_window_extent(renderer).height > 0.5 * sub.bbox.height]
+    if not long:
+        return
+    fig.get_layout_engine().execute(fig)
+    for sub, head, ax in long:
+        label = ax.yaxis.label
+        ax.yaxis.get_tightbbox(renderer)               # puts the label where it will be
+        box, room = label.get_window_extent(renderer), ax.get_window_extent().height
+        if box.height <= room:
+            continue
+        if (box.y1 > sub.bbox.y1 or box.y0 < sub.bbox.y0
+                or any(box.overlaps(h.get_window_extent(renderer)) for h in head)):
+            lines = min(int(-(-box.height // room)), 3)
+            label.set_text(textwrap.fill(label.get_text(),
+                                         -(-len(label.get_text()) // lines) + 1))
 
 
 class _drawn:
@@ -197,8 +237,8 @@ class _drawn:
         try:
             fig = figures._figure(replace(plate.style, width_mm=plate.size_mm()[0],
                                           height_mm=plate.size_mm()[1]))
-            _draw(fig, plate)
             FigureCanvasAgg(fig)
+            _draw(fig, plate)
         except BaseException:
             self._inner.__exit__(None, None, None)
             raise
