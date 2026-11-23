@@ -197,7 +197,11 @@ jobs:
           done
           exit $status
 
+      # allowed to fail: artefact storage is one quota for the whole account,
+      # and the first build of this repository found it full of another's.
+      # The release below is the copy that counts.
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: milc-${{ matrix.os }}
           path: |
@@ -206,18 +210,31 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
-      # a build artefact expires; a release does not
+      # a build artefact expires; a release does not. A tag makes the
+      # release of that version; a build asked for by hand goes to a
+      # pre-release of its own, `build-N`, to be looked at and deleted.
       - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           shopt -s nullglob
           built=(dist/*.dmg dist/*.msi dist/*.zip)
-          gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag \
-            --title "MIL-C ${GITHUB_REF_NAME}" 2>/dev/null || true
-          gh release upload "${GITHUB_REF_NAME}" "${built[@]}" --clobber
+          [ ${#built[@]} -gt 0 ] || { echo "nothing was built" >&2; exit 1; }
+          # each runner has only its own installer, and whichever arrives
+          # first is the one that creates the release
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            name="$GITHUB_REF_NAME"
+            gh release create "$name" --generate-notes --verify-tag \
+              --title "MIL-C $name" 2>/dev/null || true
+          else
+            name="build-$GITHUB_RUN_NUMBER"
+            gh release create "$name" --prerelease --target "$GITHUB_SHA" \
+              --title "MIL-C, build $GITHUB_RUN_NUMBER" \
+              --notes "Built on request from ${GITHUB_SHA::7}. Not a release: for trying out." \
+              2>/dev/null || true
+          fi
+          gh release upload "$name" "${built[@]}" --clobber
 
   checksums:
     # over the files downloaded back from the release: the bytes a person
