@@ -10,7 +10,7 @@ module teaches `figures.save` and `figures.preview_png` to draw them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -66,16 +66,25 @@ class ExpressionVolcano(VolcanoContent):
         return f"Difference in median ({a or '—'} − {b or '—'})"
 
 
+@dataclass(init=False, eq=False, repr=False)
 class DifferenceHeatmap(figures.HeatmapContent):
     """Cluster x marker: the difference in median, a panel for each value
     of "within each". A heatmap to the figure dialog, with a ramp of its
     own: a difference has a zero, and the ramp its white there."""
 
     uses_colormap = False
-    per_column = False
 
-    def __init__(self, results: list[Result], alpha: float = 0.05):
-        self.results, self.alpha = results, alpha
+    # fields like any other content's, so that a plate can keep it with the
+    # project; `table` is the parent's, and this has none
+    table: object = None
+    per_column: bool = False
+    results: list = field(default_factory=list)
+    alpha: float = 0.05
+
+    def __init__(self, results: list[Result] | None = None, alpha: float = 0.05,
+                 table=None, per_column: bool = False):
+        self.results, self.alpha = list(results or []), alpha
+        self.table, self.per_column = None, False
 
     # the parent's are of a table this does not have
     __eq__ = object.__eq__

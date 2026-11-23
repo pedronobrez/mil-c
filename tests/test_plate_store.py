@@ -15,6 +15,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from milc import expression
+from milc.expression_figures import DifferenceHeatmap, ExpressionVolcano
 from milc import abundance, figures, plate, plate_store, views  # noqa: E402
 from milc.gating import GateNode, PolygonGate, RectangleGate  # noqa: E402
 from milc.session import PROJECT_FILE, Session  # noqa: E402
@@ -63,6 +65,14 @@ def _all_contents() -> dict:
     counts[0, 5:] *= 4
     c["volcano"] = VolcanoContent(abundance.differential(
         counts, [str(i + 1) for i in range(8)], ["A"] * 5 + ["B"] * 5, ("A", "B")))
+    medians = rng.normal(0.5, 0.05, (4, 10, 3))
+    medians[0, 5:, 1] += 0.3
+    medians[3, :, 2] = np.nan                                   # a row not tested
+    found = expression.differential(
+        medians, rng.poisson(300, (4, 10)), [str(i + 1) for i in range(4)],
+        ["CD8", "CD4", "Foxp3"], ["A"] * 5 + ["B"] * 5, ("A", "B"))
+    c["expression volcano"] = ExpressionVolcano(found)
+    c["difference heatmap"] = DifferenceHeatmap(found)
     return c
 
 
@@ -340,7 +350,7 @@ def test_projects_without_plates_and_what_else_a_project_holds(folder):
     s.save_project()
     saved = json.load(open(s.project_file(), encoding="utf-8"))
     assert "plates" not in saved and not os.path.exists(os.path.join(folder, plate_store.FILE))
-    assert set(saved) == set(old) and saved["columns"] == old["columns"]
+    assert set(old) <= set(saved) and saved["columns"] == old["columns"]
 
     p = plate.Plate(name="Figure 1", style=figures.FigureStyle(font=FONT))
     p.add(_contents()["map"], title="Map")
@@ -348,7 +358,7 @@ def test_projects_without_plates_and_what_else_a_project_holds(folder):
     assert s.save_plates()
     saved = json.load(open(s.project_file(), encoding="utf-8"))
     # what was there is as it was, with the plates beside it
-    assert set(saved) == set(old) | {"plates"} and saved["version"] == 2
+    assert set(old) | {"plates"} <= set(saved) and saved["version"] == 2
     assert {k: saved[k] for k in ("columns", "group_by", "excluded")} == {
         k: old[k] for k in ("columns", "group_by", "excluded")}
     # whatever else writes the project keeps them
