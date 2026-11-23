@@ -23,6 +23,7 @@ from .dataset import Dataset, concatenate
 from .compensation import Compensation, strip_prefix
 from .fcs import read_header, write_fcs
 from .gating import ClusterGate, GateNode, copy_tree, follow_scale, tree_from_dict, tree_to_dict
+from .gating import TimeGate, keep_times, time_node, unwrap, wrap
 from .sample import Sample, annotate
 from .transforms import Arcsinh, Biex, Linear, from_spec, to_spec
 from .wsp import Workspace, WspSample, read_wsp
@@ -392,7 +393,9 @@ class Session:
         if everyone:
             for other in self.usable():
                 if other is not e:
+                    own = other.gates
                     other.gates = copy_tree(e.gates, keep_counts=False)
+                    keep_times(other.gates, own)   # its bad stretches are its own
                     changed.append(other)
         for node in e.gates.walk():
             node.reference_count = None   # no longer what another program counted
@@ -416,6 +419,67 @@ class Session:
         self._keep_population()
         if os.path.exists(self.project_file()):
             self.save_project()
+
+    # --- quality of the acquisition ----------------------------------------------
+
+    def quality(self, e: Entry, **settings):
+        """Check one file's acquisition (`qc.check`) on every parameter but
+        Time: fluorescence compensated, each on the scale its axis has."""
+        from . import qc
+        sample = self.load(e)
+        f = sample.fcs
+        time = qc.time_channel(f.channels)
+        names = [c for c in f.channels if c != time]
+        return qc.check(sample.compensated[:, [f.index(c) for c in names]],
+                        sample.column(time) if time else None,
+                        [f.markers[f.index(c)] or c for c in names],
+                        [self.scale_of(c) for c in names], **settings)
+
+    def apply_quality(self, found: list[tuple[Entry, list]]) -> None:
+        """Remove from each file the time intervals found for it (a
+        `qc.Result.intervals`), as a population at the top of its tree
+        that every other gate is then under. Every file gets the
+        population, so the trees stay alike: a file not in `found` keeps
+        the intervals it had, or every event."""
+        from . import qc
+        entries = self.usable()
+        time = qc.time_channel(entries[0].channels) if entries else None
+        if time is None:
+            raise ValueError("these files have no Time parameter to gate on")
+        fresh = [e for e in entries if time_node(e.gates) is None]
+        for e in fresh:
+            wrap(e.gates, qc.POPULATION, TimeGate([time], [], inside=False))
+        for e, intervals in found:
+            time_node(e.gates).gate.intervals = [list(i) for i in intervals]
+        # what was to be concatenated is now under the new population —
+        # and "all events" becomes the clean ones, which is what was asked
+        self._quality_changed("/".join(filter(None, [qc.POPULATION, self.population]))
+                              if fresh else self.population)
+
+    def remove_quality(self) -> None:
+        """Take that population out of every tree again; the gates under
+        it go back to where they were."""
+        population = self.population
+        for e in self.usable():
+            node = time_node(e.gates)
+            if node is not None:
+                unwrap(e.gates, node)
+                if (self.population + "/").startswith(node.name + "/"):
+                    population = self.population[len(node.name) + 1:]
+        self._quality_changed(population)
+
+    def _quality_changed(self, population: str) -> None:
+        """Every tree gained or lost its first population, and the chosen
+        one is at another path."""
+        self.population = population if population in self.populations() else ALL_EVENTS
+        for e in self.usable():
+            e.edited, e.borrowed = True, False
+            for node in e.gates.walk():
+                node.reference_count = None
+            if e.sample is not None:
+                e.sample._masks = None
+        self._counts.clear()
+        self.save_project()
 
     # --- annotations -------------------------------------------------------------
 
