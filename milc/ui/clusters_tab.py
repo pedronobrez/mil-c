@@ -63,6 +63,22 @@ class ClustersTab(QtWidgets.QWidget):
         self.correction = QtWidgets.QComboBox()
         for name in compare.CORRECTIONS:
             self.correction.addItem(name, name)
+        self.paired_by = QtWidgets.QComboBox()
+        self.paired_by.setToolTip(
+            "Where the same animals or donors were measured in every group: the column "
+            "that says which one a sample is of. The test is then of each one's change — "
+            "paired t or Wilcoxon for two groups, repeated-measures ANOVA or Friedman for "
+            "more — and those not found in every group are left out.")
+        self.pairing = QtWidgets.QLabel("")
+        self.pairing.setProperty("role", "warning")
+        # a row of its own: the bar above is already wider than a laptop's screen
+        cap = QtWidgets.QLabel("Paired by")
+        cap.setProperty("role", "caption")
+        pairing_row = QtWidgets.QHBoxLayout()
+        pairing_row.addWidget(cap)
+        pairing_row.addWidget(self.paired_by)
+        pairing_row.addSpacing(10)
+        pairing_row.addWidget(self.pairing, 1)
         self.results_button = QtWidgets.QPushButton("Results…")
         self.results_button.setToolTip("Every comparison as a table, pair by pair where "
                                        "there are more than two groups")
@@ -118,6 +134,7 @@ class ClustersTab(QtWidgets.QWidget):
         inner = QtWidgets.QVBoxLayout(body)
         inner.setContentsMargins(0, 0, 0, 0)
         inner.addLayout(bar)
+        inner.addLayout(pairing_row)
         inner.addWidget(grid, 1)
         inner.addWidget(self.summary)
         self.stack = QtWidgets.QStackedWidget()
@@ -142,6 +159,7 @@ class ClustersTab(QtWidgets.QWidget):
         self.tree_color.currentIndexChanged.connect(self._draw_tree)
         self.test.currentIndexChanged.connect(self._draw_tables)
         self.correction.currentIndexChanged.connect(self._draw_tables)
+        self.paired_by.currentIndexChanged.connect(self._draw_tables)
         self.results_button.clicked.connect(self.show_results)
         self.prism_button.clicked.connect(self._ask_prism)
         palette.notifier.changed.connect(self._recolour)
@@ -226,6 +244,7 @@ class ClustersTab(QtWidgets.QWidget):
         self.facet_by.addItem("—", "")
         for k in keys:
             self.facet_by.addItem(k, k)
+        self._offer_pairing(keys)
         self.tree_color.clear()
         self.tree_color.addItem(METACLUSTER, "")
         for m in (self._tree or {}).get("markers", []):
@@ -253,6 +272,15 @@ class ClustersTab(QtWidgets.QWidget):
         used = set(ds.runs.get("FlowSOM", {}).get("channels") or [])
         return [c for c, m, comp in zip(ds.channels, ds.markers, ds.compensated)
                 if comp and m and c not in used]
+
+    def _offer_pairing(self, keys: list[str]) -> None:
+        """The columns the samples can be paired by, keeping the one chosen."""
+        chosen = self.paired_by.currentData()
+        self.paired_by.clear()
+        self.paired_by.addItem("—", "")
+        for k in keys:
+            self.paired_by.addItem(k, k)
+        self.paired_by.setCurrentIndex(max(self.paired_by.findData(chosen), 0))
 
     def _facets(self) -> list[str] | None:
         key = self.facet_by.currentData()
@@ -348,6 +376,8 @@ class ClustersTab(QtWidgets.QWidget):
         self.heatmap.show_table(expression, self.per_marker.isChecked(), self.selected)
         self._frequency = freq
         self.correction.setEnabled(bool(self.test.currentData()))
+        self.paired_by.setEnabled(bool(self.test.currentData()))
+        self.pairing.setText(self.pairing_problem())
         self.results_button.setEnabled(bool(self.test.currentData()))
         # on the plot, what a reader looks for: the p where there is a
         # difference, "ns" where there is not. Every number is in Results.
@@ -368,13 +398,42 @@ class ClustersTab(QtWidgets.QWidget):
                     out.setdefault((panel, cluster), {}).setdefault(group, []).append(float(value))
         return out
 
+    def _subjects(self) -> dict | None:
+        """As `_values`, whose each share is: the animal or donor of its
+        sample, in the column chosen to pair by. None where none is."""
+        column = self.paired_by.currentData()
+        if not column:
+            return None
+        freq, facets = self._frequency, self._facets()
+        whose = [m.get(column, "") for m in self.session.dataset.meta]
+        out: dict = {}
+        for i, cluster in enumerate(freq.rows):
+            for j, group in enumerate(self._groups()):
+                if freq.values[i, j] == freq.values[i, j]:
+                    panel = facets[j] if facets else None
+                    out.setdefault((panel, cluster), {}).setdefault(group, []).append(whose[j])
+        return out
+
+    def pairing_problem(self) -> str:
+        """Why the samples cannot be paired by the column chosen; "" where
+        they can, or where no test or no pairing is asked for."""
+        if not self.test.currentData() or getattr(self, "_frequency", None) is None:
+            return ""
+        subjects = self._subjects()
+        problem = compare.pairing_problem(self._values(), subjects) if subjects else ""
+        return (f"No test: the samples cannot be paired by {self.paired_by.currentData()} — "
+                f"{problem}.") if problem else ""
+
     def comparisons(self, pairwise: bool = False) -> list:
         """The groups compared in each cluster — in each panel, where the
         chart has panels — with the test and the correction chosen."""
         kind = self.test.currentData()
         if not kind or getattr(self, "_frequency", None) is None:
             return []
-        return compare.compare(self._values(), kind, self.correction.currentData(), pairwise)
+        if self.pairing_problem():   # nothing is computed from a pairing that is not one
+            return []
+        return compare.compare(self._values(), kind, self.correction.currentData(), pairwise,
+                               self._subjects())
 
     def prism_tables(self) -> list:
         from .. import prism
@@ -402,7 +461,8 @@ class ClustersTab(QtWidgets.QWidget):
         found = self.comparisons(pairwise=True)
         panels = self._facets() is not None
         table = compare.to_table(found, [self.facet_by.currentText(), "Cluster"] if panels
-                                 else ["Cluster"], self.correction.currentData())
+                                 else ["Cluster"], self.correction.currentData(),
+                                 self.paired_by.currentData() or None)
         if not panels:
             for row in table.rows:   # the empty panel is not a column
                 del row[0]
