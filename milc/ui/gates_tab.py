@@ -26,7 +26,7 @@ from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNod
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
 from ..gating import TimeGate, time_node
 from ..session import Session
-from ..transforms import Arcsinh, Biex, Log, decade_ticks, display_range, same
+from ..transforms import Arcsinh, Biex, Log, Logicle, decade_ticks, display_range, same
 from . import palette, style, theme
 from .view_dialogs import BackgateDialog, MatrixDialog, OverlayChoice, draw_distributions
 
@@ -212,10 +212,13 @@ class GatesTab(QtWidgets.QWidget):
         for b, which in ((self.x_scale, "x"), (self.y_scale, "y")):
             b.setText("Scale…")
             b.setToolTip("How this parameter's axis is drawn: linear, biexponential, "
-                         "arcsinh or logarithmic, and with what settings")
+                         "Logicle, arcsinh or logarithmic, and with what settings")
             b.clicked.connect(lambda _=False, w=which: self._ask_scale(w))
         self.compensation_button = QtWidgets.QPushButton("Compensation…")
-        self.compensation_button.setToolTip("See the spillover matrix in use, and edit it")
+        self.compensation_button.setToolTip(
+            "The spillover matrix each sample is compensated with — its file's, the "
+            "workspace's, or one edited here — and how to change it for one sample, "
+            "some, or all")
         self.quality_button = QtWidgets.QPushButton("Quality…")
         self.quality_button.setToolTip("Look for the stretches of the acquisition that went "
                                        "wrong — a clog, a bubble, a drift — and remove them")
@@ -591,12 +594,13 @@ class GatesTab(QtWidgets.QWidget):
             else:
                 self.set_scale(dim, dialog.scale(), dialog.every.isChecked())
 
-    def set_compensation(self, matrix) -> None:
+    def set_compensation(self, matrix, entries: list | None = None) -> None:
         """Compensate every sample with this matrix; None goes back to
-        the workspace's or the files' own."""
+        the workspace's or the files' own. With `entries`, only those
+        samples."""
         row = self.samples.currentRow()
         path = self.node.path if self.node is not None else ""
-        self.session.set_matrix(matrix)
+        self.session.set_matrix(matrix, entries)
         if self.entry is not None:
             self.sample = self.session.load(self.entry)
             self._keep_axes = True
@@ -607,16 +611,20 @@ class GatesTab(QtWidgets.QWidget):
         self.samples.setCurrentRow(row, QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
         self.sigGatesChanged.emit()
 
+    def matrix_source(self) -> str:
+        """Which matrix the sample being looked at is compensated with:
+        `file`, `workspace`, `edited`, `shared`, or nothing."""
+        return self.session.matrix_in_use(self.entry)[1] if self.entry is not None else ""
+
     def _ask_compensation(self) -> None:
-        matrix, source = self.session.current_matrix()
-        if matrix is None:
+        if self.entry is None or not any(self.session.matrix_in_use(e)[0] is not None
+                                         for e in self.entries):
             self.sigStatus.emit("These files carry no compensation matrix")
             return
         labels = dict((c, m) for c, m in zip(self.sample.fcs.channels, self.sample.fcs.markers)) \
             if self.sample is not None else {}
-        dialog = CompensationDialog(matrix, source, labels, self)
-        if dialog.exec():
-            self.set_compensation(None if dialog.reset_asked else dialog.matrix())
+        CompensationDialog(self.session, self.entries, self.entry, self.overlaid(), labels,
+                           self.set_compensation, self).exec()
 
     def export_population(self, folder: str, fmt: str = "fcs", compensated: bool = True,
                           every_sample: bool = False) -> list[str]:
@@ -883,6 +891,11 @@ class GatesTab(QtWidgets.QWidget):
             together += " · " + self._content.note()
         if getattr(self.sample, "normalised", False):
             together += " · batch-normalised values"
+        matrix = {"file": "its file's matrix", "workspace": "the workspace's matrix",
+                  "edited": "a matrix edited for this sample",
+                  "shared": "the edited matrix every sample shares"}.get(self.matrix_source())
+        if matrix:
+            together += f" · compensated with {matrix}"
         self.caption.setText(
             f"{self.entry.name} · {name}: {rows.size:,d} events{of}{more}{together}")
 
@@ -1349,8 +1362,9 @@ class ScaleDialog(QtWidgets.QDialog):
         self.setWindowTitle(f"Scale of {label}")
         self.reset_asked = False
         self.kind = QtWidgets.QComboBox()
-        for text, key in (("Biexponential", "biex"), ("Arcsinh", "arcsinh"),
-                          ("Logarithmic", "log"), ("Linear", "linear")):
+        for text, key in (("Biexponential", "biex"), ("Logicle", "logicle"),
+                          ("Arcsinh", "arcsinh"), ("Logarithmic", "log"),
+                          ("Linear", "linear")):
             self.kind.addItem(text, key)
         b = current if isinstance(current, Biex) else Biex()
         self.width = QtWidgets.QDoubleSpinBox()
@@ -1382,6 +1396,32 @@ class ScaleDialog(QtWidgets.QDialog):
         self.lowest.setDecimals(2)
         self.lowest.setValue(current.min if isinstance(current, Log) else 10)
         self.lowest.setToolTip("Zero and everything below it is drawn at this edge")
+        g = current if isinstance(current, Logicle) else Logicle()
+        self.logicle_w = QtWidgets.QDoubleSpinBox()
+        self.logicle_w.setSingleStep(0.1)
+        self.logicle_w.setToolTip("W: the decades given to the nearly linear part around "
+                                  "zero. Larger pulls a smeared negative population together.")
+        self.logicle_m = QtWidgets.QDoubleSpinBox()
+        self.logicle_m.setRange(1, 8)
+        self.logicle_m.setSingleStep(0.25)
+        self.logicle_m.setToolTip("M: the decades the whole scale spans; 4.5 is the usual")
+        self.logicle_a = QtWidgets.QDoubleSpinBox()
+        self.logicle_a.setSingleStep(0.25)
+        self.logicle_a.setToolTip("A: more room below zero, in decades")
+        self.logicle_t = QtWidgets.QDoubleSpinBox()
+        self.logicle_t.setRange(1, 1e9)
+        self.logicle_t.setDecimals(0)
+        self.logicle_t.setGroupSeparatorShown(True)
+        self.logicle_t.setToolTip("T: the value at the top of the scale; 262,144 for an "
+                                  "18-bit cytometer")
+        self.logicle_m.setValue(g.M)
+        self._logicle_limits()
+        self.logicle_w.setValue(g.W)
+        self._logicle_limits()
+        self.logicle_a.setValue(g.A)
+        self.logicle_t.setValue(g.T)
+        self.logicle_m.valueChanged.connect(self._logicle_limits)
+        self.logicle_w.valueChanged.connect(self._logicle_limits)
         self.every = QtWidgets.QCheckBox("Every fluorescence parameter, not just this one")
         self.note = QtWidgets.QLabel(
             "Polygons drawn on this parameter are tested on the new scale. "
@@ -1392,6 +1432,10 @@ class ScaleDialog(QtWidgets.QDialog):
         self.form.addRow("Scale", self.kind)
         self.rows = {"biex": [("Linear width", self.width), ("Negative decades", self.neg),
                               ("Positive decades", self.pos)],
+                     "logicle": [("Linear width (W), decades", self.logicle_w),
+                                 ("Decades (M)", self.logicle_m),
+                                 ("Negative decades (A)", self.logicle_a),
+                                 ("Top of scale (T)", self.logicle_t)],
                      "arcsinh": [("Cofactor", self.cofactor)],
                      "log": [("Lowest value", self.lowest)], "linear": []}
         self._labels = {}
@@ -1409,8 +1453,8 @@ class ScaleDialog(QtWidgets.QDialog):
         box.accepted.connect(self.accept)
         box.rejected.connect(self.reject)
         self.form.addRow(box)
-        key = ("biex" if isinstance(current, Biex) else "arcsinh" if isinstance(current, Arcsinh)
-               else "log" if isinstance(current, Log) else "linear")
+        key = ("biex" if isinstance(current, Biex) else "logicle" if isinstance(current, Logicle)
+               else "arcsinh" if isinstance(current, Arcsinh) else "log" if isinstance(current, Log) else "linear")
         self.kind.setCurrentIndex(self.kind.findData(key))
         self.kind.currentIndexChanged.connect(self._show)
         self._show()
@@ -1422,12 +1466,22 @@ class ScaleDialog(QtWidgets.QDialog):
                 widget.setVisible(on)
                 self._labels[widget].setVisible(on)
 
+    def _logicle_limits(self, *_) -> None:
+        """What a Logicle can be: W up to M / 2, A from −W to M − 2W."""
+        m, w = self.logicle_m.value(), self.logicle_w.value()
+        self.logicle_w.setRange(0, m / 2)
+        w = min(w, m / 2)
+        self.logicle_a.setRange(-w, m - 2 * w)
+
     def _reset(self) -> None:
         self.reset_asked = True
         self.accept()
 
     def scale(self):
         key = self.kind.currentData()
+        if key == "logicle":
+            return Logicle(self.logicle_t.value(), self.logicle_w.value(),
+                           self.logicle_m.value(), self.logicle_a.value())
         if key == "biex":
             pos = self._pos if abs(self.pos.value() - self._pos) < 5e-5 else self.pos.value()
             return Biex(256, 262144.0, self.neg.value(), -self.width.value(), pos)
@@ -1439,25 +1493,186 @@ class ScaleDialog(QtWidgets.QDialog):
 
 
 class CompensationDialog(QtWidgets.QDialog):
-    """The spillover matrix in use, as percentages: row, the fluorochrome;
-    column, the detector it spills into."""
+    """Which spillover matrix each sample is compensated with, and the
+    matrix of one of them as percentages: row, the fluorochrome; column,
+    the detector it spills into. An edited matrix is given to the samples
+    selected in the list, or to every sample; `apply(matrix, entries)` is
+    what does it — `GatesTab.set_compensation`."""
 
-    def __init__(self, matrix, source: str, labels: dict, parent=None):
+    SOURCES = {"file": "the matrix in its own FCS file",
+               "workspace": "the matrix the FlowJo workspace gives it",
+               "edited": "a matrix edited here for this sample",
+               "shared": "a matrix edited here, shared by every sample",
+               "": "no matrix: the file carries none"}
+
+    def __init__(self, session, entries: list, entry, selected: list, labels: dict,
+                 apply, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Compensation")
-        self.reset_asked = False
-        self.channels = list(matrix.channels)
-        self._start = np.array(matrix.matrix, dtype=float)
-        n = len(self.channels)
-        where = {"edited": "edited here", "workspace": "from the FlowJo workspace",
-                 "file": "from the files themselves"}.get(source, source)
+        self.session, self.entries, self.labels, self._apply = session, list(entries), labels, apply
+        self.channels: list[str] = []
+        self._start = np.zeros((0, 0))
+        self._filling = False
+        #: the sample whose matrix is in the table
+        self.shown = None
         head = QtWidgets.QLabel(
-            f"The matrix in use, {where}. Each cell is the percentage of the row's "
-            "fluorochrome seen in the column's detector. Type over a number to change it; "
-            "every sample is compensated again with the result.")
+            "Each sample is compensated with its own matrix: the one in its file, or the "
+            "FlowJo workspace's for it. Each cell is the percentage of the row's "
+            "fluorochrome seen in the column's detector. Type over a number, then give "
+            "the result to the samples selected in the list or to every sample.")
         head.setWordWrap(True)
         head.setProperty("role", "caption")
-        self.table = QtWidgets.QTableWidget(n, n)
+        self.samples = QtWidgets.QTreeWidget()
+        self.samples.setHeaderLabels(["Sample", "Matrix"])
+        self.samples.setRootIsDecorated(False)
+        self.samples.setUniformRowHeights(True)
+        self.samples.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.samples.setToolTip(
+            "Where each sample's matrix comes from. file: its own FCS file. workspace: "
+            "the FlowJo workspace. edited: changed here for that sample. shared: changed "
+            "here and given to every sample.")
+        for e in self.entries:
+            self.samples.addTopLevelItem(QtWidgets.QTreeWidgetItem([e.name, ""]))
+        self.samples.header().setStretchLastSection(False)
+        self.samples.header().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self.samples.header().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        self.summary = QtWidgets.QLabel("")
+        self.summary.setWordWrap(True)
+        self.summary.setProperty("role", "caption")
+        self.using = QtWidgets.QLabel("")
+        self.using.setWordWrap(True)
+        self.using.setProperty("role", "strong")
+        self.table = QtWidgets.QTableWidget(0, 0)
+        self.state = QtWidgets.QLabel("")
+        self.state.setWordWrap(True)
+        self.state.setProperty("role", "warning")
+        self.apply_selected = QtWidgets.QPushButton("")
+        self.apply_selected.setToolTip("Compensate the samples selected in the list with the "
+                                       "matrix shown; the others keep theirs")
+        self.apply_all = QtWidgets.QPushButton("Apply to every sample")
+        self.apply_all.setToolTip("One matrix for every sample, in place of their own")
+        self.back = QtWidgets.QPushButton("Back to the original")
+        self.back.setToolTip("The samples selected in the list go back to the matrix of "
+                             "their file, or of the workspace")
+        self.discard = QtWidgets.QPushButton("Discard changes")
+        self.discard.setToolTip("Forget what was typed and show the sample's matrix again")
+        close = QtWidgets.QPushButton("Close")
+        close.setAutoDefault(False)
+        for b in (self.apply_selected, self.apply_all, self.back, self.discard):
+            b.setAutoDefault(False)
+        left = QtWidgets.QVBoxLayout()
+        left.addWidget(self.samples, 1)
+        left.addWidget(self.summary)
+        right = QtWidgets.QVBoxLayout()
+        right.addWidget(self.using)
+        right.addWidget(self.table, 1)
+        right.addWidget(self.state)
+        middle = QtWidgets.QHBoxLayout()
+        middle.addLayout(left, 0)
+        middle.addLayout(right, 1)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(self.apply_selected)
+        buttons.addWidget(self.apply_all)
+        buttons.addWidget(self.back)
+        buttons.addWidget(self.discard)
+        buttons.addStretch(1)
+        buttons.addWidget(close)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(head)
+        layout.addLayout(middle, 1)
+        layout.addLayout(buttons)
+        self.samples.setMinimumWidth(230)
+        self.samples.setMaximumWidth(300)
+
+        self._filling = True
+        for e in selected:
+            if e in self.entries:
+                self.samples.topLevelItem(self.entries.index(e)).setSelected(True)
+        start = self.entries.index(entry) if entry in self.entries else 0
+        self.samples.setCurrentItem(
+            self.samples.topLevelItem(start),
+            0, QtCore.QItemSelectionModel.SelectionFlag.Select
+            | QtCore.QItemSelectionModel.SelectionFlag.Rows)
+        self._filling = False
+        self._sources()
+        self._load(self.entries[start])
+        n = len(self.channels)
+        self.resize(min(560 + 78 * n, 1280), min(300 + 30 * max(n, 6), 760))
+
+        self.samples.currentItemChanged.connect(self._current_changed)
+        self.samples.itemSelectionChanged.connect(self._show_state)
+        self.table.itemChanged.connect(self._show_state)
+        self.apply_selected.clicked.connect(lambda: self.apply_to(self.selected()))
+        self.apply_all.clicked.connect(lambda: self.apply_to(None))
+        self.back.clicked.connect(lambda: self.reset(self.selected()))
+        self.discard.clicked.connect(lambda: self._load(self.current()))
+        close.clicked.connect(self.accept)
+
+    # --- the samples ----------------------------------------------------------------
+
+    def current(self):
+        item = self.samples.currentItem()
+        return self.entries[self.samples.indexOfTopLevelItem(item)] if item else self.entries[0]
+
+    def selected(self) -> list:
+        rows = sorted(self.samples.indexOfTopLevelItem(i) for i in self.samples.selectedItems())
+        return [self.entries[r] for r in rows] or [self.current()]
+
+    def select(self, names: list[str]) -> None:
+        """Select these samples; the first becomes the one shown."""
+        rows = [i for i, e in enumerate(self.entries) if e.name in names]
+        self.samples.clearSelection()
+        if rows:
+            self.samples.setCurrentItem(self.samples.topLevelItem(rows[0]))
+        for r in rows:
+            self.samples.topLevelItem(r).setSelected(True)
+
+    def source(self, name: str) -> str:
+        """What the list says of this sample."""
+        return self.samples.topLevelItem(
+            [e.name for e in self.entries].index(name)).text(1)
+
+    def _sources(self) -> None:
+        for i, e in enumerate(self.entries):
+            source = self.session.matrix_in_use(e)[1]
+            item = self.samples.topLevelItem(i)
+            item.setText(1, source or "none")
+            font = item.font(1)
+            font.setBold(source in ("edited", "shared"))
+            item.setFont(1, font)
+            item.setToolTip(1, f"{e.name}: {self.SOURCES[source]}")
+        n, different = len(self.entries), self.session.distinct_matrices()
+        self.summary.setText(
+            "No sample has a matrix." if different == 0
+            else f"The {n} samples all have the same matrix." if different == 1 and n > 1
+            else "One sample, one matrix." if different == 1
+            else f"{different} different matrices among the {n} samples.")
+
+    def _current_changed(self, *_) -> None:
+        if self._filling:
+            return
+        if self.changed():
+            self._show_state()   # what was typed is kept, to give to other samples
+        else:
+            self._load(self.current())
+
+    # --- the matrix -------------------------------------------------------------------
+
+    def _load(self, entry) -> None:
+        matrix = self.session.matrix_in_use(entry)[0]
+        self.shown = entry
+        self._filling = True
+        self.channels = list(matrix.channels) if matrix is not None else []
+        n = len(self.channels)
+        self._start = (np.array(matrix.matrix, dtype=float) if matrix is not None
+                       else np.zeros((0, 0)))
+        self.table.clear()
+        self.table.setRowCount(n)
+        self.table.setColumnCount(n)
+        labels = self.labels
         names = [(labels.get(c) or c).split()[0] if labels.get(c) else c for c in self.channels]
         self.table.setHorizontalHeaderLabels(self.channels)
         self.table.setVerticalHeaderLabels([f"{c}  ({m})" if m != c else c
@@ -1471,25 +1686,19 @@ class CompensationDialog(QtWidgets.QDialog):
                     item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
                 self.table.setItem(i, j, item)
         self.table.resizeColumnsToContents()
-        self.state = QtWidgets.QLabel("")
-        self.state.setProperty("role", "warning")
-        box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
-                                         | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
-        box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Use this matrix")
-        back = box.addButton("Back to the original", QtWidgets.QDialogButtonBox.ButtonRole.ResetRole)
-        back.setEnabled(source == "edited")
-        back.clicked.connect(self._reset)
-        box.accepted.connect(self._accept)
-        box.rejected.connect(self.reject)
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.addWidget(head)
-        layout.addWidget(self.table, 1)
-        layout.addWidget(self.state)
-        layout.addWidget(box)
-        self.resize(min(260 + 86 * n, 1100), min(210 + 32 * n, 720))
+        self._filling = False
+        self.state.setText("")
+        self._show_state()
 
     def _shown(self, i: int, j: int) -> str:
         return f"{100 * self._start[i, j]:.5g}"
+
+    def changed(self) -> bool:
+        """Was anything typed that is not applied yet?"""
+        n = len(self.channels)
+        return any(self.table.item(i, j) is not None
+                   and self.table.item(i, j).text() != self._shown(i, j)
+                   for i in range(n) for j in range(n))
 
     def set_value(self, row: str, column: str, percent: float) -> None:
         self.table.item(self.channels.index(row), self.channels.index(column)).setText(f"{percent:g}")
@@ -1507,22 +1716,68 @@ class CompensationDialog(QtWidgets.QDialog):
                                 else float(text.replace(",", ".")) / 100.0)
         return Compensation(self.channels, values, "edited")
 
-    def _accept(self) -> None:
+    def _show_state(self, *_) -> None:
+        if self._filling or self.shown is None:
+            return
+        changed, chosen = self.changed(), self.selected()
+        source = self.session.matrix_in_use(self.shown)[1]
+        if changed:
+            self.using.setText(f"{self.shown.name}'s matrix with your changes — not applied "
+                               "yet. Select the samples it is for, then apply it.")
+        elif source == "workspace" and getattr(self.shown.wsp, "compensation", None) is None:
+            self.using.setText(f"{self.shown.name} is compensated with the matrix the FlowJo "
+                               "workspace's samples share: the workspace does not list it.")
+        else:
+            self.using.setText(f"{self.shown.name} is compensated with {self.SOURCES[source]}.")
+        self.apply_selected.setText(f"Apply to {chosen[0].name}" if len(chosen) == 1
+                                    else f"Apply to the {len(chosen)} selected samples")
+        has = bool(self.channels)
+        self.apply_selected.setEnabled(has)
+        self.apply_all.setEnabled(has)
+        self.discard.setEnabled(changed)
+        self.back.setEnabled(any(self.session.matrix_in_use(e)[1] in ("edited", "shared")
+                                 for e in chosen))
+
+    # --- what the buttons do ------------------------------------------------------------
+
+    def _checked(self):
         try:
             m = self.matrix()
             np.linalg.inv(m.matrix)
         except ValueError:
             self.state.setText("Every cell has to be a number")
-            return
+            return None
         except np.linalg.LinAlgError:
             self.state.setText("This matrix cannot be inverted: two fluorochromes "
                                "would be indistinguishable")
-            return
-        self.accept()
+            return None
+        return m
 
-    def _reset(self) -> None:
-        self.reset_asked = True
-        self.accept()
+    def apply_to(self, entries: list | None) -> bool:
+        """Give the matrix in the table to these samples — None: to every
+        sample, as the one they share."""
+        m = self._checked()
+        if m is None:
+            return False
+        try:
+            self._apply(m, entries)
+        except ValueError as error:
+            self.state.setText(str(error)[:1].upper() + str(error)[1:])
+            return False
+        self._done()
+        return True
+
+    def reset(self, entries: list | None) -> None:
+        """These samples back on their file's or the workspace's matrix —
+        None: every sample."""
+        if entries is not None and len(entries) == len(self.entries):
+            entries = None
+        self._apply(None, entries)
+        self._done()
+
+    def _done(self) -> None:
+        self._sources()
+        self._load(self.current())
 
 
 class ExportDialog(QtWidgets.QDialog):

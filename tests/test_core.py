@@ -873,3 +873,284 @@ def test_comparing_a_statistics_table():
     # two columns together are the groups
     values, _ = c.from_table(t, "% of parent", ["Group", "Day"])
     assert set(values[("T",)]) == {"Ctrl · 3", "Ctrl · 7", "Case · 3", "Case · 7"}
+
+
+# --- Logicle ---------------------------------------------------------------------
+
+#: FlowUtils 1.2.2, `flowutils.transforms.logicle` — the C code of Moore &
+#: Parks (Cytometry A 2012) — at these values, for (T, W, M, A)
+LOGICLE_AT = [-1000, -100, -10, -1, 0, 1, 10, 100, 1000, 10000, 100000, 262144, 1e6]
+LOGICLE_REFERENCE = {
+    (262144, 0.5, 4.5, 0): [
+        -0.23211535395017646, 0.009041134692025388, 0.099917946544774, 0.1099906900730379,
+        0.1111111111111111, 0.11223153214918431, 0.12230427567744821, 0.21318108753019682,
+        0.45433757617239867, 0.6838326572265573, 0.9069275914814589, 1.0, 1.1292427085676322],
+    (262144, 1.0, 4.5, 0): [
+        0.03813323848718597, 0.1996489705135676, 0.2199597782467301, 0.22199597288068995,
+        0.2222222222222222, 0.22244847156375447, 0.22448466619771432, 0.24479547393087683,
+        0.40631120595725845, 0.6762208182193373, 0.9063558264967823, 1.0, 1.129519464719908],
+    (262144, 0.5, 4.5, 0.5): [
+        -0.10890381855515885, 0.10813702122282293, 0.18992615189029663, 0.19899162106573412,
+        0.2, 0.2010083789342659, 0.2100738481097034, 0.2918629787771771, 0.5089038185551589,
+        0.7154493915039016, 0.9162348323333129, 1.0, 1.116318437710869],
+    (10000, 0, 4, 0): [
+        -0.7500001074877236, -0.500010854648286, -0.25106980177441446, -0.052246909576938755,
+        0.0, 0.052246909576938755, 0.25106980177441446, 0.500010854648286, 0.7500001074877236,
+        1.0, 1.2499999989251211, 1.354634979403759, 1.4999999989143724],
+    (4194304, 0.8, 5.5, 1.0): [
+        0.1391642638587352, 0.2584957251415965, 0.27507300715869754, 0.2767380628539924,
+        0.27692307692307694, 0.2771080909921615, 0.27877314668745634, 0.29535042870455736,
+        0.4146818899874187, 0.5922874485753206, 0.7498848736020712, 0.814570792022158,
+        0.9041666523419553],
+    (1000, 1, 4, 1): [
+        -0.19999999999999996, 0.008361879241263415, 0.25405935894582443, 0.3830012926556203,
+        0.4, 0.41699870734437977, 0.5459406410541756, 0.7916381207587366, 1.0,
+        1.2010029960319952, 1.4011140722863589, 1.4848300871320008, 1.601125824523326],
+}
+
+
+@pytest.mark.parametrize("parameters", list(LOGICLE_REFERENCE))
+def test_logicle_reference(parameters):
+    from milc.transforms import Logicle
+    t = Logicle(*parameters)
+    x = np.array(LOGICLE_AT, dtype=np.float64)
+    assert np.abs(t(x) - LOGICLE_REFERENCE[parameters]).max() < 1e-12
+    assert np.allclose(t.inverse(LOGICLE_REFERENCE[parameters]), x, rtol=1e-9, atol=1e-9)
+
+
+def test_logicle_shape_and_round_trip():
+    from milc.transforms import Logicle
+    t = Logicle()
+    T, W, M = 262144.0, 0.5, 4.5
+    # the published properties: T at the top, zero at W / M, mirrored about zero
+    assert float(t(T)) == pytest.approx(1.0, abs=1e-14) and float(t(0.0)) == pytest.approx(W / M)
+    x = np.concatenate([-np.logspace(-3, 6, 400), [0.0], np.logspace(-3, 8, 600)])
+    y = t(x)
+    assert np.all(np.diff(y[np.argsort(x)]) > 0)
+    assert np.allclose(t(-x) + y, 2 * W / M, atol=1e-13)
+    assert np.allclose(t.inverse(y), x, rtol=1e-11, atol=1e-9)
+    ys = np.linspace(-0.3, 1.4, 5001)
+    assert np.abs(t(t.inverse(ys)) - ys).max() < 1e-12
+    # far above zero it is the logarithm it replaces: a decade is 1 / M
+    assert float(t(1e5) - t(1e4)) == pytest.approx(1 / M, abs=2e-3)
+    # the shape of what goes in comes out, single precision and scalars too
+    assert t(np.zeros((3, 2), np.float32)).shape == (3, 2) and float(t(5.0)) > W / M
+    assert np.isnan(t(np.array([np.nan, 1.0]))[0])
+    for bad in ((0, 0.5, 4.5, 0), (262144, 3, 4.5, 0), (262144, 0.5, 4.5, -1), (262144, 1, 4, 3)):
+        with pytest.raises(ValueError):
+            Logicle(*bad)
+
+
+def test_logicle_is_a_scale_like_the_others(tmp_path):
+    from milc.session import Session
+    from milc.transforms import (Biex, Logicle, decade_ticks, display_range, from_spec, same,
+                                 to_spec)
+    t = Logicle(262144, 1.0, 4.5, 0.5)
+    assert to_spec(t) == {"logicle": [262144.0, 1.0, 4.5, 0.5]} and same(from_spec(to_spec(t)), t)
+    assert not same(t, Logicle()) and not same(Logicle(), Biex())
+    assert display_range(t) == (0.0, 1.0)
+    ticks = decade_ticks(Logicle())
+    assert ticks[0] == (pytest.approx(0.5 / 4.5), "0") and ticks[-1][1] == "10⁵"
+    assert [label for _, label in ticks[1:]] == ["10²", "10³", "10⁴", "10⁵"]
+
+    # a polygon drawn on it is tested on it, and the scale is kept with the project
+    s = _two_samples(tmp_path)
+    s.set_scale(["PE-A", "FITC-A"], t)
+    box = np.array([[0.4, 0.4], [0.9, 0.4], [0.9, 0.9], [0.4, 0.9]])
+    raw = np.column_stack([t.inverse(box[:, 0]), t.inverse(box[:, 1])])
+    first = s.usable()[0]
+    for e in s.usable():
+        e.gates.add(GateNode("P", PolygonGate(["Comp-PE-A", "Comp-FITC-A"], raw, scales=[t, t])))
+    s.gates_changed(first)
+    sample = s.load(first)
+    pe, fitc = t(sample.column("Comp-PE-A")), t(sample.column("Comp-FITC-A"))
+    assert sample.count("P") == ((pe > 0.4) & (pe < 0.9) & (fitc > 0.4) & (fitc < 0.9)).sum() > 0
+    again = Session()
+    again.open_folder(str(tmp_path))
+    assert same(again.scale_of("Comp-PE-A"), t)
+    assert same(again.usable()[0].gates.find("P").gate.scales[0], t)
+    assert again.load(again.usable()[0]).count("P") == sample.count("P")
+
+    # the algorithms are fed it: the marker's own, or the standard one for every marker
+    again.build()
+    x = again.dataset.column("PE-A").astype(np.float64)
+    assert np.allclose(again.features(["PE-A"])[:, 0], t(x) * 1023)
+    assert np.allclose(again.features(["PE-A"], "logicle")[:, 0], Logicle()(x) * 1023)
+
+
+def test_analyze_takes_logicle(tmp_path):
+    from milc.cli import main
+    from milc.dataset import Dataset
+    from milc.transforms import Logicle
+    rng = np.random.default_rng(2)
+    ev = np.column_stack([np.abs(rng.lognormal(6, 1.5, (600, 2))),
+                          np.tile([1, 2, 3], 200)]).astype(np.float32)
+    path = str(tmp_path / "c.fcs")
+    write_fcs(path, ev, ["FITC-A", "PE-A", "SampleID"], markers=["CD8", "CD4", ""])
+    out = str(tmp_path / "run")
+    assert main(["analyze", path, "--channels", "FITC-A,PE-A", "--transform", "logicle",
+                 "--pca", "--out", out]) == 0
+    ds = Dataset.load(out + ".npz")
+    assert ds.runs["PCA"]["transform"] == "logicle" and "cofactor" not in ds.runs["PCA"]
+    X = ds.matrix(["FITC-A", "PE-A"], Logicle(), 1023)
+    centred = X - X.mean(axis=0)
+    first = np.linalg.svd(centred, full_matrices=False)[2][0]
+    assert np.allclose(np.abs(ds.derived["PCA1"]), np.abs(centred @ first), atol=1e-3 * 1023)
+
+
+def test_a_workspace_logicle_is_read(tmp_path):
+    from milc.transforms import Logicle, same
+    from milc.wsp import read_wsp
+    text = """<Workspace version="20.0" flowJoVersion="10.8.1"
+ xmlns:transforms="http://www.isac-net.org/std/Gating-ML/v2.0/transformations"
+ xmlns:data-type="http://www.isac-net.org/std/Gating-ML/v2.0/datatypes"
+ xmlns:gating="http://www.isac-net.org/std/Gating-ML/v2.0/gating">
+ <SampleList><Sample><DataSet uri="file:/x/a.fcs" sampleID="1"/>
+ <Transformations>
+  <transforms:logicle transforms:length="256" transforms:T="262144" transforms:A="0"
+     transforms:W="1" transforms:M="4.5"><data-type:parameter data-type:name="Comp-PE-A"/>
+  </transforms:logicle>
+  <transforms:logicle transforms:T="262144" transforms:A="0" transforms:W="9"
+     transforms:M="4.5"><data-type:parameter data-type:name="Comp-APC-A"/></transforms:logicle>
+  <transforms:hyperlog transforms:T="262144"><data-type:parameter data-type:name="Comp-X-A"/>
+  </transforms:hyperlog>
+ </Transformations>
+ <SampleNode name="a.fcs" sampleID="1" count="10"><Subpopulations>
+  <Population name="P" count="4"><Gate><gating:PolygonGate>
+   <gating:dimension><data-type:fcs-dimension data-type:name="Comp-PE-A"/></gating:dimension>
+   <gating:dimension><data-type:fcs-dimension data-type:name="FSC-A"/></gating:dimension>
+   <gating:vertex><gating:coordinate data-type:value="0"/><gating:coordinate data-type:value="0"/></gating:vertex>
+   <gating:vertex><gating:coordinate data-type:value="1000"/><gating:coordinate data-type:value="0"/></gating:vertex>
+   <gating:vertex><gating:coordinate data-type:value="1000"/><gating:coordinate data-type:value="9"/></gating:vertex>
+  </gating:PolygonGate></Gate></Population>
+ </Subpopulations></SampleNode></Sample></SampleList></Workspace>"""
+    path = tmp_path / "w.wsp"
+    path.write_text(text, encoding="utf-8")
+    sample = read_wsp(str(path)).samples[0]
+    assert same(sample.transforms["Comp-PE-A"], Logicle(262144, 1, 4.5, 0))
+    assert set(sample.transforms) == {"Comp-PE-A"}        # an impossible W, an unknown scale: left out
+    gate = sample.gates.find("P").gate
+    assert same(gate.scales[0], Logicle(262144, 1, 4.5, 0)) and gate.scales[1] is None
+
+
+# --- a compensation matrix per sample ----------------------------------------------
+
+def _own_spill(tmp_path):
+    """Two files that carry different matrices, and a third like the first."""
+    from milc.session import Session
+    rng = np.random.default_rng(5)
+    for name, spill in (("3Ctrl1", 0.1), ("3Case1", 0.3), ("3Ctrl2", 0.1)):
+        ev = np.column_stack([rng.uniform(0, 1000, 300), np.abs(rng.lognormal(6, 1.2, (300, 2)))])
+        _write(tmp_path, name + ".fcs", ev.astype(np.float32), markers=["", "CD8", "CD4"],
+               keywords={"SPILL": f"2,FITC-A,PE-A,1,{spill},0.02,1"})
+    s = Session()
+    s.open_folder(str(tmp_path))
+    return s
+
+
+def _by_name(s):
+    return {e.name: e for e in s.usable()}
+
+
+def test_each_sample_is_compensated_with_its_own_matrix(tmp_path):
+    from milc.compensation import Compensation
+    from milc.session import Session
+    s = _own_spill(tmp_path)
+    e = _by_name(s)
+    # as acquired: each file's own, and they differ
+    assert {n: s.matrix_in_use(x)[1] for n, x in e.items()} == dict.fromkeys(e, "file")
+    assert s.matrix_in_use(e["3Case1"])[0].matrix[0, 1] == 0.3 and s.distinct_matrices() == 2
+    assert s.load(e["3Case1"]).compensation.matrix[0, 1] == 0.3
+    assert s.load(e["3Ctrl1"]).compensation.matrix[0, 1] == 0.1
+    usual = {n: s.load(x).compensated.copy() for n, x in e.items()}
+    assert not os.path.exists(s.project_file())            # looking writes nothing
+
+    # one sample edited: only that one moves
+    edited = Compensation(["FITC-A", "PE-A"], np.array([[1, 0.2], [0.02, 1]]), "edited")
+    s.set_matrix(edited, [e["3Ctrl1"]])
+    assert s.matrix_in_use(e["3Ctrl1"]) == (edited, "edited")
+    assert s.matrix_in_use(e["3Case1"])[1] == "file" and s.distinct_matrices() == 3
+    raw = s.load(e["3Ctrl1"]).fcs.events.astype(np.float64)
+    assert np.allclose(s.load(e["3Ctrl1"]).compensated[:, 1:],
+                       raw[:, 1:] @ np.linalg.inv(edited.matrix), rtol=1e-4)
+    assert np.array_equal(s.load(e["3Case1"]).compensated, usual["3Case1"])
+    assert s.matrix is None and list(s.own_matrices) == ["3Ctrl1.fcs"]
+
+    # kept with the project
+    again = Session()
+    again.open_folder(str(tmp_path))
+    a = _by_name(again)
+    assert again.matrix_in_use(a["3Ctrl1"])[1] == "edited"
+    assert again.matrix_of(a["3Ctrl1"]).matrix[0, 1] == 0.2
+    assert again.matrix_in_use(a["3Ctrl2"])[1] == "file"
+    assert np.allclose(again.load(a["3Ctrl1"]).compensated, s.load(e["3Ctrl1"]).compensated)
+
+    # to all: one shared matrix in place of every other, the edited one included
+    shared = Compensation(["FITC-A", "PE-A"], np.array([[1, 0.5], [0, 1]]), "edited")
+    again.set_matrix(shared)
+    assert {again.matrix_in_use(x)[1] for x in a.values()} == {"shared"}
+    assert again.distinct_matrices() == 1 and again.own_matrices == {}
+    # one of them back on its file's, another edited on its own: the rest still share
+    again.set_matrix(None, [a["3Case1"]])
+    again.set_matrix(edited, [a["3Ctrl2"]])
+    assert [again.matrix_in_use(a[n])[1] for n in ("3Ctrl1", "3Case1", "3Ctrl2")] == [
+        "shared", "file", "edited"]
+    assert np.array_equal(again.load(a["3Case1"]).compensated, usual["3Case1"])
+    third = Session()
+    third.open_folder(str(tmp_path))
+    t = _by_name(third)
+    assert [third.matrix_in_use(t[n])[1] for n in ("3Ctrl1", "3Case1", "3Ctrl2")] == [
+        "shared", "file", "edited"]
+    # back to the original is the file's, not the shared one; and once the
+    # last one sharing has gone back too, nothing is shared any more
+    third.set_matrix(None, [t["3Ctrl2"]])
+    assert third.matrix_in_use(t["3Ctrl2"])[1] == "file" and third.matrix is not None
+    third.set_matrix(None, [t["3Ctrl1"]])
+    assert third.matrix is None and third.own_matrices == {}
+    assert {third.matrix_in_use(x)[1] for x in t.values()} == {"file"}
+    for n, x in t.items():
+        assert np.array_equal(third.load(x).compensated, usual[n])
+
+    # a matrix for channels a file does not have is not given to it
+    with pytest.raises(ValueError, match="BV421-A"):
+        third.set_matrix(Compensation(["FITC-A", "BV421-A"], np.eye(2)), [t["3Ctrl1"]])
+    assert third.own_matrices == {}
+
+
+def test_a_project_saved_before_matrices_were_per_sample_still_loads(tmp_path):
+    """The project file as it was written before: one `compensation`
+    for every sample, and no `compensation_samples`."""
+    import json
+    from milc.session import PROJECT_FILE, Session
+    s = _own_spill(tmp_path)
+    usual = s.load(s.usable()[0]).compensated.copy()
+    old = {"version": 2, "columns": ["Group"], "group_by": ["Group"],
+           "annotations": {}, "excluded": [], "gates": {}, "scales": {"PE-A": {"arcsinh": 150.0}},
+           "normalization": None,
+           "compensation": {"channels": ["FITC-A", "PE-A"], "matrix": [[1, 0.25], [0.02, 1]]}}
+    with open(tmp_path / PROJECT_FILE, "w", encoding="utf-8") as f:
+        json.dump(old, f)
+    s = Session()
+    s.open_folder(str(tmp_path))
+    assert s.matrix.matrix[0, 1] == 0.25 and s.own_matrices == {}
+    assert s.current_matrix()[1] == "edited"                     # what it said before
+    for e in s.usable():                                        # every sample, as before
+        assert s.matrix_in_use(e)[1] == "shared"
+        sample = s.load(e)
+        assert np.allclose(sample.compensated[:, 1:], sample.fcs.events[:, 1:].astype(np.float64)
+                           @ np.linalg.inv(s.matrix.matrix), rtol=1e-4)
+    # and one without any edited matrix: each file's own
+    old["compensation"] = None
+    with open(tmp_path / PROJECT_FILE, "w", encoding="utf-8") as f:
+        json.dump(old, f)
+    s = Session()
+    s.open_folder(str(tmp_path))
+    assert s.matrix is None and {s.matrix_in_use(e)[1] for e in s.usable()} == {"file"}
+    assert np.array_equal(s.load(s.usable()[0]).compensated, usual)
+    # a mangled entry for one sample does not stop the folder opening
+    old["compensation_samples"] = {"3Ctrl1.fcs": {"channels": ["FITC-A"]}, "3Case1.fcs": 7}
+    with open(tmp_path / PROJECT_FILE, "w", encoding="utf-8") as f:
+        json.dump(old, f)
+    s = Session()
+    s.open_folder(str(tmp_path))
+    assert s.own_matrices == {} and len(s.usable()) == 3

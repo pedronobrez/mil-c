@@ -25,7 +25,7 @@ from .fcs import read_header, write_fcs
 from .gating import ClusterGate, GateNode, copy_tree, follow_scale, tree_from_dict, tree_to_dict
 from .gating import TimeGate, keep_times, time_node, unwrap, wrap
 from .sample import Sample, annotate
-from .transforms import Arcsinh, Biex, Linear, from_spec, to_spec
+from .transforms import Arcsinh, Biex, Linear, Logicle, from_spec, to_spec
 from .wsp import Workspace, WspSample, read_wsp
 
 #: the one column a new folder starts with; every other is the user's
@@ -142,8 +142,12 @@ class Session:
         #: channel → the scale its axis is drawn on, where the user chose
         #: one; a channel not here has the usual one (see `scale_of`)
         self.scales: dict[str, object] = {}
-        #: a compensation matrix edited here, in place of every other
+        #: a compensation matrix edited here and shared: in place of every
+        #: file's own, except where the file has one in `own_matrices`
         self.matrix: object = None
+        #: file name → the matrix edited for that sample alone; None there
+        #: keeps a sample on its original while the others share one
+        self.own_matrices: dict[str, object] = {}
         #: batch normalisation, or None: {"batch": column, "reference":
         #: [column, value], "clusters": n}
         self.normalization: dict | None = None
@@ -183,6 +187,7 @@ class Session:
                     e.problem, e.include = "different channels from the others", False
         self.columns, self.group_by = [GROUP], [GROUP]
         self.scales, self.matrix, self.normalization = {}, None, None
+        self.own_matrices = {}
         usable = [e for e in self.entries if not e.problem]
         for e, group in zip(usable, guess_groups([e.name for e in usable])):
             e.meta = {GROUP: group}
@@ -260,11 +265,18 @@ class Session:
         return e.gates
 
     def matrix_of(self, e: Entry):
-        """The compensation this file is given: the workspace's for it,
-        the one the workspace's samples share where it lists none, and
+        """The compensation this file is given: the one edited for it,
+        the edited one every sample shares, the workspace's for it, the
+        one the workspace's samples share where it lists none, and
         otherwise None — the file's own."""
-        if self.matrix is not None:
+        file = os.path.basename(e.path)
+        if self.own_matrices.get(file) is not None:
+            return self.own_matrices[file]
+        if self.matrix is not None and file not in self.own_matrices:
             return self.matrix
+        return self._given(e)
+
+    def _given(self, e: Entry):
         if e.wsp is not None and e.wsp.compensation is not None:
             return e.wsp.compensation
         if self._shared is not None and self.extend_gates:
@@ -273,29 +285,84 @@ class Session:
 
     # --- compensation ------------------------------------------------------------
 
+    def original_matrix(self, e: Entry):
+        """(matrix, `workspace` or `file`): what this sample is compensated
+        with when nothing was edited. (None, "") where there is none."""
+        given = self._given(e)
+        if given is not None:
+            return given, "workspace"
+        from . import compensation
+        try:
+            own = compensation.from_keywords(read_header(e.path))
+        except (OSError, ValueError):
+            own = None
+        return own, "file" if own is not None else ""
+
+    def matrix_in_use(self, e: Entry):
+        """(matrix, where it comes from) for one sample: `edited` — for
+        this sample alone —, `shared` — an edited one given to every
+        sample —, `workspace` or `file`. (None, "") where there is none."""
+        matrix = self.matrix_of(e)
+        if matrix is None or matrix is self._given(e):
+            return self.original_matrix(e)
+        own = self.own_matrices.get(os.path.basename(e.path)) is not None
+        return matrix, "edited" if own else "shared"
+
     def current_matrix(self):
         """(matrix, where it comes from) as the first usable file has it:
         `edited`, `workspace` or `file`. None where there is none at all."""
         entries = self.usable()
         if not entries:
             return None, ""
-        first = entries[0]
-        given = self.matrix_of(first)
-        if given is not None:
-            return given, "edited" if self.matrix is not None else "workspace"
-        from . import compensation
-        own = compensation.from_keywords(read_header(first.path))
-        return own, "file" if own is not None else ""
+        matrix, source = self.matrix_in_use(entries[0])
+        return matrix, "edited" if source == "shared" else source
 
-    def set_matrix(self, matrix) -> None:
+    def set_matrix(self, matrix, entries: list[Entry] | None = None) -> None:
         """Compensate every file with this matrix — or, with None, go
-        back to the workspace's or the files' own. Everything computed
-        from compensated values is forgotten."""
-        self.matrix = matrix
-        for e in self.entries:
+        back to the workspace's or the files' own. With `entries`, only
+        those samples: each gets the matrix as its own, or with None goes
+        back to its original. Everything computed from compensated values
+        is forgotten."""
+        if entries is None:
+            self.matrix = matrix
+            self.own_matrices.clear()
+            entries = self.entries
+        else:
+            for e in entries:
+                missing = [c for c in matrix.channels if c not in e.channels] if matrix else []
+                if missing:
+                    raise ValueError(f"{e.name} has no {', '.join(missing)}: "
+                                     "this matrix is not for it")
+            for e in entries:
+                file = os.path.basename(e.path)
+                if matrix is not None:
+                    self.own_matrices[file] = matrix
+                elif self.matrix is not None:
+                    self.own_matrices[file] = None
+                else:
+                    self.own_matrices.pop(file, None)
+            if self.matrix is not None and all(
+                    os.path.basename(e.path) in self.own_matrices for e in self.usable()):
+                self.matrix = None   # nobody is left sharing it
+            if self.matrix is None:
+                self.own_matrices = {f: m for f, m in self.own_matrices.items()
+                                     if m is not None}
+        for e in entries:
             e.sample = None
         self._counts.clear()
         self.save_project()
+
+    def distinct_matrices(self) -> int:
+        """How many different matrices the usable samples are compensated
+        with."""
+        seen = []
+        for e in self.usable():
+            m = self.matrix_in_use(e)[0]
+            if m is not None and not any(m is o or (m.channels == o.channels
+                                                    and np.array_equal(m.matrix, o.matrix))
+                                         for o in seen):
+                seen.append(m)
+        return len(seen)
 
     # --- scales ----------------------------------------------------------------------
 
@@ -370,6 +437,15 @@ class Session:
                                            np.array(saved["matrix"], dtype=float), "edited")
             except (KeyError, TypeError, ValueError):
                 self.matrix = None
+        self.own_matrices = {}
+        for file, own in (data.get("compensation_samples") or {}).items():
+            try:
+                self.own_matrices[file] = None if own is None else Compensation(
+                    list(own["channels"]), np.array(own["matrix"], dtype=float), "edited")
+            except (KeyError, TypeError, ValueError):
+                pass
+        if self.matrix is None:
+            self.own_matrices = {f: m for f, m in self.own_matrices.items() if m is not None}
         if not data.get("columns"):
             return
         self.columns = [str(c) for c in data["columns"]]
@@ -399,6 +475,10 @@ class Session:
             "compensation": ({"channels": self.matrix.channels,
                               "matrix": np.asarray(self.matrix.matrix).tolist()}
                              if self.matrix is not None else None),
+            "compensation_samples": {
+                file: (None if m is None else {"channels": m.channels,
+                                               "matrix": np.asarray(m.matrix).tolist()})
+                for file, m in self.own_matrices.items()},
         }
         self._project = data
         with open(self.project_file(), "w", encoding="utf-8") as f:
@@ -930,7 +1010,10 @@ class Session:
                  cofactor: float = 150.0) -> np.ndarray:
         """What the algorithms are fed. `biex` is each marker on the scale
         its axis has — FlowJo's biexponential unless another was chosen —
-        on 0 to 1023, which is what FlowJo hands its plugins."""
+        on 0 to 1023, which is what FlowJo hands its plugins. `logicle` is
+        every marker on the standard Logicle, on 0 to 1023 as well."""
+        if transform == "logicle":
+            return self.dataset.matrix(channels, Logicle(), 1023.0)
         if transform != "biex":
             return self.dataset.matrix(channels, Arcsinh(cofactor))
         columns = []
@@ -1064,7 +1147,9 @@ class Session:
         names, scales, factors = [], [], []
         for c in run["channels"]:
             names.append(("Comp-" + c) if ds.compensated[ds.channels.index(c)] else c)
-            if run.get("transform", "biex") != "biex":
+            if run.get("transform", "biex") == "logicle":
+                scale = Logicle()
+            elif run.get("transform", "biex") != "biex":
                 scale = Arcsinh()   # the cofactor `features` uses where none is given
             else:
                 scale = (self.scale_of(c) if c in self.scales else Biex()) or Linear()
