@@ -73,11 +73,38 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - Export the population shown, of the samples selected or of all, as FCS or CSV.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
 - What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
-- **Quality…** checks each acquisition for clogs, bubbles, bursts and drifts — the flow rate and
-  the signal of every population over time — and removes the bad stretches as a first
-  population, Clean, that every gate, statistic and concatenation then starts from. No R
-  needed. Beside PeacoQC it removes the same steps, finds the clogs PeacoQC does not look for,
-  and removes less of a slow drift (see `docs/comparacao.md`).
+- **Quality…** checks each acquisition in the order it was acquired for three things: a flow
+  rate far from the usual one (a clog), an abrupt change of signal (a step, a bubble), and a
+  moderate shift that lasts (a drift: a population's level, followed over a long window, away
+  from where it stays for longest). The bad stretches are removed as a first population, Clean,
+  that every gate, statistic and concatenation then starts from. The limits are in the dialog —
+  MAD limit (6), consecutive bins (5), events per bin, drift limit (0.25 of the spread of the
+  parameter's events; off does not look for drifts) — with Check again, and what is applied is
+  recorded with the limits used. Where more than a fifth of a file would go, look at the plots
+  before applying. No R needed; set beside PeacoQC and flowAI in `docs/comparacao.md`.
+- A **quadrant's arms can be moved one by one**: drag the small square on an arm to tilt that
+  arm alone; the round handle at the centre moves all four. Until an arm is moved it is the
+  plain quadrant, and old projects open unchanged.
+- **Auto…** proposes a gate from the data, drawn dashed until you name it, and then an ordinary
+  gate: the valley between the two peaks of a histogram (it proposes nothing where there is one
+  peak only — use a control); one population on two parameters, the one you click or the
+  largest, as a 90% density contour or the ellipse of a robust Gaussian fit; a band along the
+  diagonal of area against height, for single cells. *Fit on each sample separately* fits the
+  gate again on each sample's own events instead of copying the coordinates. On the test data
+  the valleys agree with the hand-drawn Live and CD45 gates (Jaccard 0.95 to 0.97); the scatter
+  gates are looser than the hand-drawn ones and should be looked at.
+- **Model…** fits a model to the population shown, in every sample selected, and gives a table
+  with a row for each sample (CSV, tests between groups) and a figure. *Proliferation* (CFSE,
+  CellTrace Violet): the generations as Gaussians a halving apart, anchored on an unstimulated
+  control if one is chosen; % in each generation and FlowJo's Division, Proliferation,
+  Expansion and Replication Index and % Divided, each with a standard error. *Cell cycle* (PI,
+  DAPI, Hoechst, linear): G1 and G2 as Gaussians and S by Watson's pragmatic method or
+  Dean-Jett-Fox. *Kinetics* (calcium flux): a statistic of a parameter, or of the ratio of two,
+  in slices of time; baseline, peak, time to peak, slope and area under the curve.
+- **File ▸ Export gates…** writes the gates out: a FlowJo workspace (every sample with its
+  file, compensation, scales and gating tree) or Gating-ML 2.0, the standard FlowKit,
+  flowCore/CytoML and Cytobank read. What a format has no word for — a population made of a
+  FlowSOM cluster — is left out with what is under it and listed in the report shown after.
 - With several samples selected on a histogram, show each sample — or each group pooled — as
   a violin (median and quartiles marked) or a box (Tukey whiskers, at most 200 outliers a box).
 - **Matrix…**: every pair of the chosen parameters for the population shown, as density with
@@ -166,8 +193,13 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 ## What it does not do
 
 - **Gating is not all of FlowJo's.** Rectangles, polygons, ellipses, quadrants, ranges and
-  boolean combinations are drawn here and read from a FlowJo workspace. No offset or curly
-  quadrants, no automatic gates.
+  boolean combinations are drawn here and read from a FlowJo workspace. FlowJo's *curly*
+  quadrants are not read: the workspace does not store their curve. The automatic gates
+  propose; where a population has no valley beside it (Tcrb, in the test data) they propose
+  nothing, and that gate still needs judgement or a control.
+- **The models are simple ones.** Proliferation takes the generations to be exactly a halving
+  apart; the cell cycle has no aneuploid population, no debris or doublet model and no Fox
+  peak for a synchronised S.
 - **Tests between groups stop short of mixed models.** One value per sample, compared by group,
   paired or not; counts by a negative-binomial model written here, not by edgeR itself.
 - **Its maps are not FlowJo's maps point for point.** See below.
@@ -236,6 +268,7 @@ python -m milc qc      DATA --out qc.csv --plots qc.pdf   # each acquisition ove
 python -m milc counts  DATA --wsp analysis.wsp   # every gate, against FlowJo's count
 python -m milc stats   DATA --channels CD8,CD4 --stats "median,robust cv" --out stats.csv
 python -m milc export  DATA --population "Cells/Live" --format csv --out exported
+python -m milc gates   DATA --wsp analysis.wsp --out gates.wsp   # or gates.xml: Gating-ML 2.0
 python -m milc concat  DATA --wsp analysis.wsp --out concat \
     --pattern '(?P<Day>\d+)(?P<Group>[A-Za-z]+)' --group-by Day,Group
 python -m milc analyze concat.npz --channels CD8,CD4,Foxp3 --umap --tsne --flowsom --out run
@@ -260,6 +293,10 @@ milc/
   transforms.py     linear, arcsinh, FlowJo's biexponential, Logicle; decade ticks
   gating.py         the gates — drawn, by time, by cluster — and the tree they form
   wsp.py            a FlowJo 10 workspace: files, matrices, transforms, gates
+  gate_export.py    the gates made ready for another program, and what was left out
+  wsp_write.py      write a FlowJo 10 workspace
+  gatingml.py       write Gating-ML 2.0
+  autogate.py       gates proposed from the data: valley, contour, ellipse, band
   sample.py         one file with its matrix and its gates
   sampling.py       the plan: how many events each sample gives, and why
   dataset.py        the concatenated events, and where each came from
@@ -274,6 +311,10 @@ milc/
   expression.py     differential expression within clusters, on medians
   expression_figures.py   its heatmap of differences and its volcano
   views.py          violins and boxes, the matrix of pairs, backgating
+  modelfit.py       what the three models share: histogram, fit, uncertainty
+  proliferation.py  generations of a dye diluted by division
+  cellcycle.py      G1, S and G2 from DNA content
+  kinetics.py       a parameter against time
   plate.py          several panels on a page, and the PDF report
   plate_store.py    plates kept with the project
   flowsom.py        the self-organising map, consensus metaclustering, the tree
@@ -330,10 +371,25 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
   clusters give or take two. Leiden's modularity was set beside leidenalg's (0.8065 against
   0.8036 on the test events).
 - **Quality control**: on a planted step it removes what PeacoQC removes; a clog it finds and
-  PeacoQC, which has no flow-rate check, does not; of a slow drift it removes less (53 to 81%
-  against 74 to 98%). On the 32 real files it removes 1.4% of the events, PeacoQC 5.1% and
-  flowAI 12.0%, with no truth to say who is right. Moderate drifts that last are what it
-  misses: in one file PeacoQC removes 19% and this 1%.
+  PeacoQC, which has no flow-rate check, does not; of a slow drift it removes as much (76 to
+  97% against 74 to 98%; before the slow pass, 53 to 81%). On the 32 real files it removes
+  5.3% of the events, PeacoQC 5.1% and flowAI 12.0%, with no truth to say who is right, and
+  not the same events: 56% of what PeacoQC removes this removes too. It leaves alone three
+  files of which PeacoQC removes 12 to 31% with no channel moving, and takes more than a fifth
+  of two (7Ctrl5, 14Case1) where several channels shift by a quarter to more than one spread.
+  A moderate defect that is short (0.3 of the spread over 5% of the file) is still not seen,
+  and the drift limit was chosen on these 32 files.
+- **A workspace written here has not been opened in FlowJo.** It was read back by this program
+  and by FlowKit and gated the same events: 32 samples, 192 populations, no event of
+  difference. Its elements are those FlowJo 10.10 writes for samples, matrices, scales and
+  gates; window layout, tables and cytometer defaults are not written. Open it in FlowJo and
+  compare the counts before relying on it. Time is written in seconds, as FlowJo's own
+  workspaces imply. Gating-ML files validate against the standard's schema, and FlowKit gates
+  the same events from them.
+- **Proliferation** agrees with R's flowFit on its own CFSE and CellTrace Violet data (each
+  generation within 0.5 points); on its Cell Proliferation Dye sample the two differ by up to
+  6.5 points. **Cell cycle** and **kinetics** were checked on simulations only, and neither
+  was set beside FlowJo or ModFit. The test data has no proliferation dye and no DNA stain.
 - **Batch normalisation**: without clusters it is CytoNorm 2.0's curve inside the range the
   references cover (apart by a thousandth of the correction on the real data). With clusters
   the two programs are as far from each other as each is from itself with another seed, and

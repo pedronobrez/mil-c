@@ -273,10 +273,9 @@ Coisas feitas que ainda dependem de um olhar de fora:
 - **Um workspace com elipse, quadrante ou booleano.** As regras de leitura vieram do FlowKit e
   do CytoML; nenhum arquivo nosso tem esses gates. A contagem do FlowJo aparece ao lado de cada
   população lida assim: é só comparar.
-- **A limpeza automática, sem gabarito.** Nos 32 arquivos reais tira de 0 a 7,7% (1,4% do
-  total; a `14Ctrl1` perde 1,1%: 0–2,3 s, 23,2–23,6 s e 210,8–211,7 s). O PeacoQC tira 5,1% e o
-  flowAI 12,0% dos mesmos arquivos, e não há como dizer quem tem razão sem uma amostra que se
-  sabe ruim.
+- **A limpeza automática, sem gabarito.** Nos 32 arquivos reais tira 5,3% do total (antes da
+  passada lenta, 1,4%); o PeacoQC tira 5,1% e o flowAI 12,0% dos mesmos arquivos, e não são os
+  mesmos eventos. Não há como dizer quem tem razão sem uma amostra que se sabe ruim.
 - **A normalização "em Gates e Statistics".** Os gates foram desenhados nos valores originais:
   depois de ligá-la, vale rever cada um.
 - **As matrizes de compensação dos arquivos diferem entre os dias** (4 matrizes nas 32
@@ -287,6 +286,13 @@ Coisas feitas que ainda dependem de um olhar de fora:
   entre os tubos daquele dia. E todos os 8 marcadores entraram no cluster, então o teste é
   circular; o ideal é testar marcadores que não definiram os clusters.
 - **Um workspace que declare escala logicle.** A leitura foi testada só num XML escrito à mão.
+- **Um workspace escrito pelo MIL-C aberto no FlowJo.** Nunca foi aberto lá. Conferir: se abre;
+  se as contagens batem; o gate de tempo (escrito em segundos); elipses; os nós And/Or/Not.
+- **A limpeza com a passada lenta, nos seus arquivos.** Agora ela tiraria 32,7% da `7Ctrl5` e
+  22,8% da `14Case1`, e mais de um décimo de `14Case3` e `` 14Case4` ``. Os desvios foram medidos,
+  mas só você sabe se essas aquisições tiveram problema: olhe os gráficos antes de aplicar.
+- **Os gates automáticos** ficam mais largos que os seus em scatter (Cells 12 a 15% a mais) e
+  não propõem nada para o Tcrb, que não tem vale.
 
 ### O que a comparação com os originais mostrou
 
@@ -295,8 +301,9 @@ edgeR quando ele é chamado do mesmo jeito (a comparação achou e corrigiu dois
 F); a expressão diferencial dá os do limma; o PhenoGraph concorda com o pacote tanto quanto o
 pacote concorda consigo mesmo, e a divisão excessiva na resolução 1 é do método (o pacote
 também dá 15 clusters nos 3.488 eventos); a normalização sem clusters é a curva do CytoNorm; e
-a limpeza acerta degraus e entupimentos, mas **deixa passar derivas moderadas e duradouras** que
-o PeacoQC pega (na `7Ctrl5` ele tira 19% e o MIL-C 1%).
+a limpeza acertava degraus e entupimentos, mas deixava passar derivas moderadas e duradouras que
+o PeacoQC pega (na `7Ctrl5` ele tira 19% e o MIL-C tirava 1%) — o que a passada lenta, feita em
+seguida, corrigiu.
 
 ### Próximas implementações, na ordem em que eu faria
 
@@ -312,20 +319,28 @@ amostras de um grupo de uma vez; as barras do gráfico de frequência saem na co
 tinham 60% de opacidade, e preto virava cinza), com a opacidade ajustável em Figure…; e
 "Numbers" liga ou desliga os valores nas células do heatmap, na tela e na figura.
 
+Feito em 23 de novembro, depois da lista anterior: a limpeza ganhou uma passada lenta para
+derivas moderadas e duradouras, com os limites no diálogo (`docs/comparacao.md` §3: deriva
+conhecida de 81 para 97% e de 54 para 76%; nos 32 arquivos reais de 1,4 para 5,3% dos eventos,
+PeacoQC 5,1%); quadrante de braços móveis e gates automáticos (botão Auto…); proliferação,
+ciclo celular e cinética (botão Model…; proliferação conferida com o flowFit, os outros dois só
+em simulação); exportação dos gates como workspace do FlowJo e Gating-ML 2.0 (relido aqui e
+pelo FlowKit sem diferença de eventos; **nunca aberto no FlowJo**).
+
 Prioritárias:
 
-1. **Limpeza: derivas moderadas.** Julgar a trajetória suavizada, como o PeacoQC, em vez da
-   mediana corrida de 5 janelas; e pôr os limites (MAD, janelas consecutivas) no diálogo, que
-   hoje só usa os padrões.
-2. **Autocompensação por single stains** (e AutoSpill): calcular a matriz a partir dos controles
+1. **Autocompensação por single stains** (e AutoSpill): calcular a matriz a partir dos controles
    de uma cor, em vez de só ler e editar a que veio do aparelho.
-3. **Quadrantes deslocados e gates automáticos**: o quadrante com braços inclinados do FlowJo, e
-   gates achados pelo programa (o vale de um histograma, o contorno de uma população).
-4. **Proliferação, ciclo celular e cinética**: os modelos de diluição de corante, as fases
-   G1/S/G2 e a mediana no tempo.
-5. **Escrever workspace do FlowJo e GatingML**: levar os gates feitos aqui para o FlowJo e para
-   outros programas; hoje só se lê.
-6. **Unmixing espectral**, para citômetros espectrais.
+2. **Unmixing espectral**, para citômetros espectrais.
+3. **Limpeza: defeito moderado e curto.** Um desvio de 0,3 do espalhamento em 5% do arquivo
+   continua invisível; e o limite de deriva (0,25) foi escolhido nestes 32 arquivos — falta uma
+   amostra que se sabe ruim para calibrá-lo.
+4. **Gates automáticos: refazer o ajuste** quando o gate pai muda, e não perder o ajuste à mão
+   ao renomear um gate ajustado por amostra.
+5. **Quadrantes "curly" do FlowJo**: o workspace não guarda a curva; seria preciso reproduzir a
+   que o FlowJo desenha.
+6. **Modelos**: ciclo celular com população aneuploide, debris e dobletes; conferir ciclo e
+   cinética com um arquivo real e com o FlowJo ou o ModFit.
 
 Em seguida:
 
