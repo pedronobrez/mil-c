@@ -6,21 +6,28 @@ says what the analysis was.
 As in the figure dialog, the preview is drawn by the code that writes the
 file (`plate.py`). Each panel remembers the plot it came from, so when
 the analysis has changed the page can be drawn again from what those
-plots show now. The plate lasts as long as the window: it is not written
-to the project, because a panel is a plot's events and the plots are made
-again from the analysis anyway.
+plots show now.
+
+A project has as many plates as the user makes, each with a name. They
+are the session's (`session.plates`) and are written with the project
+(`session.save_plates`) as they are: a panel read back from a project is
+what it was when it was saved, and no longer follows a plot.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .. import figures, plate
+from .. import figures, plate, plate_store
 from . import style as ui_style
 from .figure_dialog import SETTING_FOLDER
 from .settings import settings
+
+#: `add(to=NEW)`: on a plate made for it
+NEW = "new"
 
 WIDTHS = [("Custom", None), ("Single column, 85 mm", 85), ("1.5 columns, 120 mm", 120),
           ("Double column, 180 mm", 180)]
@@ -31,8 +38,11 @@ class PlateWindow(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("Plate")
         self.session = session
-        self.plate = plate.Plate()
         self._filling = False
+        self._saver = QtCore.QTimer(self)
+        self._saver.setSingleShot(True)
+        self._saver.setInterval(1500)
+        self._saver.timeout.connect(self.save)
         self._timer = QtCore.QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(180)
@@ -49,6 +59,13 @@ class PlateWindow(QtWidgets.QDialog):
         self.note = QtWidgets.QLabel("")
         self.note.setProperty("role", "caption")
         self.note.setWordWrap(True)
+
+        # --- the plates
+        self.plates_box = QtWidgets.QComboBox()
+        self.new_button = QtWidgets.QPushButton("New")
+        self.rename_button = QtWidgets.QPushButton("Rename…")
+        self.duplicate_button = QtWidgets.QPushButton("Duplicate")
+        self.delete_button = QtWidgets.QPushButton("Delete")
 
         # --- the panels
         self.list = QtWidgets.QListWidget()
@@ -113,7 +130,9 @@ class PlateWindow(QtWidgets.QDialog):
         self.export_button = QtWidgets.QPushButton("Export…")
         self.export_button.setProperty("primary", True)
         self.report_button = QtWidgets.QPushButton("Report…")
-        self.report_button.setToolTip("A PDF: what the analysis was, then this page")
+        self.report_button.setToolTip(
+            "A PDF: what the analysis was, then this page — or the plates chosen, "
+            "a page each")
         self.close_button = QtWidgets.QPushButton("Close")
         buttons = QtWidgets.QHBoxLayout()
         buttons.addStretch(1)
@@ -123,6 +142,13 @@ class PlateWindow(QtWidgets.QDialog):
 
         side = QtWidgets.QVBoxLayout()
         side.setContentsMargins(0, 0, 0, 0)
+        plates = QtWidgets.QHBoxLayout()
+        for b in (self.new_button, self.rename_button, self.duplicate_button,
+                  self.delete_button):
+            plates.addWidget(b)
+        side.addWidget(self._eyebrow("Plate"))
+        side.addWidget(self.plates_box)
+        side.addLayout(plates)
         side.addWidget(self._eyebrow("Panels, in order"))
         side.addWidget(self.list, 1)
         side.addLayout(moves)
@@ -141,6 +167,11 @@ class PlateWindow(QtWidgets.QDialog):
         self.resize(1220, 800)
 
         self._fill()
+        self.plates_box.currentIndexChanged.connect(self._plate_chosen)
+        self.new_button.clicked.connect(lambda: self.new_plate())
+        self.rename_button.clicked.connect(self._ask_name)
+        self.duplicate_button.clicked.connect(lambda: self.duplicate_plate())
+        self.delete_button.clicked.connect(self._ask_delete)
         self.list.currentRowChanged.connect(self._selected)
         self.up_button.clicked.connect(lambda: self.move(-1))
         self.down_button.clicked.connect(lambda: self.move(1))
@@ -173,6 +204,129 @@ class PlateWindow(QtWidgets.QDialog):
         label.setContentsMargins(0, 8, 0, 0)
         return label
 
+    # --- the plates of the project ---------------------------------------------------
+
+    @property
+    def plates(self) -> list[plate.Plate]:
+        return self.session.plates
+
+    @property
+    def plate(self) -> plate.Plate:
+        """The plate being worked on. There is always one: the first is
+        made when it is asked for."""
+        s = self.session
+        if not s.plates:
+            s.plates.append(plate.Plate(name="Plate 1"))
+        s.current_plate = min(max(s.current_plate, 0), len(s.plates) - 1)
+        return s.plates[s.current_plate]
+
+    def _free_name(self, wanted: str, but: plate.Plate | None = None) -> str:
+        """`wanted`, or `wanted 2`, `wanted 3`…: two plates of one name
+        cannot be told apart in a list."""
+        taken = {p.name for p in self.plates if p is not but}
+        name, k = wanted, 1
+        while name in taken:
+            k += 1
+            name = f"{wanted} {k}"
+        return name
+
+    def _new_name(self) -> str:
+        k = len(self.plates) + 1
+        while f"Plate {k}" in {p.name for p in self.plates}:
+            k += 1
+        return f"Plate {k}"
+
+    def switch_to(self, index: int) -> None:
+        if 0 <= index < len(self.plates) and index != self.session.current_plate:
+            self.session.current_plate = index
+            self._changed()
+        self._fill(0)
+        self._timer.start()
+
+    def _plate_chosen(self, index: int) -> None:
+        if not self._filling:
+            self.switch_to(index)
+
+    def new_plate(self, name: str = "") -> plate.Plate:
+        """An empty plate with the type and the size of the current one;
+        it becomes the current one."""
+        self.plate                                     # the first exists before a second
+        name = self._free_name(name.strip()) if name.strip() else self._new_name()
+        new = replace(self.plate.copy(name), panels=[])
+        self.plates.append(new)
+        self.switch_to(len(self.plates) - 1)
+        return new
+
+    def rename_plate(self, name: str) -> None:
+        name = name.strip()
+        if name:
+            self.plate.name = self._free_name(name, self.plate)
+            self._changed()
+            self._fill()
+
+    def duplicate_plate(self) -> plate.Plate:
+        """A copy of the current plate, to change apart from it; it becomes
+        the current one."""
+        copy = self.plate.copy(self._free_name(f"{self.plate.name} copy"))
+        self.plates.insert(self.session.current_plate + 1, copy)
+        self.switch_to(self.session.current_plate + 1)
+        return copy
+
+    def delete_plate(self) -> None:
+        """The current plate, with its panels. The one before it becomes
+        the current one."""
+        self.plate
+        del self.plates[self.session.current_plate]
+        self.session.current_plate = max(self.session.current_plate - 1, 0)
+        self._changed()
+        self._fill(0)
+        self._timer.start()
+
+    def _ask_name(self) -> None:
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Rename the plate", "Name", text=self.plate.name)
+        if ok:
+            self.rename_plate(name)
+
+    def _ask_delete(self) -> None:
+        p = self.plate
+        if p.panels:
+            Box = QtWidgets.QMessageBox
+            if Box.question(self, "Delete the plate",
+                            f"Delete “{p.name}” and its {len(p.panels)} panel(s)? "
+                            "This cannot be undone.") != Box.StandardButton.Yes:
+                return
+        self.delete_plate()
+
+    def project_changed(self) -> None:
+        """Another folder was opened: its plates are the ones to show."""
+        self._saver.stop()
+        self._fill(0)
+        self._timer.start()
+
+    # --- keeping them ------------------------------------------------------------------
+
+    def _changed(self) -> None:
+        """Something of a plate is no longer as the project has it: it is
+        written once the changes pause, and at the latest when the window
+        closes."""
+        self._saver.start()
+
+    def save(self) -> None:
+        self._saver.stop()
+        try:
+            self.session.save_plates()
+        except Exception as exc:
+            self.note.setText(f"The plates were not saved with the project: {exc}")
+
+    def flush(self) -> None:
+        if self._saver.isActive():
+            self.save()
+
+    def hideEvent(self, ev) -> None:
+        self.flush()
+        super().hideEvent(ev)
+
     # --- plate ↔ widgets ---------------------------------------------------------
 
     def _line(self, k: int) -> str:
@@ -180,7 +334,9 @@ class PlateWindow(QtWidgets.QDialog):
         text = f"{plate.letter(k)}   {panel.name or 'panel'}"
         if panel.title:
             text += f" — {panel.title}"
-        if panel.stale:
+        if isinstance(panel.content, plate_store.Missing):
+            text += "   (not restored)"
+        elif panel.stale:
             text += "   (stale: its plot has nothing to show)"
         return text
 
@@ -189,6 +345,10 @@ class PlateWindow(QtWidgets.QDialog):
         p = self.plate
         row = self.list.currentRow() if row is None else row
         self._filling = True
+        self.plates_box.clear()
+        self.plates_box.addItems([q.name for q in self.plates])
+        self.plates_box.setCurrentIndex(self.session.current_plate)
+        self.setWindowTitle(f"Plate — {p.name}")
         self.list.clear()
         for k in range(len(p.panels)):
             self.list.addItem(self._line(k))
@@ -229,6 +389,7 @@ class PlateWindow(QtWidgets.QDialog):
         panel.title = self.title.text()
         panel.colspan, panel.rowspan = self.colspan.value(), self.rowspan.value()
         self.list.currentItem().setText(self._line(self.list.currentRow()))
+        self._changed()
         self._timer.start()
 
     def _page_changed(self, *_) -> None:
@@ -244,6 +405,7 @@ class PlateWindow(QtWidgets.QDialog):
         self._filling = True
         self.width_preset.setCurrentIndex(max(self.width_preset.findData(self.width.value()), 0))
         self._filling = False
+        self._changed()
         self._timer.start()
 
     def _width_chosen(self) -> None:
@@ -253,22 +415,31 @@ class PlateWindow(QtWidgets.QDialog):
 
     # --- what is done to the plate -------------------------------------------------
 
-    def add(self, content, style: figures.FigureStyle, source=None, name: str = "") -> str:
-        """A panel as `style` draws it; the letter it was given. The first
-        panel brings its type and resolution to the page: the ones after
-        take the page's."""
+    def add(self, content, style: figures.FigureStyle, source=None, name: str = "",
+            to: int | str | None = None) -> str:
+        """A panel as `style` draws it, on the current plate — or on the
+        plate numbered `to`, or on a new one (`NEW`), which then becomes
+        the current one; the letter it was given. The first panel brings
+        its type and resolution to the page: the ones after take the
+        page's. Written with the project at once."""
+        if to == NEW:
+            self.new_plate()
+        elif to is not None and 0 <= to < len(self.plates):
+            self.session.current_plate = to
         p = self.plate
         if not p.panels:
             p.style.font, p.style.font_size, p.style.dpi = style.font, style.font_size, style.dpi
         p.add(content, style, source=source, name=name)
         self._fill(len(p.panels) - 1)
         self._timer.start()
+        self.save()
         return plate.letter(len(p.panels) - 1)
 
     def move(self, by: int) -> None:
         row = self.list.currentRow()
         if row >= 0:
             self._fill(self.plate.move(row, by))
+            self._changed()
             self._timer.start()
 
     def remove(self) -> None:
@@ -276,15 +447,24 @@ class PlateWindow(QtWidgets.QDialog):
         if row >= 0:
             del self.plate.panels[row]
             self._fill(row)
+            self._changed()
             self._timer.start()
 
     def refresh_from_analysis(self) -> None:
         stale = self.plate.refresh()
+        fixed = sum(p.source is None for p in self.plate.panels)
         self._fill()
         self.render()
+        self._changed()
+        said = []
         if stale:
-            self.note.setText(f"{len(stale)} panel(s) kept as they were: their plots "
-                              "have nothing to show now.")
+            said.append(f"{len(stale)} panel(s) kept as they were: their plots "
+                        "have nothing to show now.")
+        if fixed:
+            said.append(f"{fixed} panel(s) came with the project and stay as they were "
+                        "saved: add them again from their plots to follow the analysis.")
+        if said:
+            self.note.setText(" ".join(said))
 
     # --- drawing and writing ---------------------------------------------------------
 
@@ -323,9 +503,36 @@ class PlateWindow(QtWidgets.QDialog):
     def write(self, path: str) -> None:
         plate.save(self.plate, path)
 
-    def write_report(self, path: str) -> int:
-        """What the analysis was, where there is one, then the page."""
-        return plate.report(path, [self.plate], self.session.dataset)
+    def write_report(self, path: str, plates: list[plate.Plate] | None = None) -> int:
+        """What the analysis was, where there is one, then the page — or
+        `plates`, a page each, in the order given."""
+        pages = [self.plate] if plates is None else plates
+        return plate.report(path, pages, self.session.dataset)
+
+    def _ask_plates(self) -> list[plate.Plate] | None:
+        """Which plates the report is to have; None when it was cancelled.
+        Not asked when only one has anything on it."""
+        full = [p for p in self.plates if p.panels]
+        if len(full) < 2:
+            return [self.plate]
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Report")
+        boxes = []
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.addWidget(QtWidgets.QLabel("Plates in the report, a page each:"))
+        for p in full:
+            box = QtWidgets.QCheckBox(f"{p.name} — {len(p.panels)} panel(s)")
+            box.setChecked(True)
+            boxes.append(box)
+            layout.addWidget(box)
+        ok = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                        | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        ok.accepted.connect(dialog.accept)
+        ok.rejected.connect(dialog.reject)
+        layout.addWidget(ok)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return None
+        return [p for p, box in zip(full, boxes) if box.isChecked()]
 
     def _ask(self, title: str, name: str, filters: str) -> tuple[str, str]:
         folder = settings().value(SETTING_FOLDER, "") or os.path.expanduser("~")
@@ -351,7 +558,10 @@ class PlateWindow(QtWidgets.QDialog):
         self._written(path, self.write)
 
     def export_report(self) -> None:
+        plates = self._ask_plates()
+        if not plates:
+            return
         path, _ = self._ask("Write the report", "report.pdf", "PDF (*.pdf)")
         if path:
             self._written(path if path.lower().endswith(".pdf") else path + ".pdf",
-                          self.write_report)
+                          lambda p: self.write_report(p, plates))

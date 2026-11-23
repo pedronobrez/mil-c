@@ -140,9 +140,11 @@ class MainShell(QtWidgets.QMainWindow):
             self._plate = PlateWindow(self.session, self)
         return self._plate
 
-    def add_to_plate(self, content, style, source=None, name: str = "") -> str:
-        letter = self.plate_window().add(content, style, source, name)
-        self.status(f"Panel {letter} added to the plate (View ▸ Plate…)")
+    def add_to_plate(self, content, style, source=None, name: str = "", to=None) -> str:
+        """`to`: the number of a plate, or "new"; None is the current one."""
+        window = self.plate_window()
+        letter = window.add(content, style, source, name, to)
+        self.status(f"Panel {letter} added to “{window.plate.name}” (View ▸ Plate…)")
         return letter
 
     def show_plate(self) -> None:
@@ -152,8 +154,17 @@ class MainShell(QtWidgets.QMainWindow):
 
     # --- files -----------------------------------------------------------------
 
+    def closeEvent(self, ev) -> None:
+        if self._plate is not None:
+            self._plate.flush()
+        super().closeEvent(ev)
+
     def open_folder(self, folder: str) -> None:
+        if self._plate is not None:
+            self._plate.flush()                        # into the folder they belong to
         self.session.open_folder(folder)
+        if self._plate is not None:
+            self._plate.project_changed()
         settings().setValue(SETTING_FOLDER, folder)
         self.samples.refresh()
         self.gates.refresh()

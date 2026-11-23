@@ -155,6 +155,10 @@ class Session:
         self._counts: dict[tuple[str, str], int] = {}
         #: the last FlowSOM, kept for its map and tree
         self.flowsom = None
+        #: the pages of several panels (`plate.Plate`), kept with the project
+        #: by `save_plates`, and which of them is being worked on
+        self.plates: list = []
+        self.current_plate = 0
 
     # --- files -----------------------------------------------------------
 
@@ -187,6 +191,8 @@ class Session:
         for e, group in zip(usable, guess_groups([e.name for e in usable])):
             e.meta = {GROUP: group}
         self._project = self._read_project()
+        from . import plate_store
+        self.plates, self.current_plate = plate_store.read(folder, self._project.get("plates"))
         self._restore_annotations()
         found = sorted(glob.glob(os.path.join(folder, "*.wsp")))
         self.set_workspace(found[0] if found else None)
@@ -400,9 +406,25 @@ class Session:
                               "matrix": np.asarray(self.matrix.matrix).tolist()}
                              if self.matrix is not None else None),
         }
+        plates = getattr(self, "_project", {}).get("plates")
+        if plates:   # as `save_plates` left them
+            data["plates"] = plates
         self._project = data
         with open(self.project_file(), "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
+
+    def save_plates(self) -> bool:
+        """Write the plates as they are now: their arrays beside the
+        project's file, the rest in it. False when there is no folder to
+        write them in: they then last as long as the session."""
+        if not self.folder:
+            return False
+        from . import plate_store
+        self._project = {**getattr(self, "_project", {}),
+                         "plates": plate_store.write(self.folder, self.plates,
+                                                     self.current_plate)}
+        self.save_project()
+        return True
 
     def gates_changed(self, e: Entry, everyone: bool = True) -> None:
         """`e`'s tree was edited. With `everyone`, the other files get a

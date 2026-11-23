@@ -173,9 +173,14 @@ class FigureDialog(QtWidgets.QDialog):
         self.plate_button = QtWidgets.QPushButton("Add to plate")
         self.plate_button.setToolTip("As a panel of the page of several: View ▸ Plate…")
         self.plate_button.setVisible(self._plate_owner() is not None)
-        self.plate_button.clicked.connect(self.add_to_plate)
+        self.plate_button.clicked.connect(lambda: self.add_to_plate())
+        self.plate_choice = QtWidgets.QComboBox()
+        self.plate_choice.setToolTip("The plate it is added to")
+        self.plate_choice.setVisible(self._plate_owner() is not None)
+        self._fill_plates()
         buttons = QtWidgets.QHBoxLayout()
         buttons.addWidget(self.plate_button)
+        buttons.addWidget(self.plate_choice)
         buttons.addStretch(1)
         buttons.addWidget(self.close_button)
         buttons.addWidget(self.export_button)
@@ -499,14 +504,33 @@ class FigureDialog(QtWidgets.QDialog):
             w = w.parentWidget()
         return w
 
-    def add_to_plate(self) -> None:
-        """This figure, as it looks now, as a panel of the plate."""
+    def _fill_plates(self) -> None:
+        """The plates of the project, the current one chosen, and a new one."""
+        owner = self._plate_owner()
+        session = getattr(owner, "session", None)
+        plates = list(getattr(session, "plates", []))
+        self.plate_choice.clear()
+        for k, p in enumerate(plates):
+            self.plate_choice.addItem(p.name or f"Plate {k + 1}", k)
+        if not plates:
+            self.plate_choice.addItem("Plate 1", None)
+        self.plate_choice.addItem("New plate", "new")
+        self.plate_choice.setCurrentIndex(
+            min(getattr(session, "current_plate", 0), max(len(plates) - 1, 0)))
+
+    def add_to_plate(self, to=None) -> None:
+        """This figure, as it looks now, as a panel of the plate chosen in
+        the list beside the button — or of `to`: a plate's number, or
+        "new"."""
         owner = self._plate_owner()
         if owner is None:
             return
         self._from_widgets()
-        letter = owner.add_to_plate(self.content, self.style, self.source, self.name)
-        self.note.setText(f"Added to the plate as panel {letter}: View ▸ Plate…")
+        to = self.plate_choice.currentData() if to is None else to
+        letter = owner.add_to_plate(self.content, self.style, self.source, self.name, to)
+        self._fill_plates()
+        name = self.plate_choice.currentText()
+        self.note.setText(f"Added to “{name}” as panel {letter}: View ▸ Plate…")
 
     def accept(self) -> None:
         self._from_widgets()
