@@ -198,7 +198,8 @@ def main() -> None:
         n = len(a["time"])
         ours = ~r.keep
         row = [a["name"], n, 100 * ours.mean() if r.checked else float("nan"),
-               100 * r.counts.get(qc.RATE, 0) / n, 100 * r.counts.get(qc.SIGNAL, 0) / n]
+               100 * r.counts.get(qc.RATE, 0) / n, 100 * r.counts.get(qc.SIGNAL, 0) / n,
+               100 * r.counts.get(qc.DRIFT, 0) / n]
         theirs = {}
         for name, which in PROGRAMS:
             theirs[name] = flags(folder, a["stem"], which, n)
@@ -224,7 +225,7 @@ def main() -> None:
             truth_rows.append(line)
 
     header = ["acquisition", "events", "ours removed %", "ours: flow rate %", "ours: signal %",
-              "PeacoQC %", "PeacoQC MAD only %", "flowAI (rate+signal) %",
+              "ours: drift %", "PeacoQC %", "PeacoQC MAD only %", "flowAI (rate+signal) %",
               "Jaccard ours/PeacoQC", "Jaccard ours/flowAI", "PeacoQC's own account"]
     for kind, title in (("synthetic", "Synthetic acquisitions"), ("real", "Real files"),
                         ("injected", "A clean real file with a defect put in")):

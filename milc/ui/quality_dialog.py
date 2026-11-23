@@ -1,8 +1,9 @@
 """
 The quality of one acquisition, to look at before anything is removed:
 the flow rate over time and, for one population of one parameter, its
-median in each bin of events, with the stretches `qc.check` would remove
-shaded.
+median in each bin of events and its slow level, with the stretches
+`qc.check` would remove shaded. The limits it checks with are here to
+change, and to check again with.
 
 Nothing is removed by looking. Applying puts a population, "Clean", at
 the top of the gating tree — of this sample, or of every sample ticked in
@@ -15,11 +16,22 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .. import qc
+from .. import qc, qc_plots
 from ..gating import time_node
-from . import style, theme, worker
+from . import theme, worker
+from .flow import captioned, flow
 
-COLUMNS = ["Sample", "Events", "To remove", "Flow rate", "Signal", "Note"]
+COLUMNS = ["Sample", "Events", "To remove", "Flow rate", "Signal", "Drift", "Note"]
+LIMITS = ("mad", "consecutive", "events_per_bin", "drift")
+
+
+def limits_text(settings: dict) -> str:
+    """The limits of a check, in the words of the controls."""
+    bins = settings.get("events_per_bin")
+    drift = settings.get("drift")
+    return (f"MAD limit {settings.get('mad'):g}, {settings.get('consecutive')} consecutive "
+            f"bins, {f'{bins:,d}' if bins else 'auto'} events per bin, "
+            + (f"drift limit {drift:g}" if drift else "drift not judged"))
 
 
 class QualityDialog(QtWidgets.QDialog):
@@ -27,7 +39,11 @@ class QualityDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.tab, self.session, self.entry = tab, tab.session, tab.entry
         self.setWindowTitle(f"Quality of the acquisition: {self.entry.name}")
-        self.result = tab.check_quality()
+        self._controls()
+        #: the limits `result` was found with, and those of the survey
+        self.used = self.settings()
+        self.survey_used = dict(self.used)
+        self.result = tab.check_quality(**self.used)
         #: (entry, result) for every sample, once they have been checked
         self.survey_results: list = []
         # FCS 3 says how many seconds one unit of Time is; without it the
@@ -41,15 +57,14 @@ class QualityDialog(QtWidgets.QDialog):
         self.summary.setWordWrap(True)
         self.summary.setProperty("role", "strong" if self.result.checked else "warning")
         self.channel = QtWidgets.QComboBox()
-        self.channel.addItems(self.result.populations)
-        if self.result.checked and self.result.bins.bad_signal.any():
-            # the one that went wrong for longest is the one to look at first
-            self.channel.setCurrentIndex(int(self.result.bins.bad_signal.sum(axis=0).argmax()))
+        self._fill_channels()
         note = QtWidgets.QLabel(
             "Each point is one bin of events, in the order they were acquired. Shaded: the "
             "stretches to remove. Dashed: how far the flow rate, and the running median of "
-            "the signal, may go before a bin is suspect; the bins beyond are marked. A "
-            "parameter with several populations is followed one population at a time.")
+            "the signal, may go before a bin is suspect; the bins beyond are marked. Thick "
+            "line: the slow level of the signal, red over a stretch that went beyond the "
+            "dotted limits: a drift, taken from where it nears them. A parameter with several "
+            "populations is followed one population at a time.")
         note.setWordWrap(True)
         note.setProperty("role", "caption")
         self.rate_plot, self.signal_plot = self._plot(), self._plot()
@@ -95,6 +110,10 @@ class QualityDialog(QtWidgets.QDialog):
         top.addStretch(1)
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self.summary)
+        layout.addWidget(flow(captioned("MAD limit", self.mad),
+                              captioned("Consecutive bins", self.consecutive),
+                              captioned("Events per bin", self.events_per_bin),
+                              captioned("Drift limit", self.drift), self.again_button))
         layout.addWidget(note)
         layout.addWidget(self.rate_plot, 2)
         layout.addLayout(top)
@@ -105,6 +124,9 @@ class QualityDialog(QtWidgets.QDialog):
         self.resize(900, 760)
 
         self.channel.currentIndexChanged.connect(self.draw)
+        for box in (self.mad, self.consecutive, self.events_per_bin, self.drift):
+            box.valueChanged.connect(self._limits_changed)
+        self.again_button.clicked.connect(self.check_again)
         self.survey_button.clicked.connect(self.survey)
         self.here_button.clicked.connect(self.apply_here)
         self.every_button.clicked.connect(self.apply_everyone)
@@ -112,6 +134,95 @@ class QualityDialog(QtWidgets.QDialog):
         close.clicked.connect(self.accept)
         self._applied()
         self.draw()
+
+    # --- the limits -------------------------------------------------------------------
+
+    def _controls(self) -> None:
+        """The limits of `qc.check`, at what was last applied or at its
+        defaults."""
+        import inspect
+        usual = {k: v.default for k, v in inspect.signature(qc.check).parameters.items()
+                 if k in LIMITS}
+        start = {**usual, **{k: v for k, v in (self.session.quality_settings or {}).items()
+                             if k in LIMITS}}
+        self.mad = QtWidgets.QDoubleSpinBox()
+        self.mad.setRange(1.0, 50.0)
+        self.mad.setSingleStep(0.5)
+        self.mad.setDecimals(1)
+        self.mad.setValue(float(start["mad"]))
+        self.mad.setToolTip("How many MADs from the acquisition's own level the signal has to "
+                            "lie for a bin to be suspect, and the flow rate from the usual "
+                            f"one. Larger removes less. Usually {usual['mad']:g}.")
+        self.consecutive = QtWidgets.QSpinBox()
+        self.consecutive.setRange(1, 100)
+        self.consecutive.setValue(int(start["consecutive"]))
+        self.consecutive.setToolTip("Good bins between two removed stretches are kept only "
+                                    "when there are at least this many. Usually "
+                                    f"{usual['consecutive']}.")
+        self.events_per_bin = QtWidgets.QSpinBox()
+        self.events_per_bin.setRange(0, 100000)
+        self.events_per_bin.setSingleStep(50)
+        self.events_per_bin.setSpecialValueText("auto")
+        self.events_per_bin.setValue(int(start["events_per_bin"] or 0))
+        self.events_per_bin.setToolTip(f"auto: 1/{qc.MAX_BINS} of the file and at least "
+                                       f"{qc.MIN_BIN} events. Larger bins are steadier and "
+                                       "see less of a short defect.")
+        self.drift = QtWidgets.QDoubleSpinBox()
+        self.drift.setRange(0.0, 5.0)
+        self.drift.setSingleStep(0.05)
+        self.drift.setDecimals(2)
+        self.drift.setSpecialValueText("off")
+        self.drift.setValue(float(start["drift"] or 0))
+        self.drift.setToolTip("The smallest lasting shift of a population's level that is "
+                              "taken for a drift, as a share of the spread of the "
+                              "parameter's events. Smaller finds smaller drifts; off does "
+                              f"not look for them. Usually {usual['drift']:g}.")
+        for box, wide in ((self.mad, 76), (self.consecutive, 64), (self.events_per_bin, 96),
+                          (self.drift, 88)):
+            box.setFixedWidth(wide)
+        self.again_button = QtWidgets.QPushButton("Check again")
+        self.again_button.setToolTip("Check this sample with these limits — and every "
+                                     "sample, where they have been checked")
+        self.again_button.setEnabled(False)
+
+    def settings(self) -> dict:
+        """The limits as the controls have them, to call `qc.check` with."""
+        return {"mad": float(self.mad.value()), "consecutive": int(self.consecutive.value()),
+                "events_per_bin": int(self.events_per_bin.value()) or None,
+                "drift": round(float(self.drift.value()), 2)}
+
+    def _limits_changed(self) -> None:
+        self.again_button.setEnabled(self.settings() != self.used)
+
+    def check_again(self) -> None:
+        """This sample with the limits as they are now; and every sample,
+        where the table is of other limits."""
+        self.used = self.settings()
+        self.result = self.tab.check_quality(**self.used)
+        self.summary.setText(self.result.summary)
+        self.summary.setProperty("role", "strong" if self.result.checked else "warning")
+        self.summary.style().polish(self.summary)
+        self.here_button.setEnabled(self.result.checked)
+        self.again_button.setEnabled(False)
+        self._fill_channels()
+        self.draw()
+        if self.survey_results and self.survey_used != self.used:
+            self.survey()
+
+    def _fill_channels(self) -> None:
+        """The populations followed, on the one that was being looked at —
+        or, at first, on the one that went wrong for longest."""
+        was = self.channel.currentText()
+        self.channel.blockSignals(True)
+        self.channel.clear()
+        self.channel.addItems(self.result.populations)
+        if was in self.result.populations:
+            self.channel.setCurrentIndex(self.result.populations.index(was))
+        elif self.result.checked:
+            bad = self.result.bins.bad_signal | self.result.bins.bad_drift
+            if bad.any():
+                self.channel.setCurrentIndex(int(bad.sum(axis=0).argmax()))
+        self.channel.blockSignals(False)
 
     @staticmethod
     def _plot() -> pg.PlotWidget:
@@ -132,18 +243,8 @@ class QualityDialog(QtWidgets.QDialog):
         """What the two plots are drawn from, in the units of their axes:
         the time of each bin, its flow rate, the median of the population
         chosen (not a number where a bin has none of it), the limits of
-        both and the stretches shaded."""
-        b = self.result.bins
-        j = self.channel.currentIndex()
-        step = self.step or 1.0
-        scale = self.result.scales[b.channel[j]]
-        back = scale.inverse if scale is not None else np.asarray
-        median = np.where(np.isfinite(b.medians[:, j]), back(b.medians[:, j]), np.nan)
-        return {"time": (b.start + b.end) / 2 * step, "rate": b.rate / step,
-                "rate_limits": [v / step for v in b.rate_limits],
-                "median": median, "limits": back(b.limits[j]).tolist(),
-                "bad_rate": b.bad_rate, "bad_signal": b.bad_signal[:, j],
-                "shaded": [(lo * step, hi * step) for lo, hi in self.result.intervals]}
+        both, the slow level with its own limits and the stretches shaded."""
+        return qc_plots.series(self.result, self.channel.currentIndex(), self.step)
 
     def draw(self) -> None:
         for plot in (self.rate_plot, self.signal_plot):
@@ -175,6 +276,16 @@ class QualityDialog(QtWidgets.QDialog):
             bad = bad & np.isfinite(y)
             plot.addItem(pg.ScatterPlotItem(s["time"][bad], y[bad], size=6, pen=None,
                                             brush=pg.mkBrush(theme.danger())))
+            if plot is self.signal_plot:
+                for level in s["slow_limits"]:
+                    plot.addItem(pg.InfiniteLine(level, angle=0, pen=pg.mkPen(
+                        theme.muted(), width=1, style=QtCore.Qt.PenStyle.DotLine)))
+                plot.addItem(pg.PlotCurveItem(s["time"], s["slow"], connect="finite",
+                                              pen=pg.mkPen(theme.foreground(), width=2.2)))
+                plot.addItem(pg.PlotCurveItem(
+                    s["time"], np.where(s["bad_drift"], s["slow"], np.nan), connect="finite",
+                    pen=pg.mkPen(theme.danger(), width=3.2)))
+                limits = [min(limits[0], s["slow_limits"][0]), max(limits[1], s["slow_limits"][1])]
             lo, hi = min(float(np.nanmin(y)), limits[0]), max(float(np.nanmax(y)), limits[1])
             plot.setYRange(lo, hi, padding=0.06)
         self.rate_plot.setXRange(float(s["time"][0]), float(s["time"][-1]), padding=0.02)
@@ -185,7 +296,8 @@ class QualityDialog(QtWidgets.QDialog):
         """Check every sample off the window's thread and list what each
         would lose."""
         entries = self.session.usable()
-        self.survey_results = []
+        used = dict(self.used)
+        self.survey_results, self.survey_used = [], used
         self.survey_button.setEnabled(False)
         self.every_button.setEnabled(False)
         self.table.setVisible(True)
@@ -195,7 +307,7 @@ class QualityDialog(QtWidgets.QDialog):
         def work(progress):
             out = []
             for i, e in enumerate(entries):
-                out.append((e, self.session.quality(e)))
+                out.append((e, self.session.quality(e, **used)))
                 progress(i + 1, len(entries), e.name)
             return out
 
@@ -219,6 +331,7 @@ class QualityDialog(QtWidgets.QDialog):
                      f"{100 * r.removed:.1f}%" if r.checked else "—",
                      f"{r.counts[qc.RATE]:,d}" if r.checked else "—",
                      f"{r.counts[qc.SIGNAL]:,d}" if r.checked else "—",
+                     f"{r.counts[qc.DRIFT]:,d}" if r.checked else "—",
                      ", ".join(r.blamed) if r.checked else r.reason]
             self.table.setItem(row, 0, name)
             for col, text in enumerate(cells, start=1):
@@ -249,7 +362,7 @@ class QualityDialog(QtWidgets.QDialog):
 
     def apply_here(self) -> None:
         if self.result.checked:
-            self.tab.apply_quality([(self.entry, self.result.intervals)])
+            self.tab.apply_quality([(self.entry, self.result.intervals)], self.used)
             self._applied()
 
     def apply_everyone(self) -> None:
@@ -259,7 +372,7 @@ class QualityDialog(QtWidgets.QDialog):
         found = [(e, r.intervals if e.name in ticked else [])
                  for e, r in self.survey_results if r.checked]
         if found:
-            self.tab.apply_quality(found)
+            self.tab.apply_quality(found, self.survey_used)
             self._applied()
 
     def remove(self) -> None:
@@ -278,4 +391,6 @@ class QualityDialog(QtWidgets.QDialog):
         name = cleaned[0][1].name
         self.state.setText(
             f"“{name}” is the first population of every sample, and every gate is under "
-            f"it. {losing} of {len(cleaned)} samples have stretches of time removed.")
+            f"it. {losing} of {len(cleaned)} samples have stretches of time removed. "
+            + (f"Last applied with {limits_text(self.session.quality_settings)}."
+               if self.session.quality_settings else ""))

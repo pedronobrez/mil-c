@@ -340,6 +340,10 @@ def _quality_lines(done: dict) -> list[str]:
         lines.append(f"Limits: {s.get('mad'):g} MADs from the acquisition's median; fewer than "
                      f"{s.get('consecutive')} good bins between two removed stretches go too; "
                      f"bins of {bins}.")
+        if s.get("drift"):
+            lines.append(f"Drift: a lasting shift of a population's level by more than "
+                         f"{s['drift']:g} of the spread of the parameter's events, and by "
+                         f"more than {s.get('mad'):g} MADs of the slow level itself.")
         lines.append("Parameters judged: " + (", ".join(s["channels"]) if s.get("channels")
                                               else "every one but Time") + ".")
     else:
