@@ -31,7 +31,7 @@ LETTER_EXTRA = 4.0
 #: the page of a report that is text: A4, upright
 REPORT_PAGE_MM = (210.0, 297.0)
 REPORT_MARGIN_MM = 20.0
-_HEADINGS = ("Sampling", "Batch normalisation", "Runs")
+_HEADINGS = ("Sampling", "Batch normalisation", "Runs", "Quality of the acquisition")
 
 
 @dataclass
@@ -283,6 +283,43 @@ def _normalisation_lines(done: dict) -> list[str]:
     return lines
 
 
+def _quality_lines(done: dict) -> list[str]:
+    from . import qc
+    from .qc_plots import stretches
+    samples = done.get("samples", {})
+    lines = ["Stretches of time in which the flow rate or the signal was not steady were "
+             f"removed from each sample before gating (population {done.get('population')!r})."]
+    s = done.get("settings")
+    if s:
+        bins = (f"{s['events_per_bin']:,d} events" if s.get("events_per_bin")
+                else f"1/{qc.MAX_BINS} of the file, at least {qc.MIN_BIN} events")
+        lines.append(f"Limits: {s.get('mad'):g} MADs from the acquisition's median; fewer than "
+                     f"{s.get('consecutive')} good bins between two removed stretches go too; "
+                     f"bins of {bins}.")
+        lines.append("Parameters judged: " + (", ".join(s["channels"]) if s.get("channels")
+                                              else "every one but Time") + ".")
+    else:
+        lines.append("The limits it was applied with are not recorded.")
+    events = sum(v["events"] for v in samples.values())
+    removed = sum(v["removed"] for v in samples.values())
+    unchecked = [name for name, v in samples.items() if v.get("checked") is False]
+    count = f"{len(samples) - len(unchecked)} of {len(samples)}" if s else f"{len(samples)}"
+    lines.append(f"Samples checked: {count}. Removed in all: {removed:,d} of {events:,d} "
+                 f"events ({removed / max(events, 1):.1%}).")
+    share = {name: v["removed"] / max(v["events"], 1) for name, v in samples.items()}
+    for name in sorted(samples, key=lambda name: -share[name]):
+        v = samples[name]
+        if v["removed"]:
+            lines.append(f"  {name}: {share[name]:.1%} ({v['removed']:,d} of {v['events']:,d} "
+                         f"events; {stretches(v.get('intervals', []), v.get('timestep', 0))})")
+    whole = [name for name, v in samples.items() if not v["removed"] and name not in unchecked]
+    if whole:
+        lines.append(f"Nothing removed from {len(whole)} sample(s): " + ", ".join(whole) + ".")
+    if unchecked:
+        lines.append("Could not be checked, and kept whole: " + ", ".join(unchecked) + ".")
+    return lines
+
+
 def summary(dataset) -> list[str]:
     """What the analysis was, as the dataset records it, one line each;
     an empty string is a blank line. Only what is written there: nothing
@@ -293,6 +330,8 @@ def summary(dataset) -> list[str]:
         lines.append(f"Read from an already concatenated file: {p['source']}.")
     if "population" in p:
         lines.append(f"Population: {p['population'] or 'all events'}.")
+    if p.get("quality"):
+        lines += ["", _HEADINGS[3]] + _quality_lines(p["quality"])
     if "mode" in p:
         lines += ["", _HEADINGS[0],
                   f"{_MODES.get(p['mode'], p['mode']).capitalize()}; seed {p.get('seed')}."]

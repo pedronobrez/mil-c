@@ -523,3 +523,204 @@ def test_window_without_time(app, tmp_path):
     assert not d.here_button.isEnabled()
     d.apply_here()
     assert w.session.populations() == []
+
+
+# --- the command line, and the report -------------------------------------------------------
+
+def _rows(path) -> dict:
+    import csv
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        return {row["Sample"]: row for row in csv.DictReader(f)}
+
+
+def test_cli_checks_every_sample(folder, tmp_path, capsys):
+    from milc.cli import main
+    rng = np.random.default_rng(3)
+    few = np.column_stack([cells(rng, 500), np.sort(rng.uniform(0, 800, 500))])
+    write_fcs(str(tmp_path / "D1.fcs"), few.astype(np.float32), CHANNELS + ["Time"],
+              markers=["", "", "CD8", "CD4", ""], keywords={"$TIMESTEP": str(TIMESTEP)})
+    write_fcs(str(tmp_path / "other.fcs"), few[:, :2].astype(np.float32), CHANNELS[:2])
+    out, pdf, plots = (str(tmp_path / "o" / n) for n in ("qc.csv", "qc.pdf", "plots"))
+    assert main(["qc", folder, "--out", out, "--plots", pdf]) == 0
+    said = capsys.readouterr().out
+    assert "3 of 5 file(s) checked" in said and "not checked: 500 events are too few" in said
+
+    s = Session()
+    s.open_folder(folder)
+    rows = _rows(out)
+    with open(out, "rb") as f:
+        assert f.read(3) == b"\xef\xbb\xbf"
+    assert list(rows) == ["A1", "B1", "C1", "D1", "other"]
+    for e in s.entries[:3]:            # the table is what the session finds
+        r, row = s.quality(e), rows[e.name]
+        assert row["Checked"] == "yes" and int(row["Events"]) == e.events
+        assert int(row["Removed"]) == int((~r.keep).sum())
+        assert float(row["Removed %"]) == pytest.approx(100 * r.removed, abs=0.005)
+        assert int(row["Flow rate"]) == r.counts[qc.RATE]
+    assert rows["A1"]["Removed"] == "0" and rows["A1"]["Intervals"] == ""
+    lo, hi = (float(v) for v in rows["C1"]["Intervals"].split("-"))      # the clog, in seconds
+    assert abs(lo - 5) < 2 * BIN and abs(hi - 7) < 2 * BIN and rows["C1"]["Time unit"] == "s"
+    assert sorted(rows["B1"]["Parameters"].split("; ")) == ["FSC-A", "SSC-A"]
+    assert rows["D1"]["Checked"] == "no" and "too few" in rows["D1"]["Note"]
+    assert rows["D1"]["Removed"] == "" and rows["other"]["Note"].startswith("different channels")
+
+    # a page for each sample that could be read, or a file for each
+    from test_plate import _pdf_pages
+    assert _pdf_pages(pdf) == 4
+    assert main(["qc", folder, "--plots", plots, "--plot-signals", "1"]) == 0
+    assert sorted(os.listdir(plots)) == [f"{n}_qc.png" for n in ("A1", "B1", "C1", "D1")]
+    assert all(os.path.getsize(os.path.join(plots, f)) > 2000 for f in os.listdir(plots))
+
+    # the same options as `check`: the bubble is in the scatter, not in CD8
+    assert main(["qc", folder, "--channels", "cd8", "--out", out]) == 0
+    assert _rows(out)["B1"]["Removed"] == "0" and int(_rows(out)["C1"]["Removed"]) > 0
+    assert main(["qc", folder, "--mad", "3", "--consecutive", "1", "--events-per-bin", "200",
+                 "--out", out]) == 0
+    r = s.quality(s.entries[1], mad=3, consecutive=1, events_per_bin=200)
+    assert int(_rows(out)["B1"]["Removed"]) == int((~r.keep).sum())
+    assert main(["qc", folder, "--channels", "nope"]) == 2
+    assert main(["qc", str(tmp_path / "o")]) == 2
+    assert not os.path.exists(os.path.join(folder, "MIL-C.json"))        # only looked at
+
+
+def test_cli_cleans_before_gating_as_the_session_does(folder, tmp_path, capsys):
+    from milc.cli import main
+    from milc.dataset import Dataset
+    from milc.fcs import read_fcs
+    s = gated_session(folder)                       # Cells/CD8+, saved beside the files
+    with open(os.path.join(folder, "MIL-C.json"), encoding="utf-8") as f:
+        project = f.read()
+    wsp = tmp_path / "none.wsp"
+    wsp.write_text("<Workspace/>")
+    os.makedirs(tmp_path / "o")
+    out, stats_csv = str(tmp_path / "o" / "c"), str(tmp_path / "o" / "s.csv")
+    assert main(["concat", folder, "--wsp", str(wsp), "--population", "Cells/CD8+", "--qc",
+                 "--out", out]) == 0
+    said = capsys.readouterr().out
+    assert "population: Clean/Cells/CD8+" in said and "removed in all" in said
+    assert main(["stats", folder, "--qc", "--population", "Cells;Cells/CD8+",
+                 "--out", stats_csv]) == 0
+    assert main(["export", folder, "--qc", "--format", "csv",
+                 "--out", str(tmp_path / "o" / "x")]) == 0
+    assert "removed in all" in capsys.readouterr().out
+    # other limits remove otherwise, and the dataset says which they were
+    assert main(["concat", folder, "--wsp", str(wsp), "--qc", "--mad", "3", "--qc-channels",
+                 "cd8,FSC-A", "--out", out + "3"]) == 0
+    other = Dataset.load(out + "3.npz").provenance["quality"]
+    assert other["settings"]["mad"] == 3 and other["settings"]["channels"] == ["FSC-A", "CD8"]
+    # and none of it touched the project
+    with open(os.path.join(folder, "MIL-C.json"), encoding="utf-8") as f:
+        assert f.read() == project
+
+    # the window's route: check every sample, apply, concatenate
+    s.apply_quality([(e, s.quality(e).intervals) for e in s.entries])
+    assert s.population == "Clean/Cells/CD8+"
+    by_session = s.build()
+    ds = Dataset.load(out + ".npz")
+    assert ds.provenance["population"] == "Clean/Cells/CD8+"
+    assert ds.provenance["available"] == by_session.provenance["available"]
+    assert ds.provenance["quality"] == by_session.provenance["quality"]
+    assert np.array_equal(ds.event_index, by_session.event_index)
+    assert np.array_equal(ds.X, by_session.X)
+    done = ds.provenance["quality"]
+    assert done["settings"] == {"mad": 6.0, "consecutive": 5, "events_per_bin": None,
+                                "channels": None}
+    b = done["samples"]["B1"]
+    assert b["removed"] == int((~s.quality(s.entries[1]).keep).sum()) > 0 and b["checked"]
+    assert done["samples"]["A1"]["removed"] == 0 and b["timestep"] == TIMESTEP
+    assert done != other
+    for line in (f"{b['removed'] / b['events']:6.1%} removed ({b['removed']:,d} events",
+                 "  0.0% removed"):
+        assert line in said
+    # beside the dataset: a table, and a keyword of the concatenated file
+    rows = _rows(out + "_qc.csv")
+    assert [int(rows[n]["Removed"]) for n in ("A1", "B1", "C1")] == [
+        done["samples"][n]["removed"] for n in ("A1", "B1", "C1")]
+    assert read_fcs(out + ".fcs").keywords["MILC QC"].split(";")[1] == \
+        f"{b['removed']}/{b['events']}"
+    # statistics and export were of the clean events, by the workspace's paths
+    with open(stats_csv, encoding="utf-8-sig") as f:
+        lines = [line.split(",") for line in f.read().splitlines()]
+    path, count = lines[0].index("Path"), lines[0].index("Count")
+    assert [(row[0], row[path], int(row[count])) for row in lines[1:]] == [
+        (e.name, p, s.load(e).count(p)) for e in s.entries
+        for p in ("Clean/Cells", "Clean/Cells/CD8+")]
+    with open(tmp_path / "o" / "x" / "B1_Clean.csv", encoding="utf-8-sig") as f:
+        assert len(f.read().splitlines()) - 1 == s.load(s.entries[1]).count("Clean")
+
+    # the window saved it with the project: that is what the command line
+    # uses from now on, and it is not applied twice
+    capsys.readouterr()
+    assert main(["concat", folder, "--wsp", str(wsp), "--population", "Cells/CD8+", "--qc",
+                 "--mad", "2", "--out", out]) == 0
+    assert "already applied" in capsys.readouterr().out
+    again = Dataset.load(out + ".npz")
+    assert again.provenance["quality"] == done and np.array_equal(again.X, ds.X)
+    assert main(["concat", folder, "--wsp", str(wsp), "--out", out]) == 0   # and without --qc
+    assert Dataset.load(out + ".npz").provenance["quality"] == done
+    reopened = Session()
+    reopened.open_folder(folder)
+    assert reopened.quality_settings == s.quality_settings
+    assert reopened.quality_settings["checked"] == ["A1", "B1", "C1"]
+    reopened.remove_quality()
+    assert reopened.quality_settings is None
+    assert "quality" not in reopened.build().provenance
+
+
+def test_cli_cannot_clean_without_time(tmp_path, capsys):
+    from milc.cli import main
+    rng = np.random.default_rng(0)
+    write_fcs(str(tmp_path / "a.fcs"), cells(rng, 4000).astype(np.float32), CHANNELS)
+    assert main(["qc", str(tmp_path)]) == 0
+    assert "not checked: the file has no Time parameter" in capsys.readouterr().out
+    assert main(["export", str(tmp_path), "--qc", "--out", str(tmp_path / "x")]) == 2
+    assert "no Time" in capsys.readouterr().err
+
+
+def test_report_says_what_was_removed():
+    from milc import plate
+    from milc.dataset import Dataset
+    quality = {"population": "Clean",
+               "settings": {"mad": 6.0, "consecutive": 5, "events_per_bin": None,
+                            "channels": None},
+               "samples": {
+                   "a": {"events": 1000, "removed": 0, "intervals": [], "timestep": 0.01,
+                         "checked": True},
+                   "b": {"events": 2000, "removed": 166, "intervals": [[0.0, 2300.0]],
+                         "timestep": 0.01, "checked": True},
+                   "c": {"events": 4000, "removed": 40, "intervals": [[5.0, 9.0], [50.0, 51.5]],
+                         "timestep": 0.0, "checked": True},
+                   "d": {"events": 300, "removed": 0, "intervals": [], "timestep": 0.01,
+                         "checked": False},
+                   "e": {"events": 1000, "removed": 0, "intervals": [], "timestep": 0.01,
+                         "checked": True}}}
+    ds = Dataset(np.zeros((4, 1), np.float32), ["A"], [""], [False], np.zeros(4, np.int32),
+                 np.arange(4), list("abcde"), [{}] * 5,
+                 provenance={"population": "Clean/Cells", "quality": quality,
+                             "mode": "equal_per_sample", "seed": 0, "take": {}})
+    lines = plate.summary(ds)
+    at = lines.index("Quality of the acquisition")
+    assert lines[at - 1] == "" and at < lines.index("Sampling")
+    assert lines[at + 2] == ("Limits: 6 MADs from the acquisition's median; fewer than 5 good "
+                             "bins between two removed stretches go too; bins of 1/500 of the "
+                             "file, at least 150 events.")
+    assert lines[at + 3] == "Parameters judged: every one but Time."
+    assert lines[at + 4:at + 9] == [
+        "Samples checked: 4 of 5. Removed in all: 206 of 8,300 events (2.5%).",
+        "  b: 8.3% (166 of 2,000 events; 0–23 s)",         # the worst first; in seconds,
+        "  c: 1.0% (40 of 4,000 events; 5–9, 50–51.5)",    # or as the file stores Time
+        "Nothing removed from 2 sample(s): a, e.",
+        "Could not be checked, and kept whole: d."]
+    quality["settings"].update(mad=4.0, events_per_bin=300, channels=["CD8", "CD4"])
+    said = "\n".join(plate.summary(ds))
+    assert "Limits: 4 MADs" in said and "bins of 300 events." in said
+    assert "Parameters judged: CD8, CD4." in said
+    # applied before the limits were kept: only what the gates say
+    quality["settings"] = None
+    for v in quality["samples"].values():
+        v["checked"] = None
+    said = "\n".join(plate.summary(ds))
+    assert "The limits it was applied with are not recorded." in said
+    assert "Samples checked: 5. Removed" in said and "Could not be checked" not in said
+    del ds.provenance["quality"]
+    assert "Quality of the acquisition" not in plate.summary(ds)

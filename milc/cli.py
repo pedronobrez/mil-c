@@ -5,6 +5,7 @@ The command line: everything the window will do, without the window.
     python -m milc inspect  DATA
     python -m milc counts   DATA --wsp analysis.wsp
     python -m milc concat   DATA --wsp analysis.wsp --population PATH --out NAME
+    python -m milc qc       DATA --out qc.csv --plots qc.pdf
 """
 
 from __future__ import annotations
@@ -41,9 +42,9 @@ def cmd_inspect(a) -> int:
     return 0
 
 
-def _load(a) -> tuple[list[Sample], list[str]]:
+def _load(a) -> tuple[list[Sample], list[str], object]:
     """The samples that can be gated, through the same session the window
-    uses; and the files of the folder that cannot."""
+    uses; the files of the folder that cannot; and the session."""
     from .session import Session
     session = Session()
     session.open_folder(a.data)
@@ -51,19 +52,26 @@ def _load(a) -> tuple[list[Sample], list[str]]:
     session.set_extend_gates(not a.listed_only)
     if a.pattern:
         session.annotate(a.pattern)
+    gated = _gated(session)
+    reasons = _clean(session, a)
     samples, left_out = [], []
     for e in session.entries:
-        if e.gated and not e.problem:
+        if e in gated:
             s = session.load(e)
             s.meta = dict(e.meta)
             samples.append(s)
         else:
             left_out.append(os.path.basename(e.path))
-    return samples, left_out
+    _say_removed(session.quality_record(samples), reasons)
+    return samples, left_out, session
 
 
 def cmd_counts(a) -> int:
-    samples, unknown = _load(a)
+    try:
+        samples, unknown, _ = _load(a)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     worst = 0.0
     for s in samples:
         print(f"{s.name}  ({len(s):,d} events)")
@@ -86,7 +94,12 @@ def cmd_counts(a) -> int:
 
 
 def cmd_concat(a) -> int:
-    samples, _ = _load(a)
+    try:
+        samples, _, session = _load(a)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    a.population = _under_clean(session, a.population)
     if a.population is None:
         paths = {n.path for s in samples for n in s.gates.leaves()}
         if len(paths) != 1:
@@ -120,14 +133,13 @@ def cmd_concat(a) -> int:
     if a.dry_run:
         return 0
     ds = concatenate(samples, p, a.population, a.seed)
+    cleaned = session.quality_record([s for s in samples if p.take.get(s.name, 0) > 0])
+    if cleaned:
+        ds.provenance["quality"] = cleaned
     if a.normalize_by:
-        from .session import Session
-        s = Session()
-        s.open_folder(a.data)
-        s.set_workspace(a.wsp)
-        s.set_extend_gates(not a.listed_only)
-        if a.pattern:
-            s.annotate(a.pattern)
+        # the session the samples came from: its gates are the ones in use,
+        # the population of quality control among them
+        s = session
         s.population, s.seed = a.population, a.seed
         s.normalization = {"batch": a.normalize_by, "reference": [column, value],
                            "clusters": a.normalize_clusters}
@@ -145,6 +157,12 @@ def cmd_concat(a) -> int:
     ds.save(a.out + ".npz")
     ds.to_fcs(a.out + ".fcs")
     print(f"wrote {a.out}.npz and {a.out}.fcs")
+    if cleaned:
+        _quality_csv(a.out + "_qc.csv", [
+            _quality_row(name, v["events"], v["checked"] is not False, v["removed"],
+                         v["intervals"], v["timestep"])
+            for name, v in cleaned["samples"].items()])
+        print(f"wrote {a.out}_qc.csv: what quality control removed from each sample")
     return 0
 
 
@@ -362,6 +380,13 @@ def cmd_stats(a) -> int:
     session.set_extend_gates(not a.listed_only)
     if a.pattern:
         session.annotate(a.pattern)
+    try:
+        reasons = _clean(session, a)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    _say_removed(session.quality_record([session.load(e) for e in session.usable()
+                                         if e.include]), reasons)
     available = session.stat_channels()
     wanted = [w.strip().lower() for w in (a.channels or "").split(",") if w.strip()]
     channels = []
@@ -382,8 +407,9 @@ def cmd_stats(a) -> int:
                 print(f"{w!r}: choose among " + ", ".join(stats.STATISTICS), file=sys.stderr)
                 return 2
             chosen.append(by_lower[w.strip().lower()])
-    table = session.statistics(None if a.population is None else a.population.split(";"),
-                               channels, chosen)
+    table = session.statistics(
+        None if a.population is None
+        else [_under_clean(session, p) for p in a.population.split(";")], channels, chosen)
     table.to_csv(a.out)
     print(f"{len(table.rows):,d} rows, {len(table.columns)} columns -> {a.out}")
     if a.prism:
@@ -406,16 +432,238 @@ def cmd_export(a) -> int:
     if a.wsp:
         session.set_workspace(a.wsp)
     session.set_extend_gates(not a.listed_only)
-    population = a.population or ""
+    try:
+        reasons = _clean(session, a)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    population = _under_clean(session, a.population or "")
     entries = [e for e in session.usable() if e.include and
                (not population or population in {n.path for n in e.gates.walk()})]
     if not entries:
         print(f"no sample has the population {population!r}; there are: "
               + ", ".join(session.populations()), file=sys.stderr)
         return 2
+    _say_removed(session.quality_record([session.load(e) for e in entries]), reasons)
     written = session.export_population(entries, population, a.out, a.format,
                                         compensated=not a.raw)
     print(f"{len(written)} file(s) -> {a.out}")
+    return 0
+
+
+# --- quality of the acquisition ------------------------------------------------
+
+_QC_COLUMNS = ["Sample", "Events", "Checked", "Removed", "Removed %", "Intervals",
+               "Time unit", "Flow rate", "Signal", "Between", "Parameters", "Note"]
+
+
+def _quality_arguments(s, apply: bool) -> None:
+    """What `qc.check` can be asked, for a command: `qc` itself, or one
+    that cleans the samples first (`--qc`)."""
+    if apply:
+        s.add_argument("--qc", action="store_true",
+                       help="first remove from every sample the stretches of its "
+                            "acquisition that went wrong, as “Apply to every sample” "
+                            "does in the window: “Clean” is then the first population, "
+                            "and the gates are under it")
+    s.add_argument("--mad", type=float,
+                   help="how many MADs from the acquisition's median a bin has to lie "
+                        "to be suspect (6); larger removes less")
+    s.add_argument("--consecutive", type=int,
+                   help="good bins between two removed stretches are kept only when "
+                        "there are at least this many (5)")
+    s.add_argument("--events-per-bin", type=int,
+                   help="by default 1/500 of the file and at least 150")
+    s.add_argument("--qc-channels", *(() if apply else ("--channels",)), dest="qc_channels",
+                   help="the parameters to judge, comma-separated: detectors or stains; "
+                        "every one but Time without it")
+
+
+def _quality_settings(a) -> dict:
+    given = {k: getattr(a, k, None) for k in ("mad", "consecutive", "events_per_bin")}
+    return {k: v for k, v in given.items() if v is not None}
+
+
+def _quality_channels(session, words: str | None) -> list[str] | None:
+    """Detectors from what was typed, as `Dataset.resolve` reads it."""
+    from .compensation import strip_prefix
+    entries = session.usable()
+    if not words or not entries:
+        return None
+    first, out = entries[0], []
+    for w in filter(None, (w.strip() for w in words.split(","))):
+        want = strip_prefix(w)[0].lower()
+        hits = [c for c, m in zip(first.channels, first.markers)
+                if want in (c.lower(), m.lower(), (m.lower().split() or [""])[0])]
+        if len(hits) != 1:
+            raise ValueError(f"{w!r}: " + ("matches " + ", ".join(hits) if hits
+                                           else "no such parameter"))
+        out += hits
+    return out
+
+
+def _check_all(session, a, keep_samples: bool = True) -> list:
+    """(entry, `qc.Result`) for every file that can be read."""
+    channels = _quality_channels(session, getattr(a, "qc_channels", None))
+    out = []
+    for e in session.usable():
+        out.append((e, session.quality(e, channels=channels, **_quality_settings(a))))
+        if not keep_samples:
+            e.sample = None
+    return out
+
+
+def _time_node(session):
+    from .gating import time_node
+    return next((node for node in (time_node(e.gates) for e in session.usable())
+                 if node is not None), None)
+
+
+def _gated(session) -> list:
+    """The files with gates of their own: the population of quality
+    control, which every file has once it is applied, is not one — unless
+    it is all there is."""
+    def drawn(e):
+        return [n for n in e.gates.walk() if n.gate is not None and n is not clean]
+    clean = _time_node(session)
+    usable = [e for e in session.usable() if e.gated]
+    return [e for e in usable if drawn(e)] or usable
+
+
+def _clean(session, a) -> dict[str, str] | None:
+    """`--qc`: check every sample and apply what is found, through the
+    session, for this run only — the project beside the files is not
+    written. Where the project already has it applied, that is what is
+    used. Returns why each file that could not be checked could not, or
+    None where nothing was asked."""
+    if not getattr(a, "qc", False):
+        return None
+    had = _time_node(session)
+    if had is not None:
+        print(f"quality control is already applied in this folder's project ({had.name!r}): "
+              "it is used as it is, and nothing is checked again")
+        return {}
+    results = _check_all(session, a)
+    judged = (next((r.channels for _, r in results if r.checked), None)
+              if getattr(a, "qc_channels", None) else None)
+    session.apply_quality([(e, r.intervals) for e, r in results if r.checked],
+                          {**_quality_settings(a), "channels": judged}, save=False)
+    return {e.name: r.reason for e, r in results if not r.checked}
+
+
+def _under_clean(session, population: str | None) -> str | None:
+    """A gate's path as the workspace has it, where quality control has
+    put its population above every gate."""
+    node = _time_node(session)
+    if node is None or population is None or (population + "/").startswith(node.name + "/"):
+        return population
+    return "/".join(filter(None, [node.name, population]))
+
+
+def _say_removed(record: dict | None, reasons: dict[str, str] | None) -> None:
+    """How much each sample lost, whenever its events are the clean ones."""
+    from .qc_plots import stretches
+    if not record:
+        return
+    s = record.get("settings")
+    print(f"quality control, population {record['population']!r}: "
+          + (", ".join(f"{k.replace('_', ' ')} {v:g}" for k, v in s.items()
+                       if k != "channels" and v is not None)
+             + (f"; on {', '.join(s['channels'])}" if s.get("channels") else "")
+             if s else "limits not recorded"))
+    events = removed = 0
+    for name, v in record["samples"].items():
+        events, removed = events + v["events"], removed + v["removed"]
+        if v["checked"] is False:
+            said = "not checked, kept whole: " + (reasons or {}).get(name, "")
+        elif v["removed"]:
+            said = (f"{v['removed'] / v['events']:6.1%} removed ({v['removed']:,d} events; "
+                    f"{stretches(v['intervals'], v['timestep'])})")
+        else:
+            said = "  0.0% removed"
+        print(f"  {name:12s} {v['events']:>9,d}  {said}")
+    print(f"  removed in all: {removed:,d} of {events:,d} events "
+          f"({removed / max(events, 1):.1%})")
+
+
+def _quality_row(name, events, checked, removed, intervals, step, result=None,
+                 note: str = "") -> list:
+    from . import qc
+    scale = step or 1.0
+    r = result if result is not None and result.checked else None
+    return [name, events, "yes" if checked else "no", removed if checked else "",
+            f"{100 * removed / events:.2f}" if checked and events else "",
+            "; ".join(f"{lo * scale:.6g}-{hi * scale:.6g}" for lo, hi in intervals),
+            "s" if step else "as stored",
+            r.counts[qc.RATE] if r else "", r.counts[qc.SIGNAL] if r else "",
+            r.counts[qc.ISLANDS] if r else "", "; ".join(r.blamed) if r else "", note]
+
+
+def _quality_csv(path: str, rows: list[list]) -> None:
+    import csv
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding=cluster_stats.CSV_ENCODING, newline="") as f:
+        out = csv.writer(f)
+        out.writerow(_QC_COLUMNS)
+        out.writerows(rows)
+
+
+def cmd_qc(a) -> int:
+    from . import qc, qc_plots
+    from .session import Session
+    session = Session()
+    session.open_folder(a.data)
+    if a.wsp:
+        session.set_workspace(a.wsp)
+    try:
+        results = _check_all(session, a, keep_samples=False)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if not results:
+        print(f"no FCS file can be read in {a.data}", file=sys.stderr)
+        return 2
+    steps = {e.name: qc_plots.timestep(read_header(e.path)) for e, _ in results}
+    rows, events, removed = [], 0, 0
+    wide = max(len(e.name) for e in session.entries)
+    print(f"{'sample':{wide}s} {'events':>9s}  {'removed':>7s}  stretches, and what found them")
+    for e, r in results:
+        gone = int((~r.keep).sum())
+        rows.append(_quality_row(e.name, len(r.keep), r.checked, gone, r.intervals,
+                                 steps[e.name], r, r.reason))
+        if not r.checked:
+            print(f"{e.name:{wide}s} {len(r.keep):>9,d}  {'—':>7s}  not checked: {r.reason}")
+            continue
+        events, removed = events + len(r.keep), removed + gone
+        found = [what for what, key in (("flow rate", qc.RATE), ("signal", qc.SIGNAL))
+                 if r.counts[key]]
+        blamed = ", ".join(r.blamed[:3]) + ("…" if len(r.blamed) > 3 else "")
+        print(f"{e.name:{wide}s} {len(r.keep):>9,d}  {r.removed:>7.1%}  "
+              + (f"{qc_plots.stretches(r.intervals, steps[e.name])}  ({', '.join(found)}"
+                 f"{': ' + blamed if blamed else ''})" if r.intervals else ""))
+    for e in session.entries:
+        if e.problem:
+            rows.append(_quality_row(e.name, e.events, False, 0, [], 0.0, None, e.problem))
+            print(f"{e.name:{wide}s} {e.events:>9,d}  {'—':>7s}  not checked: {e.problem}")
+    checked = sum(r.checked for _, r in results)
+    print(f"{checked} of {len(rows)} file(s) checked; {removed:,d} of {events:,d} events "
+          f"({removed / max(events, 1):.1%}) would be removed. Nothing was: "
+          "--qc on concat, stats and export removes them for that run.")
+    if _time_node(session) is not None:
+        print("note: this folder's project already has quality control applied; what is "
+              "above is a fresh check of the whole files")
+    if a.out:
+        _quality_csv(a.out, rows)
+        print(f"{len(rows)} rows -> {a.out}")
+    if a.plots:
+        try:
+            written = qc_plots.save(a.plots, [(e.name, r, steps[e.name]) for e, r in results],
+                                    a.plot_format, a.plot_signals)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"{len(results)} time plot(s) -> "
+              + (written[0] if len(written) == 1 else a.plots))
     return 0
 
 
@@ -451,6 +699,7 @@ def main(argv=None) -> int:
 
     s = sub.add_parser("counts", help="every gate, against FlowJo's count")
     common(s)
+    _quality_arguments(s, apply=True)
     s.set_defaults(run=cmd_counts)
 
     s = sub.add_parser("concat", help="balanced downsampling and concatenation")
@@ -472,6 +721,7 @@ def main(argv=None) -> int:
                    help="the batch the others are brought onto, left as acquired itself; "
                         "default: the mean of the batches")
     s.add_argument("--dry-run", action="store_true", help="the plan only")
+    _quality_arguments(s, apply=True)
     s.add_argument("--out", default="concat")
     s.set_defaults(run=cmd_concat)
 
@@ -519,6 +769,7 @@ def main(argv=None) -> int:
     s.add_argument("--prism-value", default="% of parent", help="the column to put in it")
     s.add_argument("--group-by", default="Group", help="column(s) that make the groups")
     s.add_argument("--within", help="a table for each value of this column")
+    _quality_arguments(s, apply=True)
     s.set_defaults(run=cmd_stats)
 
     s = sub.add_parser("export", help="the events of one population, a file per sample")
@@ -530,7 +781,26 @@ def main(argv=None) -> int:
     s.add_argument("--raw", action="store_true",
                    help="as acquired, not compensated; an FCS file then carries the matrix")
     s.add_argument("--out", default="exported")
+    _quality_arguments(s, apply=True)
     s.set_defaults(run=cmd_export)
+
+    s = sub.add_parser("qc", help="the acquisition of every sample: which stretches of "
+                                  "time went wrong, and how much they hold")
+    s.add_argument("data")
+    s.add_argument("--wsp", help="a FlowJo workspace, for its compensation; without it, "
+                                 "the one in the folder")
+    _quality_arguments(s, apply=False)
+    s.add_argument("--out", metavar="FILE.csv", help="the table, as CSV")
+    s.add_argument("--plots", metavar="PATH",
+                   help="the flow rate and the signal over time, with what would be removed "
+                        "shaded: FILE.pdf for one PDF with a page for each sample, anything "
+                        "else is a folder that gets a file for each")
+    s.add_argument("--plot-format", choices=("png", "pdf"), default="png",
+                   help="of the files in that folder")
+    s.add_argument("--plot-signals", type=int, default=3, metavar="N",
+                   help="how many populations to draw under the flow rate, those suspect "
+                        "for longest first")
+    s.set_defaults(run=cmd_qc)
 
     s = sub.add_parser("selftest", help="the whole route on invented data: is this build sound?")
     s.add_argument("--no-window", action="store_true", help="skip the part that needs Qt")

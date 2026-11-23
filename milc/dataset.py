@@ -141,8 +141,15 @@ class Dataset:
                  for c, comp in zip(self.channels, self.compensated)]
         data = np.column_stack([self.X, self.sample_index.astype(np.float32) + 1])
         ranges = [262144.0] * len(names) + [float(len(self.samples) + 1)]
-        write_fcs(path, data, names + ["SampleID"], self.markers + [""], ranges,
-                  keywords={"MILC SAMPLES": ";".join(self.samples)})
+        keywords = {"MILC SAMPLES": ";".join(self.samples)}
+        cleaned = self.provenance.get("quality")
+        if cleaned:
+            # events removed by quality control / events of the file, per sample
+            lost = cleaned["samples"]
+            keywords["MILC QC"] = ";".join(
+                f"{lost[name]['removed']}/{lost[name]['events']}" if name in lost else ""
+                for name in self.samples)
+        write_fcs(path, data, names + ["SampleID"], self.markers + [""], ranges, keywords)
 
 
 def concatenate(samples: list[Sample], plan: Plan, population: str = "",

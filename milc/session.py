@@ -152,6 +152,10 @@ class Session:
         self.normalization_check: dict | None = None
         #: the curves in use, with what they were fitted for: see `_fitted`
         self._fit: tuple | None = None
+        #: how quality control was last applied — the limits of `qc.check`,
+        #: the parameters judged (None: all) and the samples it could check;
+        #: None where it is not applied, or was before this was kept
+        self.quality_settings: dict | None = None
         self._counts: dict[tuple[str, str], int] = {}
         #: the last FlowSOM, kept for its map and tree
         self.flowsom = None
@@ -363,6 +367,7 @@ class Session:
         data = self._project
         self.scales = {c: from_spec(spec) for c, spec in data.get("scales", {}).items()}
         self.normalization = data.get("normalization") or None
+        self.quality_settings = data.get("quality") or None
         saved = data.get("compensation")
         if saved:
             try:
@@ -396,6 +401,7 @@ class Session:
                       for e in usable if e.edited},
             "scales": {c: to_spec(t) for c, t in self.scales.items()},
             "normalization": self.normalization,
+            "quality": self.quality_settings,
             "compensation": ({"channels": self.matrix.channels,
                               "matrix": np.asarray(self.matrix.matrix).tolist()}
                              if self.matrix is not None else None),
@@ -441,30 +447,43 @@ class Session:
 
     # --- quality of the acquisition ----------------------------------------------
 
-    def quality(self, e: Entry, **settings):
+    def quality(self, e: Entry, channels: list[str] | None = None, **settings):
         """Check one file's acquisition (`qc.check`) on every parameter but
-        Time: fluorescence compensated, each on the scale its axis has."""
+        Time — or on `channels` alone: fluorescence compensated, each on
+        the scale its axis has."""
         from . import qc
         sample = self.load(e)
         f = sample.fcs
         time = qc.time_channel(f.channels)
-        names = [c for c in f.channels if c != time]
+        names = [c for c in f.channels if c != time and (channels is None or c in channels)]
         return qc.check(sample.compensated[:, [f.index(c) for c in names]],
                         sample.column(time) if time else None,
                         [f.markers[f.index(c)] or c for c in names],
                         [self.scale_of(c) for c in names], **settings)
 
-    def apply_quality(self, found: list[tuple[Entry, list]]) -> None:
+    def apply_quality(self, found: list[tuple[Entry, list]], settings: dict | None = None,
+                      save: bool = True) -> None:
         """Remove from each file the time intervals found for it (a
         `qc.Result.intervals`), as a population at the top of its tree
         that every other gate is then under. Every file gets the
         population, so the trees stay alike: a file not in `found` keeps
-        the intervals it had, or every event."""
+        the intervals it had, or every event.
+
+        `settings` is what `quality` was asked with where that was not
+        its defaults, kept for the report. Without `save` the project
+        file is left as it is: the command line cleans for one run."""
+        import inspect
+
         from . import qc
         entries = self.usable()
         time = qc.time_channel(entries[0].channels) if entries else None
         if time is None:
             raise ValueError("these files have no Time parameter to gate on")
+        usual = {k: p.default for k, p in inspect.signature(qc.check).parameters.items()
+                 if k in ("mad", "consecutive", "events_per_bin")}
+        checked = set((self.quality_settings or {}).get("checked", []))
+        self.quality_settings = {**usual, "channels": None, **(settings or {}),
+                                 "checked": sorted(checked | {e.name for e, _ in found})}
         fresh = [e for e in entries if time_node(e.gates) is None]
         for e in fresh:
             wrap(e.gates, qc.POPULATION, TimeGate([time], [], inside=False))
@@ -473,7 +492,7 @@ class Session:
         # what was to be concatenated is now under the new population —
         # and "all events" becomes the clean ones, which is what was asked
         self._quality_changed("/".join(filter(None, [qc.POPULATION, self.population]))
-                              if fresh else self.population)
+                              if fresh else self.population, save)
 
     def remove_quality(self) -> None:
         """Take that population out of every tree again; the gates under
@@ -485,9 +504,31 @@ class Session:
                 unwrap(e.gates, node)
                 if (self.population + "/").startswith(node.name + "/"):
                     population = self.population[len(node.name) + 1:]
+        self.quality_settings = None
         self._quality_changed(population)
 
-    def _quality_changed(self, population: str) -> None:
+    def quality_record(self, samples: list[Sample]) -> dict | None:
+        """What quality control took from each of these samples, for a
+        dataset built from them to carry (`provenance["quality"]`); None
+        where none of them has the population."""
+        from .qc_plots import timestep
+        settings = dict(self.quality_settings or {})
+        checked = settings.pop("checked", None)
+        record: dict = {"settings": settings or None, "samples": {}}
+        for s in samples:
+            node = time_node(s.gates)
+            if node is None:
+                continue
+            record["population"] = node.name
+            record["samples"][s.name] = {
+                "events": len(s), "removed": len(s) - s.count(node.name),
+                "intervals": [[float(lo), float(hi)] for lo, hi in node.gate.intervals],
+                # seconds in one unit of Time; 0 where the file does not say
+                "timestep": timestep(s.fcs.keywords),
+                "checked": None if checked is None else s.name in checked}
+        return record if record["samples"] else None
+
+    def _quality_changed(self, population: str, save: bool = True) -> None:
         """Every tree gained or lost its first population, and the chosen
         one is at another path."""
         self.population = population if population in self.populations() else ALL_EVENTS
@@ -498,7 +539,8 @@ class Session:
             if e.sample is not None:
                 e.sample._masks = None
         self._counts.clear()
-        self.save_project()
+        if save:
+            self.save_project()
 
     # --- annotations -------------------------------------------------------------
 
@@ -654,6 +696,9 @@ class Session:
                 s.meta = {c: e.meta.get(c, "") for c in self.columns}
                 samples.append(s)
         self.dataset = concatenate(samples, p, self.population, self.seed)
+        cleaned = self.quality_record(samples)
+        if cleaned:
+            self.dataset.provenance["quality"] = cleaned
         self.normalization_check = None
         if self.normalization:
             self._normalise(self.dataset, {s.name: s for s in samples})
