@@ -117,6 +117,130 @@ class QuadrantGate:
         return mask if self.inside else ~mask
 
 
+#: the four arms of an offset quadrant, in the order they come going round
+#: counter-clockwise, and the two that bound each corner
+ARMS = ("right", "up", "left", "down")
+SECTORS = {"Q2": ("right", "up"), "Q1": ("up", "left"),
+           "Q4": ("left", "down"), "Q3": ("down", "right")}
+_AXES = {"right": (1.0, 0.0), "up": (0.0, 1.0), "left": (-1.0, 0.0), "down": (0.0, -1.0)}
+
+
+def _in_sector(a, b, dx: np.ndarray, dy: np.ndarray) -> np.ndarray:
+    """Is (dx, dy) in the closed sector swept counter-clockwise from the
+    direction `a` to the direction `b`?"""
+    after_a = a[0] * dy - a[1] * dx >= 0
+    before_b = dx * b[1] - dy * b[0] >= 0
+    turn = a[0] * b[1] - a[1] * b[0]
+    if turn > 0:                        # less than half a turn
+        return after_a & before_b
+    if turn < 0:                        # more than half a turn
+        return after_a | before_b
+    if a[0] * b[0] + a[1] * b[1] < 0:   # exactly half: one side of a line
+        return after_a
+    # the two arms on top of each other: nothing between them but the arm
+    return after_a & before_b & (a[0] * dx + a[1] * dy >= 0)
+
+
+@dataclass
+class OffsetQuadrantGate:
+    """One corner of a plot cut in four by arms that need not be at right
+    angles nor in line — FlowJo's quadrant with its arms offset.
+
+    The geometry: a `center` and four `arms`, `right`, `up`, `left` and
+    `down`, each given by one point it passes through. An arm is the
+    half-line that starts at the centre, goes through its point and on
+    for ever. Going round counter-clockwise the arms come in that order,
+    and each corner is the sector between two neighbours: Q2 (upper
+    right) from `right` to `up`, Q1 (upper left) from `up` to `left`, Q4
+    (lower left) from `left` to `down`, Q3 (lower right) from `down` to
+    `right`. An event on an arm goes where `QuadrantGate` puts it: on
+    `right` or `up` in Q2, on `left` in Q1, on `down` in Q3, and at the
+    centre in Q2 — so with the arms along the axes this is `QuadrantGate`
+    at the centre, event for event. Every event is in exactly one corner,
+    whatever the arms.
+
+    `center` and the arms' points are in the file's units, in the order
+    of `dims`; the arms are straight on `scales` — the display scale of
+    each axis, None for the values as they are — which is where the
+    events are tested, as for `PolygonGate`. An arm whose point is the
+    centre has no direction and is taken along its axis. The four corners
+    made together share `group`, the centre and the arms."""
+    dims: list[str]
+    center: list[float]
+    #: "right", "up", "left", "down" → [x, y], a point the arm goes through
+    arms: dict[str, list[float]]
+    quadrant: str
+    group: str = ""
+    inside: bool = True
+    scales: list | None = None
+
+    def shown(self) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+        """The centre and each arm's point on the display scales."""
+        scales = self.scales or [None, None]
+
+        def place(p):
+            return np.array([float(_scaled(np.float64(v), s)) for v, s in zip(p, scales)])
+        return place(self.center), {arm: place(self.arms[arm]) for arm in ARMS}
+
+    def directions(self) -> dict[str, tuple[float, float]]:
+        """Each arm's direction from the centre, on the display scales."""
+        centre, points = self.shown()
+        out = {}
+        for arm in ARMS:
+            d = points[arm] - centre
+            out[arm] = ((float(d[0]), float(d[1]))
+                        if np.all(np.isfinite(d)) and np.any(d != 0) else _AXES[arm])
+        return out
+
+    def ordered(self) -> bool:
+        """Do the arms come in their order going round, none on or past
+        its neighbour? If not, the corners still share every event
+        between them, but are not the four their names say."""
+        d = self.directions()
+        angles = [np.arctan2(d[a][1], d[a][0]) for a in ARMS]
+        steps = [(angles[(k + 1) % 4] - angles[k]) % (2 * np.pi) for k in range(4)]
+        return all(s > 1e-9 for s in steps) and abs(sum(steps) - 2 * np.pi) < 1e-6
+
+    def contains(self, column: Column) -> np.ndarray:
+        scales = self.scales or [None, None]
+        centre, _ = self.shown()
+        dx = _scaled(column(self.dims[0]).astype(np.float64), scales[0]) - centre[0]
+        dy = _scaled(column(self.dims[1]).astype(np.float64), scales[1]) - centre[1]
+        d = self.directions()
+        taken = np.zeros(dx.shape[0], dtype=bool)
+        mask = taken
+        # in this order an event on an arm, which two sectors hold, goes
+        # to the corner it belongs to; Q4 is what the other three leave
+        for quadrant in ("Q2", "Q1", "Q3", "Q4"):
+            a, b = SECTORS[quadrant]
+            mask = ~taken if quadrant == "Q4" else _in_sector(d[a], d[b], dx, dy) & ~taken
+            if quadrant == self.quadrant:
+                break
+            taken = taken | mask
+        return mask if self.inside else ~mask
+
+
+def offset_quadrant(gate: "QuadrantGate", scales: list | None = None,
+                    reach: tuple[float, float] = (1.0, 1.0)) -> OffsetQuadrantGate:
+    """The same corner with arms that can be moved: along the axes, so
+    not one event changes side until an arm is moved. `reach` is how far
+    from the centre, on the display scales, each arm's point is put."""
+    scales = list(scales) if scales and any(s is not None for s in scales) else None
+    sc = scales or [None, None]
+    cx, cy = (float(_scaled(np.float64(v), s)) for v, s in zip((gate.x, gate.y), sc))
+
+    def stored(value, k):
+        return float(sc[k].inverse(np.float64(value))) if sc[k] is not None else float(value)
+    arms = {}
+    for arm, (ux, uy) in _AXES.items():
+        # the coordinate an arm does not move along stays the centre's own
+        # number, not one taken there and back through the scale
+        arms[arm] = [stored(cx + ux * reach[0], 0) if ux else float(gate.x),
+                     stored(cy + uy * reach[1], 1) if uy else float(gate.y)]
+    return OffsetQuadrantGate(list(gate.dims), [float(gate.x), float(gate.y)], arms,
+                              gate.quadrant, gate.group, gate.inside, scales)
+
+
 AND, OR, NOT = "and", "or", "not"
 
 
@@ -221,7 +345,7 @@ class GateNode:
     gate and holds every event."""
     name: str
     gate: (RectangleGate | PolygonGate | EllipseGate | QuadrantGate
-           | BooleanGate | None) = None
+           | OffsetQuadrantGate | BooleanGate | None) = None
     children: list["GateNode"] = field(default_factory=list)
     #: the count another program reported for this population, when the
     #: tree was imported: what ours is checked against
@@ -231,6 +355,11 @@ class GateNode:
     #: it was imported by a rule not checked against the program that
     #: wrote it; empty when there is nothing to say
     note: str = ""
+    #: how the gate was fitted to this sample's own events, when each
+    #: sample was given its own (`milc.autogate`): the method and its
+    #: settings, as plain values. A copy of the tree given to another
+    #: sample then keeps that sample's own gate (see `keep_fits`).
+    fit: dict | None = None
 
     def add(self, child: "GateNode") -> "GateNode":
         child.parent = self
@@ -301,6 +430,10 @@ def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
                             g.inside, list(g.scales) if g.scales else None)
         elif isinstance(g, QuadrantGate):
             g = QuadrantGate(list(g.dims), g.x, g.y, g.quadrant, g.group, g.inside)
+        elif isinstance(g, OffsetQuadrantGate):
+            g = OffsetQuadrantGate(list(g.dims), list(g.center),
+                                   {a: list(g.arms[a]) for a in ARMS}, g.quadrant,
+                                   g.group, g.inside, list(g.scales) if g.scales else None)
         elif isinstance(g, BooleanGate):
             g = BooleanGate(g.op, list(g.operands), inside=g.inside)
         elif isinstance(g, TimeGate):
@@ -310,11 +443,20 @@ def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
                             np.array(g.codes, dtype=np.float64), list(g.nodes),
                             inside=g.inside)
         out = GateNode(node.name, g, note=node.note,
-                       reference_count=node.reference_count if keep_counts else None)
+                       reference_count=node.reference_count if keep_counts else None,
+                       fit=_plain_copy(node.fit))
         for child in node.children:
             out.add(clone(child))
         return out
     return clone(tree)
+
+
+def _plain_copy(value):
+    if isinstance(value, dict):
+        return {k: _plain_copy(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_copy(v) for v in value]
+    return value
 
 
 def _scale_out(scale):
@@ -331,6 +473,8 @@ def tree_to_dict(tree: GateNode) -> dict:
     out: dict = {"name": tree.name, "children": [tree_to_dict(c) for c in tree.children]}
     if tree.note:
         out["note"] = tree.note
+    if tree.fit:
+        out["fit"] = _plain_copy(tree.fit)
     g = tree.gate
     if isinstance(g, RectangleGate):
         out["gate"] = {"type": "rectangle", "dims": g.dims, "mins": g.mins,
@@ -348,6 +492,12 @@ def tree_to_dict(tree: GateNode) -> dict:
         out["gate"] = {"type": "quadrant", "dims": g.dims, "inside": g.inside,
                        "x": float(g.x), "y": float(g.y), "quadrant": g.quadrant,
                        "group": g.group}
+    elif isinstance(g, OffsetQuadrantGate):
+        out["gate"] = {"type": "offset_quadrant", "dims": g.dims, "inside": g.inside,
+                       "center": [float(v) for v in g.center],
+                       "arms": {a: [float(v) for v in g.arms[a]] for a in ARMS},
+                       "quadrant": g.quadrant, "group": g.group,
+                       "scales": [_scale_out(s) for s in (g.scales or [None, None])]}
     elif isinstance(g, BooleanGate):
         out["gate"] = {"type": "boolean", "op": g.op, "operands": list(g.operands)}
     elif isinstance(g, ClusterGate):
@@ -384,6 +534,12 @@ def tree_from_dict(d: dict) -> GateNode:
     elif g and g["type"] == "quadrant":
         gate = QuadrantGate(list(g["dims"]), float(g["x"]), float(g["y"]), g["quadrant"],
                             g.get("group", ""), g.get("inside", True))
+    elif g and g["type"] == "offset_quadrant":
+        scales = [_scale_in(s) for s in g.get("scales") or []]
+        gate = OffsetQuadrantGate(list(g["dims"]), [float(v) for v in g["center"]],
+                                  {a: [float(v) for v in g["arms"][a]] for a in ARMS},
+                                  g["quadrant"], g.get("group", ""), g.get("inside", True),
+                                  scales if any(s is not None for s in scales) else None)
     elif g and g["type"] == "boolean":
         gate = BooleanGate(g["op"], list(g["operands"]))
     elif g and g["type"] == "time":
@@ -395,7 +551,8 @@ def tree_from_dict(d: dict) -> GateNode:
                            [float(f) for f in g["factors"]],
                            codes.reshape(g["codes"]["shape"]).astype(np.float64),
                            [int(n) for n in g["nodes"]], inside=g.get("inside", True))
-    node = GateNode(d.get("name", ""), gate, note=d.get("note", ""))
+    node = GateNode(d.get("name", ""), gate, note=d.get("note", ""),
+                    fit=d.get("fit") or None)
     for child in d.get("children", []):
         node.add(tree_from_dict(child))
     return node
@@ -408,13 +565,14 @@ def depends_on(node: GateNode, name: str) -> bool:
 
 def follow_scale(tree: GateNode, dim: str, scale) -> bool:
     """A parameter's axis was given another scale: the polygons drawn on
-    it are tested on the new one, as their sides are now straight there.
+    it are tested on the new one, as their sides are now straight there,
+    and so are the arms of an offset quadrant.
     (An ellipse keeps the scale it was drawn on; it cannot be carried
     over without becoming another shape.) Says whether anything changed."""
     changed = False
     for node in tree.walk():
         g = node.gate
-        if isinstance(g, PolygonGate) and dim in g.dims:
+        if isinstance(g, (PolygonGate, OffsetQuadrantGate)) and dim in g.dims:
             scales = list(g.scales or [None, None])
             scales[g.dims.index(dim)] = scale
             g.scales = scales if any(x is not None for x in scales) else None
@@ -459,3 +617,22 @@ def keep_times(copy: GateNode, own: GateNode) -> None:
     new = [n.gate for n in copy.walk() if isinstance(n.gate, TimeGate)]
     for k, gate in enumerate(new):
         gate.intervals = [list(i) for i in had[k]] if k < len(had) else []
+
+
+def keep_fits(copy: GateNode, own: GateNode) -> list[GateNode]:
+    """`copy` is another sample's tree, given to this one. A gate fitted
+    on each sample's own events takes back the one this sample's `own`
+    tree had at the same path, if that was fitted the same way. The
+    populations it had none for are returned: their gates are still the
+    other sample's, to be fitted here."""
+    had = {n.path: n for n in own.walk() if n.fit}
+    missing = []
+    for node in copy.walk():
+        if not node.fit:
+            continue
+        mine = had.get(node.path)
+        if mine is not None and mine.fit == node.fit:
+            node.gate, node.note = copy_tree(GateNode("", mine.gate)).gate, mine.note
+        else:
+            missing.append(node)
+    return missing

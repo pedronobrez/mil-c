@@ -314,9 +314,18 @@ def _read_gate(el, transforms=None):
     if kind == "EllipsoidGate":
         return _read_ellipse(shape, dims, inside, transforms)
     if kind == "CurlyQuad":
-        # CytoML redraws the curve with a constant of its own choosing
-        # (cytolib src/gate.cpp, CurlyQuadGate::interpolate: `multiplier =
-        # 0.001`) and FlowKit does not read it at all: nothing to go by
+        # The workspace holds the crossing point and the corner, as for a
+        # plain quadrant (CytoML, winFlowJoWorkspace.hpp,
+        # getGate(wsCurlyQuadGateNode&): one min or max on each dimension),
+        # and not the curve. CytoML redraws the curve with a constant of
+        # its own choosing (cytolib src/gate.cpp, CurlyQuadGate::
+        # interpolate: 40 points, `multiplier = 0.001`) and FlowKit does
+        # not read it at all (no CurlyQuad in wsp_gate_constructor_lut):
+        # nothing to go by. It is not `gating.OffsetQuadrantGate` either,
+        # whose arms are straight; how FlowJo writes a quadrant with
+        # straight arms moved is in no reader looked at — its polygons
+        # carry a `quadId`, -1 in every workspace seen, which may be it —
+        # and such corners, if polygons, are read as the polygons they are.
         raise _Unread("the curve of a curly quadrant is not written in the workspace, "
                       "and no reader of the format is known to reproduce it")
     raise _Unread(f"a kind of gate ({kind}) that is not read")
