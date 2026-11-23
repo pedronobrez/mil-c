@@ -21,7 +21,8 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from .. import density, figures
 from ..compensation import PREFIXES
-from ..gating import GateNode, PolygonGate, RectangleGate
+from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
+                      PolygonGate, QuadrantGate, RectangleGate, depends_on)
 from ..session import Session
 from ..transforms import Biex, decade_ticks
 from . import palette, style, theme
@@ -36,7 +37,9 @@ class _DrawBox(pg.ViewBox):
     """Pans and zooms as usual; in a drawing mode the mouse draws."""
 
     sigRectangle = QtCore.pyqtSignal(float, float, float, float)
+    sigEllipse = QtCore.pyqtSignal(float, float, float, float)
     sigPolygon = QtCore.pyqtSignal(object)
+    sigPoint = QtCore.pyqtSignal(float, float)
 
     def __init__(self):
         super().__init__()
@@ -61,23 +64,33 @@ class _DrawBox(pg.ViewBox):
         self._shape.setData(np.asarray(xs, dtype=float), np.asarray(ys, dtype=float))
 
     def mouseDragEvent(self, ev, axis=None):
-        if self.mode != "rect" or ev.button() != QtCore.Qt.MouseButton.LeftButton:
+        if self.mode not in ("rect", "ellipse") or ev.button() != QtCore.Qt.MouseButton.LeftButton:
             return super().mouseDragEvent(ev, axis)
         ev.accept()
         a = self.mapSceneToView(ev.buttonDownScenePos())
         b = self.mapSceneToView(ev.scenePos())
-        self._outline([a.x(), b.x(), b.x(), a.x(), a.x()], [a.y(), a.y(), b.y(), b.y(), a.y()])
+        if self.mode == "ellipse":
+            t = np.linspace(0, 2 * np.pi, 73)
+            self._outline((a.x() + b.x()) / 2 + abs(b.x() - a.x()) / 2 * np.cos(t),
+                          (a.y() + b.y()) / 2 + abs(b.y() - a.y()) / 2 * np.sin(t))
+        else:
+            self._outline([a.x(), b.x(), b.x(), a.x(), a.x()],
+                          [a.y(), a.y(), b.y(), b.y(), a.y()])
         if ev.isFinish():
+            signal = self.sigEllipse if self.mode == "ellipse" else self.sigRectangle
             self.cancel()
             if a.x() != b.x():
-                self.sigRectangle.emit(min(a.x(), b.x()), min(a.y(), b.y()),
-                                       max(a.x(), b.x()), max(a.y(), b.y()))
+                signal.emit(min(a.x(), b.x()), min(a.y(), b.y()),
+                            max(a.x(), b.x()), max(a.y(), b.y()))
 
     def mouseClickEvent(self, ev):
-        if self.mode != "poly" or ev.button() != QtCore.Qt.MouseButton.LeftButton:
+        if self.mode not in ("poly", "quad") or ev.button() != QtCore.Qt.MouseButton.LeftButton:
             return super().mouseClickEvent(ev)
         ev.accept()
         p = self.mapSceneToView(ev.scenePos())
+        if self.mode == "quad":
+            self.sigPoint.emit(p.x(), p.y())
+            return
         if ev.double() and len(self._points) >= 3:
             points = np.array(self._points)
             self.cancel()
@@ -125,6 +138,16 @@ class GatesTab(QtWidgets.QWidget):
                        (self.poly_button, "Click each corner; double-click to close.")):
             b.setCheckable(True)
             b.setToolTip(tip)
+        self.ellipse_button = QtWidgets.QPushButton("Ellipse")
+        self.ellipse_button.setCheckable(True)
+        self.ellipse_button.setToolTip("Drag the box it fits in; then turn and stretch it by its handles.")
+        self.quad_button = QtWidgets.QPushButton("Quadrant")
+        self.quad_button.setCheckable(True)
+        self.quad_button.setToolTip("Click where the two lines cross: four populations, "
+                                    "named by which side of each line they are on.")
+        self.combine_button = QtWidgets.QPushButton("Combine…")
+        self.combine_button.setToolTip("A population made of others of this one: the events "
+                                       "in all of them, in any of them, or in none of them.")
         self.rename_button = QtWidgets.QPushButton("Rename")
         self.delete_button = QtWidgets.QPushButton("Delete")
         self.reset_button = QtWidgets.QPushButton("Back to the workspace's gates")
@@ -137,8 +160,11 @@ class GatesTab(QtWidgets.QWidget):
         tools = QtWidgets.QGridLayout()
         tools.addWidget(self.rect_button, 0, 0)
         tools.addWidget(self.poly_button, 0, 1)
-        tools.addWidget(self.rename_button, 1, 0)
-        tools.addWidget(self.delete_button, 1, 1)
+        tools.addWidget(self.ellipse_button, 0, 2)
+        tools.addWidget(self.quad_button, 1, 0)
+        tools.addWidget(self.combine_button, 1, 1, 1, 2)
+        tools.addWidget(self.rename_button, 2, 0)
+        tools.addWidget(self.delete_button, 2, 1, 1, 2)
         left = QtWidgets.QVBoxLayout()
         left.addWidget(self._eyebrow("Samples"))
         left.addWidget(self.samples, 2)
@@ -211,10 +237,15 @@ class GatesTab(QtWidgets.QWidget):
         self.tree.currentItemChanged.connect(self._node_chosen)
         self.x_axis.currentIndexChanged.connect(self._axes_changed)
         self.y_axis.currentIndexChanged.connect(self._axes_changed)
-        self.rect_button.toggled.connect(lambda on: self._tool("rect", on))
-        self.poly_button.toggled.connect(lambda on: self._tool("poly", on))
+        self._tools = {"rect": self.rect_button, "poly": self.poly_button,
+                       "ellipse": self.ellipse_button, "quad": self.quad_button}
+        for mode, button in self._tools.items():
+            button.toggled.connect(lambda on, m=mode: self._tool(m, on))
         self.box.sigRectangle.connect(self._rectangle_drawn)
+        self.box.sigEllipse.connect(self._ellipse_drawn)
         self.box.sigPolygon.connect(self._polygon_drawn)
+        self.box.sigPoint.connect(self._quadrant_drawn)
+        self.combine_button.clicked.connect(self._ask_combination)
         self.rename_button.clicked.connect(self.rename_selected)
         self.delete_button.clicked.connect(self.delete_selected)
         self.reset_button.clicked.connect(self.reset)
@@ -473,7 +504,7 @@ class GatesTab(QtWidgets.QWidget):
         # drawn; staying on it — after drawing one more — means staying put
         for child in ([] if self._keep_axes else self.node.children):
             dims = child.gate.dims
-            if self.x_axis.findData(dims[0]) >= 0:
+            if dims and self.x_axis.findData(dims[0]) >= 0:
                 self.set_axes(dims[0], dims[1] if len(dims) > 1 else HISTOGRAM)
                 break
         else:
@@ -574,7 +605,10 @@ class GatesTab(QtWidgets.QWidget):
                     yticks=decade_ticks(self._scale(ydim)) if self._scale(ydim) else None)
         self.plot.setXRange(*xr, padding=0.01)
         self.plot.setYRange(*yr, padding=0.01)
+        self._crossings = []
         self._draw_gates(xdim, ydim, xr, yr)
+        self._draw_quadrants(xdim, ydim, xr, yr, self.sample.masks(),
+                             max(int(self.sample.mask(self.node.path).sum()), 1))
         parent = self.node.parent
         of = (f", {100 * rows.size / max(int(self.sample.mask(parent.path).sum()), 1):.1f}% "
               f"of {parent.name if parent.gate is not None else 'all events'}"
@@ -615,6 +649,18 @@ class GatesTab(QtWidgets.QWidget):
                     pts = pts[:, ::-1]
                 item = pg.PolyLineROI(pts.tolist(), closed=True, pen=pen, hoverPen=hover)
                 anchor = (pts[:, 0].min(), pts[:, 1].max())
+            elif (isinstance(g, EllipseGate) and ydim != HISTOGRAM
+                    and g.dims == [xdim, ydim]):
+                # pyqtgraph turns an ellipse about its corner, not its centre
+                w, h = 2 * g.radii[0], 2 * g.radii[1]
+                c, sn = np.cos(g.angle), np.sin(g.angle)
+                corner = [g.center[0] - (w / 2 * c - h / 2 * sn),
+                          g.center[1] - (w / 2 * sn + h / 2 * c)]
+                item = pg.EllipseROI(corner, [w, h], angle=float(np.degrees(g.angle)),
+                                     pen=pen, hoverPen=hover)
+                anchor = (g.center[0] - g.radii[0], g.center[1] + g.radii[1])
+            elif isinstance(g, QuadrantGate):
+                continue   # the four corners of a crossing are drawn once, below
             elif isinstance(g, RectangleGate):
                 bounds = dict(zip(g.dims, zip(g.mins, g.maxs)))
                 if xdim in bounds and (ydim in bounds or len(g.dims) == 1):
@@ -640,6 +686,53 @@ class GatesTab(QtWidgets.QWidget):
             item.sigRegionChangeFinished.connect(
                 lambda _=None, c=child, it=item: self._gate_moved(c, it))
             self._overlays.append((child, item, label))
+
+    def _draw_quadrants(self, xdim, ydim, xr, yr, masks, here) -> None:
+        """One crossing for each set of four made together, with each
+        corner's share written in it."""
+        if ydim == HISTOGRAM:
+            return
+        groups: dict[str, list[GateNode]] = {}
+        for child in self.node.children:
+            g = child.gate
+            if isinstance(g, QuadrantGate) and set(g.dims) == {xdim, ydim}:
+                groups.setdefault(g.group or child.name, []).append(child)
+        pen = pg.mkPen(theme.foreground(), width=1.6)
+        hover = pg.mkPen(theme.accent(), width=2.2)
+        for members in groups.values():
+            g = members[0].gate
+            flipped = g.dims[0] != xdim
+            px, py = self._to_display([[g.x, g.y] if not flipped else [g.y, g.x]],
+                                      [xdim, ydim])[0]
+            vertical = pg.InfiniteLine(px, angle=90, movable=True, pen=pen, hoverPen=hover)
+            horizontal = pg.InfiniteLine(py, angle=0, movable=True, pen=pen, hoverPen=hover)
+            labels = []
+            for child in members:
+                high_x, high_y = QUADRANTS[child.gate.quadrant]
+                if flipped:
+                    high_x, high_y = high_y, high_x
+                n = int(masks[child.path].sum())
+                label = pg.TextItem(f"{child.name}  {100 * n / here:.1f}%",
+                                    anchor=(1 if high_x else 0, 0 if high_y else 1),
+                                    color=theme.foreground(),
+                                    fill=pg.mkBrush(theme.legend_brush().color()))
+                label.setPos(xr[1] if high_x else xr[0], yr[1] if high_y else yr[0])
+                self.plot.addItem(label)
+                labels.append((child, label))
+            for line in (vertical, horizontal):
+                self.plot.addItem(line)
+                line.sigPositionChangeFinished.connect(
+                    lambda _=None, m=members, v=vertical, h=horizontal:
+                    self._crossing_moved(m, v.value(), h.value()))
+            self._crossings.append((members, vertical, horizontal, labels))
+
+    def _crossing_moved(self, members, px: float, py: float) -> None:
+        xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
+        sx, sy = self._to_stored([[px, py]], [xdim, ydim])[0]
+        for child in members:
+            g = child.gate
+            g.x, g.y = (float(sx), float(sy)) if g.dims[0] == xdim else (float(sy), float(sx))
+        self._commit(redraw=False)
 
     def _to_display(self, vertices, dims) -> np.ndarray:
         out = np.array(vertices, dtype=np.float64)
@@ -667,7 +760,13 @@ class GatesTab(QtWidgets.QWidget):
         """A handle was let go: the gate is where the outline now is."""
         g = child.gate
         xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
-        if isinstance(item, pg.PolyLineROI):
+        if isinstance(item, pg.EllipseROI):
+            w, h = item.size().x(), item.size().y()
+            centre = item.mapToParent(QtCore.QPointF(w / 2, h / 2))
+            g.center = [float(centre.x()), float(centre.y())]
+            g.radii = [abs(float(w)) / 2, abs(float(h)) / 2]
+            g.angle = float(np.radians(item.angle()))
+        elif isinstance(item, pg.PolyLineROI):
             pts = np.array([[p.x(), p.y()] for _, p in item.getLocalHandlePositions()])
             pts += np.array([item.pos().x(), item.pos().y()])
             dims = [xdim, ydim]
@@ -691,23 +790,27 @@ class GatesTab(QtWidgets.QWidget):
     # --- making, renaming, deleting ---------------------------------------------------
 
     def _tool(self, mode: str, on: bool) -> None:
-        other = self.poly_button if mode == "rect" else self.rect_button
+        hints = {"rect": "Drag across the events to gate",
+                 "poly": "Click each corner; double-click to close. Esc cancels.",
+                 "ellipse": "Drag the box the ellipse fits in",
+                 "quad": "Click where the two lines should cross"}
         if on:
-            other.setChecked(False)
-            if mode == "poly" and self.y_axis.currentData() == HISTOGRAM:
-                self.sigStatus.emit("A polygon needs two parameters: choose a Y axis")
-                self.poly_button.setChecked(False)
+            for other, button in self._tools.items():
+                if other != mode:
+                    button.setChecked(False)
+            if mode != "rect" and self.y_axis.currentData() == HISTOGRAM:
+                self.sigStatus.emit("That gate needs two parameters: choose a Y axis")
+                self._tools[mode].setChecked(False)
                 return
             self.box.set_mode(mode)
-            self.sigStatus.emit("Drag across the events to gate" if mode == "rect" else
-                                "Click each corner; double-click to close. Esc cancels.")
+            self.sigStatus.emit(hints[mode])
         elif self.box.mode == mode:
             self.box.set_mode(None)
             self.sigStatus.emit("")
 
     def _stop_drawing(self) -> None:
-        self.rect_button.setChecked(False)
-        self.poly_button.setChecked(False)
+        for button in self._tools.values():
+            button.setChecked(False)
         self.box.set_mode(None)
 
     def _ask_name(self) -> str | None:
@@ -727,6 +830,16 @@ class GatesTab(QtWidgets.QWidget):
         name = self._ask_name()
         if name:
             self.add_rectangle(x0, y0, x1, y1, name)
+
+    def _ellipse_drawn(self, x0, y0, x1, y1) -> None:
+        self._stop_drawing()
+        name = self._ask_name()
+        if name:
+            self.add_ellipse((x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, name)
+
+    def _quadrant_drawn(self, x, y) -> None:
+        self._stop_drawing()
+        self.add_quadrants(x, y)
 
     def _polygon_drawn(self, points) -> None:
         self._stop_drawing()
@@ -754,6 +867,48 @@ class GatesTab(QtWidgets.QWidget):
                            scales=scales if any(s is not None for s in scales) else None)
         return self._add(gate, name)
 
+    def add_ellipse(self, cx, cy, rx, ry, name: str, angle: float = 0.0) -> GateNode:
+        """Centre and half-axes in the plot's own coordinates; `angle` in
+        radians, counter-clockwise."""
+        xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
+        scales = [self._scale(xdim), self._scale(ydim)]
+        gate = EllipseGate([xdim, ydim], [float(cx), float(cy)],
+                           [abs(float(rx)), abs(float(ry))], float(angle),
+                           scales=scales if any(s is not None for s in scales) else None)
+        return self._add(gate, name)
+
+    def add_quadrants(self, x, y) -> list[GateNode]:
+        """Four populations around the point, named by the side of each
+        line they are on: `CD4+ CD8-`."""
+        xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
+        sx, sy = self._to_stored([[x, y]], [xdim, ydim])[0]
+        short = [self.x_axis.currentText().split()[0], self.y_axis.currentText().split()[0]]
+        group = f"{xdim}|{ydim}|{len(self.node.children)}"
+        made = []
+        for quadrant, (high_x, high_y) in QUADRANTS.items():
+            name = f"{short[0]}{'+' if high_x else '-'} {short[1]}{'+' if high_y else '-'}"
+            made.append(self.node.add(GateNode(
+                self._free_name(name),
+                QuadrantGate([xdim, ydim], float(sx), float(sy), quadrant, group))))
+        self._commit()
+        return made
+
+    def add_combination(self, op: str, names: list[str], name: str) -> GateNode:
+        """`op` is AND, OR or NOT; `names` are populations of the one shown."""
+        return self._add(BooleanGate(op, list(names)), name)
+
+    def _ask_combination(self) -> None:
+        if self.node is None:
+            return
+        sisters = [c.name for c in self.node.children]
+        if not sisters:
+            self.sigStatus.emit("There is nothing to combine yet: gate this population first")
+            return
+        dialog = CombineDialog(sisters, self)
+        if dialog.exec() and dialog.chosen():
+            self.add_combination(dialog.op.currentData(), dialog.chosen(),
+                                 dialog.name.text().strip() or dialog.suggestion())
+
     def _add(self, gate, name: str) -> GateNode:
         node = self.node.add(GateNode(self._free_name(name), gate))
         self._commit()
@@ -767,7 +922,12 @@ class GatesTab(QtWidgets.QWidget):
             self.rename(name.strip())
 
     def rename(self, name: str) -> None:
+        old, parent = self.node.name, self.node.parent
         self.node.name = name
+        # a combination names what it is made of: it follows the new name
+        for sister in (parent.children if parent is not None else []):
+            if depends_on(sister, old):
+                sister.gate.operands = [name if o == old else o for o in sister.gate.operands]
         self._commit()
 
     def delete_selected(self) -> None:
@@ -777,6 +937,10 @@ class GatesTab(QtWidgets.QWidget):
             return
         parent = node.parent
         parent.children.remove(node)
+        # and what was made of it, which would otherwise be left empty
+        for sister in list(parent.children):
+            if depends_on(sister, node.name):
+                parent.children.remove(sister)
         self.node = parent
         self._commit()
 
@@ -820,4 +984,55 @@ class GatesTab(QtWidgets.QWidget):
         here = max(int(masks[self.node.path].sum()), 1)
         for child, _item, label in self._overlays:
             label.setText(f"{child.name}  {100 * int(masks[child.path].sum()) / here:.1f}%")
+        for _members, _v, _h, labels in getattr(self, "_crossings", []):
+            for child, label in labels:
+                label.setText(f"{child.name}  {100 * int(masks[child.path].sum()) / here:.1f}%")
         self.reset_button.setEnabled(True)
+
+
+class CombineDialog(QtWidgets.QDialog):
+    """A population made of others: which, and how."""
+
+    WORDS = {AND: "and", OR: "or", NOT: "not"}
+
+    def __init__(self, sisters: list[str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Combine populations")
+        self.op = QtWidgets.QComboBox()
+        self.op.addItem("In all of them (AND)", AND)
+        self.op.addItem("In any of them (OR)", OR)
+        self.op.addItem("In none of them (NOT)", NOT)
+        self.list = QtWidgets.QListWidget()
+        for name in sisters:
+            item = QtWidgets.QListWidgetItem(name)
+            item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(QtCore.Qt.CheckState.Unchecked)
+            self.list.addItem(item)
+        self.name = QtWidgets.QLineEdit()
+        self.box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                              | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        self.box.accepted.connect(self.accept)
+        self.box.rejected.connect(self.reject)
+        form = QtWidgets.QFormLayout(self)
+        form.addRow("Events", self.op)
+        form.addRow(self.list)
+        form.addRow("Name", self.name)
+        form.addRow(self.box)
+        self.op.currentIndexChanged.connect(self._show)
+        self.list.itemChanged.connect(self._show)
+        self._show()
+
+    def chosen(self) -> list[str]:
+        return [self.list.item(i).text() for i in range(self.list.count())
+                if self.list.item(i).checkState() == QtCore.Qt.CheckState.Checked]
+
+    def suggestion(self) -> str:
+        names, op = self.chosen(), self.op.currentData()
+        if op == NOT:
+            return "not " + " or ".join(names) if names else ""
+        return f" {self.WORDS[op]} ".join(names)
+
+    def _show(self, *_) -> None:
+        self.name.setPlaceholderText(self.suggestion())
+        self.box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setEnabled(
+            bool(self.chosen()))

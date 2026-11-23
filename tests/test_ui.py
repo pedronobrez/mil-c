@@ -490,3 +490,94 @@ def test_overlays_in_gates(app, folder):
     assert d.colormap.isVisibleTo(d)
     d.close()
     w.close()
+
+
+def test_ellipse_quadrants_and_combinations_in_gates(app, folder):
+    from milc.gating import AND, NOT, OR
+    from milc.session import Session
+    from milc.transforms import Biex
+    from milc.ui import worker
+    from milc.ui.gates_tab import CombineDialog, HISTOGRAM
+    from milc.ui.shell import MainShell
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    for _ in range(3):
+        worker.wait_all()
+        app.processEvents()
+    s = g.sample
+    t = Biex()
+    pe, fitc = t(s.column("Comp-PE-A")), t(s.column("Comp-FITC-A"))
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    cx, cy = float(np.median(pe)), float(np.median(fitc))   # where the events are
+
+    # an ellipse, drawn in the plot's coordinates
+    g.add_ellipse(cx, cy, 0.20, 0.12, "Blob")
+    expected = ((pe - cx) / 0.20) ** 2 + ((fitc - cy) / 0.12) ** 2 <= 1
+    assert s.count("Blob") == expected.sum() > 10
+    child, roi, label = next(o for o in g._overlays if o[0].name == "Blob")
+    # drawn where it is: the outline's centre is the gate's centre
+    centre = roi.mapToParent(QtCore.QPointF(roi.size().x() / 2, roi.size().y() / 2))
+    assert centre.x() == pytest.approx(cx) and centre.y() == pytest.approx(cy)
+    # turning it by its handle turns the gate
+    roi.setAngle(90, center=(0.5, 0.5))
+    g._gate_moved(child, roi)
+    assert child.gate.angle == pytest.approx(np.pi / 2) and child.gate.center == pytest.approx([cx, cy])
+    turned = ((pe - cx) / 0.12) ** 2 + ((fitc - cy) / 0.20) ** 2 <= 1
+    assert g.sample.count("Blob") == turned.sum()
+
+    # a crossing: four populations that share every event between them
+    made = g.add_quadrants(0.5, 0.5)
+    assert [n.name for n in made] == ["CD4- CD8+", "CD4+ CD8+", "CD4+ CD8-", "CD4- CD8-"]
+    counts = [g.sample.count(n.path) for n in made]
+    assert sum(counts) == len(s) and counts[1] == ((pe >= 0.5) & (fitc >= 0.5)).sum()
+    assert len(g._crossings) == 1 and len(g._crossings[0][3]) == 4
+    # moving the crossing moves all four
+    members, vertical, horizontal, _ = g._crossings[0]
+    g._crossing_moved(members, 0.6, 0.4)
+    assert g.sample.count("CD4+ CD8+") == ((pe >= 0.6) & (fitc >= 0.4)).sum()
+    assert sum(g.sample.count(n.path) for n in made) == len(s)
+    # seen from the other side, the lines are the same lines
+    g.set_axes("Comp-FITC-A", "Comp-PE-A")
+    assert len(g._crossings) == 1
+    assert g._crossings[0][1].value() == pytest.approx(0.4, abs=1e-6)
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+
+    # combinations
+    d = CombineDialog([c.name for c in g.node.children], g)
+    assert not d.box.button(d.box.StandardButton.Ok).isEnabled()
+    d.list.item(0).setCheckState(QtCore.Qt.CheckState.Checked)
+    d.list.item(1).setCheckState(QtCore.Qt.CheckState.Checked)
+    assert d.suggestion() == "Blob and CD4- CD8+"
+    d.close()
+    g.add_combination(OR, ["CD4+ CD8-", "CD4+ CD8+"], "CD4+")
+    assert g.sample.count("CD4+") == (pe >= 0.6).sum()
+    g.add_combination(AND, ["Blob", "CD4+"], "Blob in CD4+")
+    g.add_combination(NOT, ["CD4+"], "CD4-")
+    assert g.sample.count("CD4-") == (pe < 0.6).sum()
+    assert g.sample.count("Blob in CD4+") == (turned & (pe >= 0.6)).sum()
+    assert "CD4+" in w.session.populations() and w.statistics.chosen_populations()[-1] == "CD4-"
+
+    # a combination follows a renamed sister, and goes with a deleted one
+    g.select("CD4+ CD8+")
+    g.rename("Double positive")
+    assert g.sample.count("CD4+") == (pe >= 0.6).sum()
+    g.select("CD4+")
+    g.delete_selected()
+    assert sorted(w.session.populations()) == sorted(
+        ["Blob", "CD4- CD8+", "Double positive", "CD4+ CD8-", "CD4- CD8-"])
+
+    # a gate of two parameters is not offered on a histogram
+    g.set_axes("Comp-PE-A", HISTOGRAM)
+    g.quad_button.setChecked(True)
+    assert not g.quad_button.isChecked() and g.box.mode is None
+    w.close()
+
+    again = Session()
+    again.open_folder(folder)
+    first = again.usable()[0]
+    assert again.load(first).count("Double positive") == ((pe >= 0.6) & (fitc >= 0.4)).sum()
+    assert again.load(first).count("Blob") == turned.sum()

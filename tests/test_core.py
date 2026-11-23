@@ -586,3 +586,66 @@ def test_overlay_figures(tmp_path):
     contour = figures.OverlayContent(lines, "CD4", "CD8", xrange=(0, 1), yrange=(0, 1))
     assert not contour.is_histogram
     assert figures.preview_png(contour, style, dpi=40)[:4] == b"\x89PNG"
+
+
+# --- ellipse, quadrant and combined gates -----------------------------------------
+
+def test_ellipse_quadrant_and_boolean_gates():
+    from milc.gating import (AND, NOT, OR, BooleanGate, EllipseGate, QuadrantGate,
+                             copy_tree, tree_from_dict, tree_to_dict)
+    from milc.transforms import Biex
+    rng = np.random.default_rng(0)
+    cols = {"a": rng.uniform(-10, 10, 4000), "b": rng.uniform(-10, 10, 4000)}
+    col = cols.__getitem__
+    a, b = cols["a"], cols["b"]
+
+    # a circle, an ellipse along an axis, and the same ellipse turned
+    assert np.array_equal(EllipseGate(["a", "b"], [0, 0], [5, 5]).contains(col),
+                          a ** 2 + b ** 2 <= 25)
+    flat = EllipseGate(["a", "b"], [1, -2], [6, 2]).contains(col)
+    assert np.array_equal(flat, ((a - 1) / 6) ** 2 + ((b + 2) / 2) ** 2 <= 1)
+    upright = EllipseGate(["a", "b"], [1, -2], [6, 2], angle=np.pi / 2).contains(col)
+    assert np.array_equal(upright, ((a - 1) / 2) ** 2 + ((b + 2) / 6) ** 2 <= 1)
+    assert flat.sum() == pytest.approx(upright.sum(), rel=0.1)   # same area, turned
+    assert np.array_equal(EllipseGate(["a", "b"], [0, 0], [5, 5], inside=False).contains(col),
+                          a ** 2 + b ** 2 > 25)
+    # on a scale, it is the drawn ellipse that counts
+    t = Biex()
+    raw = {"a": rng.uniform(0, 20000, 2000), "b": rng.uniform(0, 20000, 2000)}
+    drawn = EllipseGate(["a", "b"], [0.6, 0.6], [0.1, 0.05], scales=[t, t]).contains(raw.__getitem__)
+    assert np.array_equal(drawn, ((t(raw["a"]) - 0.6) / 0.1) ** 2 + ((t(raw["b"]) - 0.6) / 0.05) ** 2 <= 1)
+
+    # the four corners of a crossing: every event in exactly one of them
+    corners = {q: QuadrantGate(["a", "b"], 2.0, -1.0, q, "g").contains(col)
+               for q in ("Q1", "Q2", "Q3", "Q4")}
+    assert np.array_equal(sum(m.astype(int) for m in corners.values()), np.ones(4000))
+    assert np.array_equal(corners["Q2"], (a >= 2) & (b >= -1))    # upper right: both high
+    assert np.array_equal(corners["Q1"], (a < 2) & (b >= -1))     # upper left
+    assert np.array_equal(corners["Q4"], (a < 2) & (b < -1))      # lower left
+
+    # combinations of sisters, inside their parent
+    root = GateNode("s")
+    parent = root.add(GateNode("P", RectangleGate(["a"], [-8], [8])))
+    parent.add(GateNode("both", BooleanGate(AND, ["X", "Y"])))    # listed before what it uses
+    parent.add(GateNode("X", RectangleGate(["a"], [0], [None])))
+    parent.add(GateNode("Y", RectangleGate(["b"], [0], [None])))
+    parent.add(GateNode("either", BooleanGate(OR, ["X", "Y"])))
+    parent.add(GateNode("neither", BooleanGate(NOT, ["X", "Y"])))
+    parent.add(GateNode("lost", BooleanGate(AND, ["X", "gone"])))
+    m = root.apply(col, 4000)
+    p = (a >= -8) & (a < 8)
+    assert np.array_equal(m["P/both"], p & (a >= 0) & (b >= 0))
+    assert np.array_equal(m["P/either"], p & ((a >= 0) | (b >= 0)))
+    assert np.array_equal(m["P/neither"], p & ~((a >= 0) | (b >= 0)))   # never outside the parent
+    assert m["P/either"].sum() + m["P/neither"].sum() == p.sum()
+    assert not m["P/lost"].any()                                 # made of something that is gone
+
+    # all of it survives a copy and a file
+    parent.add(GateNode("E", EllipseGate(["a", "b"], [0.5, 0.5], [0.2, 0.1], 0.3, scales=[t, None])))
+    parent.add(GateNode("Q", QuadrantGate(["a", "b"], 1.0, 2.0, "Q3", "g1")))
+    for other in (copy_tree(root), tree_from_dict(tree_to_dict(root))):
+        assert tree_to_dict(other) == tree_to_dict(root)
+        again = other.apply(col, 4000)
+        assert all(np.array_equal(again[k], v) for k, v in root.apply(col, 4000).items())
+    e = tree_from_dict(tree_to_dict(root)).find("P/E").gate
+    assert isinstance(e.scales[0], Biex) and e.scales[1] is None and e.angle == 0.3

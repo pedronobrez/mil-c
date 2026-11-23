@@ -58,10 +58,10 @@ material de divulgação.
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Retângulo, polígono, faixa (1D) | S | **S** | todos |
-| Elipse | S | N | FCS Express, CellEngine, Kaluza, Floreada |
-| Quadrante | S | N | idem |
+| Elipse | S | **S** (desenhada aqui; não lida do .wsp) | FCS Express, CellEngine, Kaluza, Floreada |
+| Quadrante | S | **S** (idem) | idem |
 | Quadrante deslocado, angulado, curvo | S | N | Kaluza (parte) |
-| Booleanos (E / OU / NÃO) | S | N | FCS Express, Cytobank, Kaluza |
+| Booleanos (E / OU / NÃO) | S | **S** | FCS Express, Cytobank, Kaluza |
 | Autogate por contorno, gate magnético | S | N | Kaluza (contorno) |
 | Autogating por modelo | P (plugins) | N | OMIQ, Cytobank, FlowLogic, openCyto |
 | Gate sobre clusters | P (plugin) | P (laço com estatísticas, sem virar população) | FCS Express, OMIQ, Cytobank |
@@ -195,7 +195,8 @@ Sem isto, o programa não substitui o FlowJo no dia a dia, só no fim da anális
    colunas de anotação junto. É o que alimenta todo gráfico de comparação.
 2. ~~**Sobreposição de amostras.**~~ **Feito** (aba Gates, com várias amostras selecionadas). Histogramas e contornos de várias amostras ou grupos num mesmo
    gráfico, com deslocamento. É como se confere um FMO ou um controle.
-3. **Gates que faltam.** Elipse, quadrante e booleanos (E / OU / NÃO).
+3. ~~**Gates que faltam.**~~ **Feito**: elipse, quadrante e booleanos (E / OU / NÃO), desenhados no
+   programa. Ler elipses e quadrantes de um workspace do FlowJo continua por fazer.
 4. **Escala por parâmetro.** Ajustar a biexponencial (largura, décadas negativas), e oferecer
    logicle e arcsinh também na visualização.
 5. **Ver e editar a matriz de compensação.**

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .compensation import Compensation
-from .gating import GateNode, PolygonGate, RectangleGate
+from .gating import GateNode, PolygonGate, RectangleGate, tree_to_dict
 from .transforms import Biex, Linear
 
 
@@ -141,16 +141,13 @@ def read_wsp(path: str) -> Workspace:
 
 def signature(tree: GateNode) -> list:
     """A gating tree as plain values, to tell whether two are the same."""
-    out = []
-    for node in tree.walk():
-        g = node.gate
-        if g is None:
-            continue
-        shape = ([np.asarray(g.vertices).round(6).tolist(),
-                  [repr(s) for s in (g.scales or [])]] if isinstance(g, PolygonGate)
-                 else [g.mins, g.maxs])
-        out.append((node.path, type(g).__name__, list(g.dims), g.inside, shape))
-    return out
+    def plain(d: dict) -> dict:
+        gate = dict(d.get("gate") or {})
+        if "vertices" in gate:
+            gate["vertices"] = np.round(gate["vertices"], 6).tolist()
+        return {"name": d["name"], "gate": gate,
+                "children": [plain(c) for c in d["children"]]}
+    return [plain(tree_to_dict(c)) for c in tree.children]
 
 
 def _int(text) -> int | None:

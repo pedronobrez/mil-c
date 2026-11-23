@@ -47,7 +47,11 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - Select several samples to overlay them: histograms, on one baseline or staggered, or contours
   — a colour for each sample or for each value of one of your columns.
 - The gating tree with events and percent of parent; choose a population to see it.
-- Draw a rectangle, a polygon or a range; drag its handles to move it; rename; delete.
+- Draw a rectangle, a polygon, an ellipse or a range; drag its handles to move, stretch or turn
+  it; rename; delete.
+- A quadrant gate: one click where two lines cross makes four populations, and moving a line
+  moves them all.
+- Combine populations: the events in all of them, in any of them, or in none of them.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
 - What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
 
@@ -80,9 +84,9 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 
 ## What it does not do
 
-- **Gating is the basics.** Rectangles, polygons and ranges, drawn here or read from a FlowJo
-  workspace. No ellipses, quadrants or boolean gates, no compensation editor, no overlays of
-  several samples on one plot.
+- **Gating is not all of FlowJo's.** Rectangles, polygons, ellipses, quadrants, ranges and
+  boolean combinations are drawn here; from a FlowJo workspace only rectangles and polygons are
+  read. No offset or curly quadrants, no automatic gates, no compensation editor.
 - **No statistics between groups.** Means and standard deviations, no test.
 - **One figure at a time.** No multi-panel plates.
 - **Its maps are not FlowJo's maps point for point.** See below.
