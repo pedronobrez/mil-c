@@ -23,8 +23,8 @@ import numpy as np
 
 from .compensation import Compensation, strip_prefix
 from .gating import (AND, NOT, OR, BooleanGate, ClusterGate, EllipseGate, GateNode,
-                     PolygonGate, QuadrantGate, RectangleGate, TimeGate)
-from .transforms import Biex, Linear, Logicle, same
+                     OffsetQuadrantGate, PolygonGate, QuadrantGate, RectangleGate, TimeGate)
+from .transforms import Biex, Linear, Logicle, display_range, same
 
 WSP, GATINGML = "wsp", "gatingml"
 FORMATS = {WSP: "FlowJo workspace", GATINGML: "Gating-ML 2.0"}
@@ -300,6 +300,32 @@ def prepare(sample: ExportSample, report: Report) -> GateNode:
             if g.op not in (AND, OR, NOT):
                 raise Unwritable(f"a combination ({g.op}) that is not and, or, not")
             return [GateNode(name, BooleanGate(g.op, operands))]
+        if _is(g, OffsetQuadrantGate):
+            # neither format has a quadrant whose arms tilt: the corner is
+            # the polygon its two arms cut out of a box well beyond the axes
+            scales = scales_of(g)
+            box = []
+            for dim, scale in zip(g.dims, scales):
+                if scale is None:
+                    top = sample.range_of(sample.dimension(dim)[0])
+                    box.append((-top, 2.0 * top))
+                else:
+                    lo, hi = display_range(scale)
+                    far = (lo - (hi - lo), hi + (hi - lo))
+                    # a scale that ends (FlowJo's biexponential) cannot say
+                    # where a point beyond its ends is: the box stops there
+                    back = on(scale, off(scale, np.array(far)))
+                    box.append(far if np.allclose(back, far, atol=1e-6 * (hi - lo))
+                               else (lo, hi))
+            shape = g.corner(*box)
+            if shape is None:
+                raise Unwritable("the centre of its quadrant is off the scale")
+            vertices = np.column_stack([off(scale, shape[:, k])
+                                        for k, scale in enumerate(scales)])
+            report.note(sample.name, node.path,
+                        "a corner of a quadrant with offset arms is written as a polygon")
+            return [GateNode(name, _checked(PolygonGate(list(g.dims), vertices, g.inside,
+                                                        g.scales)))]
         for kind in (RectangleGate, PolygonGate, EllipseGate, QuadrantGate):
             if _is(g, kind):
                 return [GateNode(name, _checked(g))]

@@ -637,3 +637,39 @@ def test_cli_writes_the_gates(folder, tmp_path, capsys):
     odd = str(tmp_path / "odd.txt")
     assert main(["gates", folder, "--out", odd, "--format", "wsp", "--qc"]) == 0
     assert wsp.read_wsp(odd).samples[0].gates.children[0].name == "Clean"
+
+
+def test_a_quadrant_with_offset_arms_goes_out_as_four_polygons(folder, tmp_path):
+    """Neither format has such a quadrant: each corner is written as the
+    polygon its two arms cut out, and holds the same events."""
+    from milc.gating import ARMS, OffsetQuadrantGate
+    s = Session()
+    s.open_folder(folder)
+    for e in s.usable():
+        # on scatter, as stored; and on two fluorescence axes, biexponential
+        for dims, centre, scales, tilt in (
+                (["FSC-A", "SSC-A"], [90000.0, 50000.0], None, 30000.0),
+                (["Comp-FITC-A", "Comp-PE-A"], [600.0, 500.0], [B, B], 0.15)):
+            sc = scales or [None, None]
+            at = [float(c) if t is None else float(t(np.float64(c))) for c, t in zip(centre, sc)]
+            step = {"right": (1, 0.3), "up": (-0.2, 1), "left": (-1, 0.1), "down": (0.3, -1)}
+            arms = {}
+            for arm in ARMS:
+                p = [at[0] + step[arm][0] * tilt, at[1] + step[arm][1] * tilt]
+                arms[arm] = [float(v) if t is None else float(t.inverse(np.float64(v)))
+                             for v, t in zip(p, sc)]
+            for q in QUADRANTS:
+                e.gates.add(GateNode(f"{dims[0][:4]} {q}",
+                                     OffsetQuadrantGate(dims, centre, arms, q, "g", True, scales)))
+        e.edited = True
+    for path, write in ((str(tmp_path / "out.wsp"), None), (str(tmp_path / "out.xml"), None)):
+        report = gate_export.export_gates(s, path)
+        assert report.skipped == [] and "written as a polygon" in report.text()
+    masks, w = read_back(s, str(tmp_path / "out.wsp"))
+    assert w.skipped == []
+    for name, (own, again) in masks.items():
+        for prefix in ("FSC-", "Comp"):
+            corners = [p for p in own if p.startswith(prefix)]
+            assert len(corners) == 4 and all(own[p].sum() > 20 for p in corners), (name, prefix)
+            for p in corners:
+                assert int((own[p] != again[p]).sum()) <= REDRAWN, (name, p)
