@@ -131,6 +131,8 @@ def cmd_concat(a) -> int:
         s.population, s.seed = a.population, a.seed
         s.normalization = {"batch": a.normalize_by, "reference": [column, value],
                            "clusters": a.normalize_clusters}
+        if a.normalize_to:
+            s.normalization["goal"] = a.normalize_to
         try:
             s._normalise(ds, {})
         except ValueError as exc:
@@ -426,6 +428,9 @@ def main(argv=None) -> int:
                    help="the samples that should look alike in every batch, e.g. Group=Ctrl")
     s.add_argument("--normalize-clusters", type=int, default=1,
                    help="fit within this many FlowSOM clusters; 1 aligns each marker whole")
+    s.add_argument("--normalize-to", metavar="BATCH",
+                   help="the batch the others are brought onto, left as acquired itself; "
+                        "default: the mean of the batches")
     s.add_argument("--dry-run", action="store_true", help="the plan only")
     s.add_argument("--out", default="concat")
     s.set_defaults(run=cmd_concat)

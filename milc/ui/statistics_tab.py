@@ -320,7 +320,9 @@ class StatisticsTab(QtWidgets.QWidget):
         self.caption.setText(
             f"{len(table.rows):,d} rows: {samples} samples × "
             f"{len(table.rows) // max(samples, 1)} populations. Statistics are of "
-            "compensated values in the file's own units. Click a header to sort.")
+            "compensated values in the file's own units"
+            + (", after batch normalisation" if self.session.normalised_everywhere() else "")
+            + ". Click a header to sort.")
         self.export_button.setEnabled(True)
         self.copy_button.setEnabled(True)
         self.compare_button.setEnabled(True)

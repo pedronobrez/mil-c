@@ -33,6 +33,8 @@ class SamplesTab(QtWidgets.QWidget):
     sigColumnsChanged = QtCore.pyqtSignal()
     #: the workspace's gates were extended to the other files, or taken back
     sigGatesChanged = QtCore.pyqtSignal()
+    #: the values the other tabs read may have changed under them
+    sigNormalisationChanged = QtCore.pyqtSignal()
 
     def __init__(self, session: Session, parent=None):
         super().__init__(parent)
@@ -137,6 +139,18 @@ class SamplesTab(QtWidgets.QWidget):
             "Above 1, the correction is learnt within that many FlowSOM clusters of the "
             "reference, as CytoNorm does: for a shift that differs between cell types. "
             "It needs many reference events — at least 50 per batch in each cluster.")
+        self.norm_goal = QtWidgets.QComboBox()
+        self.norm_goal.setToolTip(
+            "What the batches are brought onto. The mean of the batches moves every "
+            "batch a little; one batch as the target leaves that batch exactly as it was "
+            "acquired and brings the others to it.")
+        self.norm_everywhere = QtWidgets.QCheckBox("Also in Gates and Statistics")
+        self.norm_everywhere.setToolTip(
+            "Normalise the samples as they are read, not only the concatenated events: "
+            "plots, gates and the statistics table then show normalised values. Gates "
+            "drawn before were drawn on the values as acquired and may need another look. "
+            "The curves are learnt from the files as acquired, and are refreshed at each "
+            "Concatenate.")
         self.norm_result = QtWidgets.QLabel("")
         self.norm_result.setWordWrap(True)
         self.norm_result.setProperty("role", "caption")
@@ -170,6 +184,8 @@ class SamplesTab(QtWidgets.QWidget):
         ref.addWidget(self.norm_value, 1)
         form.addRow("Reference", ref)
         form.addRow("Within", self.norm_clusters)
+        form.addRow("Bring to", self.norm_goal)
+        form.addRow("", self.norm_everywhere)
         side = QtWidgets.QVBoxLayout()
         side.addLayout(form)
         side.addSpacing(8)
@@ -203,6 +219,8 @@ class SamplesTab(QtWidgets.QWidget):
         self.norm_column.currentIndexChanged.connect(self._reference_column_changed)
         self.norm_value.currentIndexChanged.connect(self._normalisation_changed)
         self.norm_clusters.valueChanged.connect(self._normalisation_changed)
+        self.norm_goal.currentIndexChanged.connect(self._normalisation_changed)
+        self.norm_everywhere.toggled.connect(self._normalisation_changed)
         self.norm_look.clicked.connect(self._look_at_normalisation)
         self.build_button.clicked.connect(self.concatenate)
         self.refresh()
@@ -403,6 +421,8 @@ class SamplesTab(QtWidgets.QWidget):
         self.norm_column.setCurrentIndex(max(self.norm_column.findData(column), 0))
         self._fill_reference_values(value)
         self.norm_clusters.setValue(int(cfg.get("clusters", 1)))
+        self._fill_goals(cfg.get("goal", "mean"))
+        self.norm_everywhere.setChecked(bool(cfg.get("everywhere")))
         self._filling = filling
         self._show_normalisation()
 
@@ -413,6 +433,16 @@ class SamplesTab(QtWidgets.QWidget):
         for v in values:
             self.norm_value.addItem(v, v)
         self.norm_value.setCurrentIndex(max(self.norm_value.findData(keep), 0))
+
+    def _fill_goals(self, keep: str = "mean") -> None:
+        batch = self.norm_batch.currentData()
+        values = sorted({e.meta.get(batch, "") for e in self.session.usable()} - {""}) \
+            if batch else []
+        self.norm_goal.clear()
+        self.norm_goal.addItem("The mean of the batches", "mean")
+        for v in values:
+            self.norm_goal.addItem(f"{batch} {v}, left as acquired", v)
+        self.norm_goal.setCurrentIndex(max(self.norm_goal.findData(keep), 0))
 
     def _reference_column_changed(self) -> None:
         if self._filling:
@@ -425,16 +455,26 @@ class SamplesTab(QtWidgets.QWidget):
     def _normalisation_changed(self) -> None:
         if self._filling:
             return
+        batch = self.norm_batch.currentData() or None
+        if batch != (self.session.normalization or {}).get("batch"):
+            # the targets on offer are the batches of this column
+            self._filling = True
+            self._fill_goals()
+            self._filling = False
         self.session.set_normalization(
-            self.norm_batch.currentData() or None,
+            batch,
             (self.norm_column.currentData() or "", self.norm_value.currentData() or ""),
-            self.norm_clusters.value())
+            self.norm_clusters.value(), self.norm_goal.currentData() or "mean",
+            self.norm_everywhere.isChecked())
         self._show_normalisation()
+        self.sigNormalisationChanged.emit()
 
     def set_normalisation(self, batch: str | None, column: str = "", value: str = "",
-                          clusters: int = 1) -> None:
-        self.session.set_normalization(batch, (column, value), clusters)
+                          clusters: int = 1, goal: str = "mean",
+                          everywhere: bool = False) -> None:
+        self.session.set_normalization(batch, (column, value), clusters, goal, everywhere)
         self._fill_normalisation()
+        self.sigNormalisationChanged.emit()
 
     def _look_at_normalisation(self) -> None:
         if self.session.normalization_check:
@@ -446,7 +486,8 @@ class SamplesTab(QtWidgets.QWidget):
         s = self.session
         on = bool(s.normalization)
         self.norm_look.setVisible(False)
-        for w in (self.norm_column, self.norm_value, self.norm_clusters):
+        for w in (self.norm_column, self.norm_value, self.norm_clusters, self.norm_goal,
+                  self.norm_everywhere):
             w.setEnabled(bool(self.norm_batch.currentData()))
         if not on:
             self.norm_result.setText("")
@@ -459,6 +500,12 @@ class SamplesTab(QtWidgets.QWidget):
             self.norm_result.setText(
                 f"Needs samples with {column} = {value} in at least two batches; "
                 f"there are such samples in {len(refs)}.")
+            return
+        goal = s.normalization.get("goal", "mean")
+        if goal != "mean" and goal not in refs:
+            self.norm_result.setText(
+                f"Batch {goal}, which the others are to be brought onto, has no sample "
+                f"with {column} = {value}.")
             return
         done = (s.dataset.provenance.get("normalization") if s.dataset is not None else None)
         if done and all(done.get(k) == s.normalization[k] for k in s.normalization) \
@@ -483,7 +530,9 @@ class SamplesTab(QtWidgets.QWidget):
             "At the next Concatenate: " + "; ".join(
                 f"{b or '—'}: {len(es)} reference sample(s)" for b, es in sorted(refs.items()))
             + f". Whatever separates the {value} samples between batches will be removed "
-            "from every sample — assuming they should not differ.")
+            "from every sample — assuming they should not differ."
+            + (" Gates and Statistics already show normalised values."
+               if s.normalised_everywhere() else ""))
 
     # --- columns --------------------------------------------------------------------
 

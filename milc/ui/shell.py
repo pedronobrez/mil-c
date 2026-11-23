@@ -56,6 +56,8 @@ class MainShell(QtWidgets.QMainWindow):
         self.samples.sigColumnsChanged.connect(self.statistics.mark_stale)
         self.statistics.sigStatus.connect(self.status)
         self.samples.sigGatesChanged.connect(self.gates.refresh)
+        self.samples.sigNormalisationChanged.connect(self.gates.refresh)
+        self.samples.sigNormalisationChanged.connect(self.statistics.mark_stale)
         self.explore.sigStatus.connect(self.status)
         self.explore.sigResults.connect(self.clusters.refresh)
         self.clusters.sigStatus.connect(self.status)

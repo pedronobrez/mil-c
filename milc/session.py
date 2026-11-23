@@ -109,6 +109,16 @@ class Entry:
         return bool(self.gates.children)
 
 
+def _forward(values: np.ndarray, scales: list) -> np.ndarray:
+    return np.column_stack([s(values[:, k]) if s is not None else values[:, k]
+                            for k, s in enumerate(scales)])
+
+
+def _back(values: np.ndarray, scales: list) -> np.ndarray:
+    return np.column_stack([s.inverse(values[:, k]) if s is not None else values[:, k]
+                            for k, s in enumerate(scales)])
+
+
 class Session:
     def __init__(self):
         self.folder = ""
@@ -139,6 +149,8 @@ class Session:
         #: the last normalisation, to look at: the held-out reference events
         #: of each batch before and after, on each marker's scale
         self.normalization_check: dict | None = None
+        #: the curves in use, with what they were fitted for: see `_fitted`
+        self._fit: tuple | None = None
         self._counts: dict[tuple[str, str], int] = {}
         #: the last FlowSOM, kept for its map and tree
         self.flowsom = None
@@ -488,12 +500,27 @@ class Session:
 
     # --- events ----------------------------------------------------------
 
+    def _open(self, e: Entry) -> Sample:
+        matrix = self.matrix_of(e)
+        sample = (Sample.open(e.path, compensation=matrix, gates=e.gates)
+                  if matrix is not None else Sample.open(e.path, gates=e.gates))
+        sample.meta = {c: e.meta.get(c, "") for c in self.columns}
+        return sample
+
     def load(self, e: Entry) -> Sample:
+        """The sample, read once and kept. Where batch normalisation is
+        asked for everywhere, its compensated values are the normalised
+        ones: gates, plots and statistics all see those."""
+        everywhere = bool(self.normalization and self.normalization.get("everywhere"))
+        if everywhere and self._fit is not None and self._fit[0] != self._fit_key(self._fit[1]):
+            # the settings moved on: what was normalised under the old ones is stale
+            for other in self.entries:
+                other.sample = None
+            self._counts.clear()
         if e.sample is None:
-            matrix = self.matrix_of(e)
-            e.sample = (Sample.open(e.path, compensation=matrix, gates=e.gates)
-                        if matrix is not None else Sample.open(e.path, gates=e.gates))
-            e.sample.meta = {c: e.meta.get(c, "") for c in self.columns}
+            e.sample = self._open(e)
+            if everywhere:
+                self._normalise_sample(e, e.sample)
         return e.sample
 
     def count(self, e: Entry) -> int | None:
@@ -529,6 +556,12 @@ class Session:
             self.mode, self.n, self.min_events)
 
     def build(self, progress=None) -> Dataset:
+        # the curves are fitted afresh for a dataset: on the gates as they are now
+        if self._fit is not None:
+            self._fit = None
+            for e in self.entries:
+                e.sample = None
+            self._counts.clear()
         self.count_all(progress)
         p = self.plan()
         samples = []
@@ -635,14 +668,31 @@ class Session:
     # --- batch normalisation -----------------------------------------------------
 
     def set_normalization(self, batch: str | None, reference: tuple[str, str] | None = None,
-                          clusters: int = 1) -> None:
+                          clusters: int = 1, goal: str = "mean",
+                          everywhere: bool = False) -> None:
         """Normalise at the next concatenation: `batch` is the column that
         says which batch a sample was acquired in, `reference` the
         (column, value) of the samples that should look alike in every
-        batch. None for `batch` turns it off."""
+        batch. None for `batch` turns it off.
+
+        `goal` is what the batches are brought onto: "mean", the mean of
+        them all, or one batch, which then stays exactly as it was
+        acquired. `everywhere` normalises the samples themselves as they
+        are read, so the Gates and Statistics tabs show normalised values
+        too — and gates then cut normalised values."""
+        was = bool(self.normalization and self.normalization.get("everywhere"))
         self.normalization = ({"batch": batch, "reference": list(reference),
                                "clusters": int(clusters)}
                               if batch and reference and reference[0] else None)
+        if self.normalization and goal != "mean":
+            self.normalization["goal"] = goal
+        if self.normalization and everywhere:
+            self.normalization["everywhere"] = True
+        if was or everywhere:
+            for e in self.entries:
+                e.sample = None
+            self._counts.clear()
+        self._fit = None
         self.save_project()
 
     def reference_batches(self) -> dict[str, list[Entry]]:
@@ -658,39 +708,94 @@ class Session:
                 out.setdefault(e.meta.get(cfg["batch"], ""), []).append(e)
         return out
 
-    def _normalise(self, ds: Dataset, samples: dict) -> None:
-        """Bring every batch of `ds` onto the mean of the batches, as
-        learnt from the reference samples — from all the events of their
-        population, not only the ones drawn — on each marker's own scale.
-        What was done, and how far apart the batches' references were
-        before and after, is written into the dataset."""
+    def _fit_key(self, markers: list[str]) -> str:
+        """Everything the curves depend on but the gates: the settings,
+        which samples are the reference, the population, the scales."""
+        refs = self.reference_batches()
+        return json.dumps([self.normalization, list(markers), self.population, self.seed,
+                           {b: [e.name for e in es] for b, es in sorted(refs.items())},
+                           [to_spec(self.scale_of(c)) if c in self.scales else None
+                            for c in markers]], sort_keys=True, default=str)
+
+    def _fitted(self, markers: list[str], samples: dict | None = None) -> tuple:
+        """(model, scales, reference events by batch, reference entries by
+        batch) for these channels, fitted once and kept until what it
+        depends on changes. Always learnt from the files as acquired — the
+        events of the reference samples' population, all of them — on each
+        marker's own scale. Gates edited afterwards do not move the curves
+        until the next concatenation: a plot must not shift under a gate
+        while it is being drawn."""
         from . import normalize
+        key = self._fit_key(markers)
+        if self._fit is not None and self._fit[0] == key:
+            return self._fit[2]
         cfg = self.normalization
         refs = self.reference_batches()
         if len(refs) < 2:
             raise ValueError(
                 "batch normalisation needs reference samples in at least two batches; "
                 f"found them in {len(refs)}")
-        markers = [c for c, comp in zip(ds.channels, ds.compensated) if comp]
-        cols = [ds.channels.index(c) for c in markers]
+        goal = cfg.get("goal", "mean")
+        if goal != "mean" and goal not in refs:
+            raise ValueError(
+                f"batch {goal!r}, which the others are to be brought onto, has no "
+                "reference samples")
         scales = [self.scale_of(c) if c in self.scales else Biex() for c in markers]
-
-        def forward(values):
-            return np.column_stack([s(values[:, k]) if s is not None else values[:, k]
-                                    for k, s in enumerate(scales)])
-
-        def back(values):
-            return np.column_stack([s.inverse(values[:, k]) if s is not None else values[:, k]
-                                    for k, s in enumerate(scales)])
-
         reference = {}
         for batch, entries in refs.items():
             parts = []
             for e in entries:
-                sample = samples.get(e.name) or self.load(e)
+                sample = (samples or {}).get(e.name) or self._open(e)
+                cols = [sample.fcs.channels.index(c) for c in markers]
                 parts.append(sample.compensated[sample.mask(self.population)][:, cols])
-            reference[batch] = forward(np.vstack(parts).astype(np.float64))
-        model = normalize.fit(reference, n_clusters=cfg.get("clusters", 1), seed=self.seed)
+            reference[batch] = _forward(np.vstack(parts).astype(np.float64), scales)
+        model = normalize.fit(reference, n_clusters=cfg.get("clusters", 1), goal=goal,
+                              seed=self.seed)
+        self._fit = (key, list(markers), (model, scales, reference, refs))
+        return self._fit[2]
+
+    def _normalise_sample(self, e: Entry, sample: Sample) -> None:
+        """The sample's compensated values, normalised in place. Left as
+        acquired — and `sample.normalised` False — where it cannot be done:
+        no compensated channels, no usable reference, or a batch without
+        one."""
+        from . import normalize
+        sample.normalised = False
+        touched = set(sample.compensation.channels) if sample.compensation else set()
+        markers = [c for c in sample.fcs.channels if c in touched]
+        if not markers:
+            return
+        try:
+            model, scales, _, _ = self._fitted(markers)
+        except (ValueError, KeyError):
+            return
+        batch = e.meta.get(self.normalization["batch"], "")
+        if batch not in model.batches:
+            return
+        cols = [sample.fcs.channels.index(c) for c in markers]
+        values = sample.compensated
+        fixed = normalize.apply(model, _forward(values[:, cols].astype(np.float64), scales), batch)
+        values[:, cols] = _back(fixed, scales).astype(values.dtype)
+        sample.normalised = True
+
+    def normalised_everywhere(self) -> bool:
+        """Whether the samples the tabs read are normalised ones."""
+        return bool(self.normalization and self.normalization.get("everywhere"))
+
+    def _normalise(self, ds: Dataset, samples: dict) -> None:
+        """Bring every batch of `ds` onto the goal — the mean of the
+        batches, or one of them — as learnt from the reference samples.
+        What was done, and how far apart the batches' references were
+        before and after, is written into the dataset."""
+        from . import normalize
+        cfg = self.normalization
+        everywhere = bool(cfg.get("everywhere"))
+        goal = cfg.get("goal", "mean")
+        markers = [c for c, comp in zip(ds.channels, ds.compensated) if comp]
+        cols = [ds.channels.index(c) for c in markers]
+        # samples read with normalisation everywhere are normalised already:
+        # the curves are never learnt from those, nor applied twice
+        model, scales, reference, refs = self._fitted(markers, None if everywhere else samples)
         batch_of = [m.get(cfg["batch"], "") for m in ds.meta]
         skipped = []
         for i, batch in enumerate(batch_of):
@@ -698,8 +803,11 @@ class Session:
             if batch not in model.batches:
                 skipped.append(ds.samples[i])   # a batch with no reference stays as it is
                 continue
-            fixed = normalize.apply(model, forward(ds.X[rows][:, cols].astype(np.float64)), batch)
-            ds.X[np.ix_(np.flatnonzero(rows), cols)] = back(fixed).astype(ds.X.dtype)
+            if everywhere:
+                continue
+            fixed = normalize.apply(
+                model, _forward(ds.X[rows][:, cols].astype(np.float64), scales), batch)
+            ds.X[np.ix_(np.flatnonzero(rows), cols)] = _back(fixed, scales).astype(ds.X.dtype)
         # How far apart the references are afterwards is measured on events
         # the curves were not fitted on: half of each batch's is set aside,
         # a second model is fitted on the other half and judged on these.
@@ -710,7 +818,8 @@ class Session:
         for b, x in reference.items():
             order = rng.permutation(len(x))
             held[b], rest[b] = x[order[: len(x) // 2]], x[order[len(x) // 2:]]
-        judge = normalize.fit(rest, n_clusters=cfg.get("clusters", 1), seed=self.seed)
+        judge = normalize.fit(rest, n_clusters=cfg.get("clusters", 1), goal=goal,
+                              seed=self.seed)
         after = {b: normalize.apply(judge, x, b) for b, x in held.items()}
         self.normalization_check = {
             "markers": [ds.label(c) for c in markers], "scales": scales,
@@ -720,8 +829,8 @@ class Session:
             "reference_samples": {b: [e.name for e in es] for b, es in refs.items()},
             "reference_events": {b: int(len(x)) for b, x in reference.items()},
             "clusters_used": model.n_clusters,
-            "distance_before": normalize.distance(held).tolist(),
-            "distance_after": normalize.distance(after).tolist(),
+            "distance_before": normalize.distance(held, goal=goal).tolist(),
+            "distance_after": normalize.distance(after, goal=goal).tolist(),
             "fallbacks": [list(f) for f in model.fallbacks], "not_normalised": skipped,
         }
 
@@ -841,7 +950,8 @@ class Session:
             raise ValueError(
                 "the trained map of this clustering is not in memory (a dataset opened "
                 "from a file does not carry it): run FlowSOM again")
-        if "normalization" in ds.provenance:
+        if "normalization" in ds.provenance and not ds.provenance["normalization"].get(
+                "everywhere"):
             raise ValueError(
                 "the map was trained on batch-normalised events, and the files are not "
                 "normalised: its clusters cannot be found in them")

@@ -827,6 +827,8 @@ class GatesTab(QtWidgets.QWidget):
                     if len(overlay) > 1 else "")
         if isinstance(self._content, views.DistributionContent):
             together += " · " + self._content.note()
+        if getattr(self.sample, "normalised", False):
+            together += " · batch-normalised values"
         self.caption.setText(
             f"{self.entry.name} · {name}: {rows.size:,d} events{of}{more}{together}")
 
