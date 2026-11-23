@@ -59,16 +59,21 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - A quadrant gate: one click where two lines cross makes four populations, and moving a line
   moves them all.
 - Combine populations: the events in all of them, in any of them, or in none of them.
-- The scale of each axis is yours: biexponential with its width and decades, arcsinh,
-  logarithmic or linear — for one parameter or for every marker.
-- See the compensation matrix in use and type over any cell; every sample is compensated again.
+- The scale of each axis is yours: biexponential with its width and decades, Logicle (W, M, A
+  and T; the same numbers as FlowUtils to 15 decimal places), arcsinh, logarithmic or linear —
+  for one parameter or for every marker.
+- Each sample is compensated with its own matrix: its file's, or the workspace's.
+  **Compensation…** lists every sample with where its matrix comes from (file, workspace,
+  edited, shared); type over any cell and apply it to the samples selected or to all, or go
+  back to the original. The caption under the plot says which matrix is in use.
 - Export the population shown, of the samples selected or of all, as FCS or CSV.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
 - What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
 - **Quality…** checks each acquisition for clogs, bubbles, bursts and drifts — the flow rate and
   the signal of every population over time — and removes the bad stretches as a first
   population, Clean, that every gate, statistic and concatenation then starts from. No R
-  needed; it takes after flowAI and PeacoQC but was not compared with them.
+  needed. Beside PeacoQC it removes the same steps, finds the clogs PeacoQC does not look for,
+  and removes less of a slow drift (see `docs/comparacao.md`).
 - With several samples selected on a histogram, show each sample — or each group pooled — as
   a violin (median and quartiles marked) or a box (Tukey whiskers, at most 200 outliers a box).
 - **Matrix…**: every pair of the chosen parameters for the population shown, as density with
@@ -97,9 +102,12 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 
 **Explore** — UMAP, tSNE and FlowSOM, run in the background with FlowJo's defaults.
 - PhenoGraph-style clustering finds the clusters without being told how many: nearest
-  neighbours, Jaccard weights, Louvain communities, with a resolution to make them coarser or
-  finer. At resolution 1 it tends to split large populations into several pieces, the more so
-  with few markers: lower it, or merge the pieces in Clusters.
+  neighbours, Jaccard weights, Leiden communities (Louvain can be chosen), a resolution to make
+  them coarser or finer, and a minimum size below which a cluster joins the one it is most
+  connected to. At resolution 1 it splits large populations whether or not they have parts —
+  as the original package does (15 clusters from both on the 3,488 test events): lower the
+  resolution (0.5 is a good start, at the risk of losing a rare population in a neighbour),
+  raise the neighbours, or merge the pieces in Clusters.
 - PCA gives two axes that can be read, each with its share of the variance and the markers that
   weigh in it.
 - Any two axes: an embedding, or two markers on a biexponential scale ticked in decades.
@@ -124,8 +132,15 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - **Differential abundance…**: two groups compared on each cluster's cell counts by a
   negative-binomial model in the manner of diffcyt's DA-edgeR (quasi-likelihood F test, optional
   adjustment for a batch or day), with a table and a volcano. It tests shares of the
-  concatenated events, was calibrated by simulation but not checked against edgeR, and is not
+  concatenated events, gives edgeR's numbers when edgeR is called the same way, and is not
   to be trusted with two samples a group.
+- **Differential expression…**: for each cluster and marker, the median expression of each
+  sample compared between two groups (diffcyt's DS-limma: a linear model and limma's moderated
+  t, the same numbers as limma 3.68). Adjust for a batch or day, or pair by animal; choose the
+  markers and the scale, the fewest cells a sample needs in a cluster (10), and the correction
+  over all cluster–marker pairs. A table, a heatmap of the differences with stars, and a
+  volcano. Prefer markers the clustering did not use; a median does not see a minority of
+  cells switching a marker on.
 
 **Figure…** — on every plot.
 - Width and height in millimetres, resolution, font and size, title and axis labels, frame,
@@ -135,15 +150,17 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - The preview is drawn by the code that writes the file.
 - **Add to plate**: several panels on one page (View ▸ Plate…), lettered A, B, C…, in one type,
   at a journal's column width, refreshed from the plots they came from when the analysis
-  changes. A report writes the plate as a PDF behind a page stating the population, sampling
-  plan, seed, normalisation and the settings of each run.
+  changes. There can be several plates, each with a name, and they are saved with the project
+  (`MIL-C.json` and `MIL-C plates.npz`, to be kept together): a saved panel is a snapshot, and
+  no longer follows the analysis once the project is reopened. A report writes the plates as a
+  PDF behind a page stating the quality control, population, sampling plan, seed, normalisation
+  and the settings of each run.
 
 ## What it does not do
 
 - **Gating is not all of FlowJo's.** Rectangles, polygons, ellipses, quadrants, ranges and
   boolean combinations are drawn here and read from a FlowJo workspace. No offset or curly
-  quadrants, no automatic gates, no logicle scale, and one compensation matrix for all the
-  samples rather than one each.
+  quadrants, no automatic gates.
 - **Tests between groups stop short of mixed models.** One value per sample, compared by group,
   paired or not; counts by a negative-binomial model written here, not by edgeR itself.
 - **Its maps are not FlowJo's maps point for point.** See below.
@@ -201,6 +218,7 @@ Everything the window does, without the window.
 
 ```bash
 python -m milc inspect DATA                      # what a folder holds
+python -m milc qc      DATA --out qc.csv --plots qc.pdf   # each acquisition over time
 python -m milc counts  DATA --wsp analysis.wsp   # every gate, against FlowJo's count
 python -m milc stats   DATA --channels CD8,CD4 --stats "median,robust cv" --out stats.csv
 python -m milc export  DATA --population "Cells/Live" --format csv --out exported
@@ -210,7 +228,14 @@ python -m milc analyze concat.npz --channels CD8,CD4,Foxp3 --umap --tsne --flows
 ```
 
 `concat --dry-run` prints the sampling plan and writes nothing. `analyze` also takes any
-concatenated `.fcs`, FlowJo's included.
+concatenated `.fcs`, FlowJo's included; `--phenograph` takes `--k`, `--resolution`, `--method
+leiden|louvain` and `--min-cluster-size`, and `--transform` takes `biex`, `arcsinh` or `logicle`.
+
+`qc` only looks. To leave the bad stretches out, give `--qc` (with `--mad`, `--consecutive`,
+`--events-per-bin`, `--qc-channels` if the defaults do not suit) to `concat`, `stats` or
+`export`: Clean becomes the first population for that run, gate paths are written as before,
+and `concat` also writes `NAME_qc.csv`. A folder where it was applied in the window is used
+as it is.
 
 ## Layout
 
@@ -218,20 +243,24 @@ concatenated `.fcs`, FlowJo's included.
 milc/
   fcs.py            FCS 2.0 / 3.0 / 3.1, read and written with numpy alone
   compensation.py   spillover matrices, from the file or from the workspace
-  transforms.py     linear, arcsinh, FlowJo's biexponential; decade ticks
+  transforms.py     linear, arcsinh, FlowJo's biexponential, Logicle; decade ticks
   gating.py         the gates — drawn, by time, by cluster — and the tree they form
   wsp.py            a FlowJo 10 workspace: files, matrices, transforms, gates
   sample.py         one file with its matrix and its gates
   sampling.py       the plan: how many events each sample gives, and why
   dataset.py        the concatenated events, and where each came from
   embed.py          UMAP, tSNE and PCA; how well a map keeps neighbours
-  graphcluster.py   PhenoGraph-style clustering: neighbours, Jaccard, Louvain
+  graphcluster.py   PhenoGraph-style clustering: neighbours, Jaccard, Leiden / Louvain
   clusters.py       clusters as the user has them: names, notes, merges
   qc.py             quality of an acquisition over time
+  qc_plots.py       the flow rate and the signal against time, as figures
   abundance.py      differential abundance of clusters, on counts
   volcano.py        the volcano plot of it
+  expression.py     differential expression within clusters, on medians
+  expression_figures.py   its heatmap of differences and its volcano
   views.py          violins and boxes, the matrix of pairs, backgating
   plate.py          several panels on a page, and the PDF report
+  plate_store.py    plates kept with the project
   flowsom.py        the self-organising map, consensus metaclustering, the tree
   density.py        smoothed histograms and probability contours, for overlays
   cluster_stats.py  expression and frequency tables
@@ -264,14 +293,37 @@ machines — on a tag `v*`, which also creates the release, or on request from t
 Every build is asked to run the whole route on invented data (`MIL-C selftest`) and to open its
 window before it is wrapped.
 
-## What has not been checked against the original
+## What was set beside the original, and what was not
 
-- **Batch normalisation** follows CytoNorm's steps. Its curves were set beside the same
-  calculation written out in base R (`tests/test_normalize_r.py`): inside the range the
-  references cover they are the same curve, apart by a thousandth of the correction on the
-  real data. Beyond the outermost quantiles they differ on purpose — R continues the spline's
-  end slope, this continues as a shift. The CytoNorm package itself, with its clustering, was
-  not run: the map here is this program's own FlowSOM.
+Four methods here were written from the papers. On 23 November 2026 each was run beside the
+software it takes after, on the same input; `docs/comparacao.md` has the tables, and
+`tests/reference/` the scripts (they need R with Bioconductor and are not part of the tests).
+
+- **Differential abundance** gives edgeR 4.10's numbers when edgeR is called the way this
+  imitates: log fold changes within 0.0004, p values within 0.06% for 95% of clusters, the same
+  calls at FDR 0.05 (0 of 616 not shared). The comparison found and fixed two defects in the F
+  test. Against edgeR's present defaults and `diffcyt::testDA_edgeR`, 10 to 20% of discoveries
+  are not shared: they estimate the prior degrees of freedom, this fixes them at 10.
+- **Differential expression** gives limma 3.68's coefficients, t and p to 7 figures on an
+  8 × 8 matrix in six designs. With missing medians it follows `eBayes(legacy=TRUE)`; limma's
+  newer estimator for unequal degrees of freedom is not implemented, and diffcyt itself was
+  not run.
+- **PhenoGraph**: on 20,000 real events, this and the authors' package agree with each other
+  as well as each agrees with itself from one run to the next (ARI about 0.7), with as many
+  clusters give or take two. Leiden's modularity was set beside leidenalg's (0.8065 against
+  0.8036 on the test events).
+- **Quality control**: on a planted step it removes what PeacoQC removes; a clog it finds and
+  PeacoQC, which has no flow-rate check, does not; of a slow drift it removes less (53 to 81%
+  against 74 to 98%). On the 32 real files it removes 1.4% of the events, PeacoQC 5.1% and
+  flowAI 12.0%, with no truth to say who is right. Moderate drifts that last are what it
+  misses: in one file PeacoQC removes 19% and this 1%.
+- **Batch normalisation**: without clusters it is CytoNorm 2.0's curve inside the range the
+  references cover (apart by a thousandth of the correction on the real data). With clusters
+  the two programs are as far from each other as each is from itself with another seed, and
+  bring the reference samples equally close. Beyond the outermost quantiles they differ on
+  purpose — CytoNorm continues the spline's end slope, this continues as a shift.
+- **Logicle** was set beside FlowUtils, not beside FlowJo's own display. No workspace here
+  declares a logicle scale: reading one was tested on XML written by hand.
 - **Prism files** follow the layout of the R package `pzfx`, round-trip through this program's
   own reader, and have not been opened in Prism by the author.
 - **Statistics** follow FlowJo's definitions and were not set beside FlowJo's numbers.
@@ -280,12 +332,6 @@ window before it is wrapped.
   100-event published file with linear axes; on biexponential axes nothing was measured, and an
   ellipse near zero may sit up to about one display channel off. FlowJo's count beside each is
   the check.
-- **Quality control** was tested on simulated clogs, bursts, steps, bubbles and drifts, not
-  against flowAI or PeacoQC, and on real files only without a known truth.
-- **PhenoGraph** is written from the papers and was never compared with the package.
-- **Differential abundance** was never run beside edgeR or diffcyt. Under no difference, 5
-  samples a group, it gave p < 0.05 in 5.3% of simulated tests (Welch's t on percentages:
-  4.5%), with about twice the t test's power for a two-fold change.
 - **Repeated-measures and Welch's ANOVA** reproduce textbook and R examples typed from memory,
   and independent calculations on random data.
 

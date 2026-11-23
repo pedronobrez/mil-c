@@ -91,10 +91,14 @@ def _draw_volcano(fig, c: VolcanoContent, style: figures.FigureStyle) -> None:
         ax.set_ylim(0, top)
         if panel is not None:
             ax.set_title(style.label(panel))
-        ax.set_xlabel(c.xlabel if style.xlabel is None else style.xlabel)
+        if len(panels) == 1:
+            ax.set_xlabel(c.xlabel if style.xlabel is None else style.xlabel)
         if k == 0:
             ax.set_ylabel(c.ylabel if style.ylabel is None else style.ylabel)
         figures._frame(ax, style)
+    if len(panels) > 1:      # one label under them all: side by side they run into each other
+        fig.supxlabel(c.xlabel if style.xlabel is None else style.xlabel,
+                      fontsize=axes[0].xaxis.label.get_size())
     handles = [figures._dot(colour[k], style.label(names[k])) for k in COLORS]
     figures._legend(fig, list(axes), handles, style, "")
 

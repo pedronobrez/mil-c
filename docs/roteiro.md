@@ -36,12 +36,12 @@ material de divulgação.
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Aplicar a matriz do arquivo ou do workspace | S | **S** | todos |
-| Editor de matriz | S | **S** (uma matriz para todas as amostras) | FCS Express, OMIQ, CellEngine, Kaluza |
+| Editor de matriz | S | **S** (por amostra, ou uma para todas) | FCS Express, OMIQ, CellEngine, Kaluza |
 | Autocompensação por single stains | S | N | FCS Express, OMIQ, FlowLogic, Floreada |
 | AutoSpill | S | N | Floreada, R |
 | Unmixing espectral | S | N | FCS Express, OMIQ |
 | Biexponencial | S | **S** (a do FlowJo, conferida) | FCS Express |
-| Logicle, hyperlog | S | N | Floreada (logicle), R |
+| Logicle, hyperlog | S | **S** (logicle; hyperlog não) | Floreada (logicle), R |
 | Arcsinh, logarítmica | S | **S** | OMIQ, Cytobank, CellEngine |
 | Ajuste de escala por parâmetro | S | **S** | quase todos |
 
@@ -123,7 +123,7 @@ material de divulgação.
 | PCA | P (plugin) | **S** | FCS Express, OMIQ, CellEngine |
 | TriMap, PaCMAP, PHATE | P (plugins) | N | OMIQ |
 | FlowSOM | P (plugin, exige R) | **S**, embutido | FCS Express, OMIQ, Cytobank, CellEngine |
-| PhenoGraph / Louvain / Leiden | P (plugin) | **S** (Louvain, no estilo do PhenoGraph; sem Leiden) | FCS Express, OMIQ, CellEngine |
+| PhenoGraph / Louvain / Leiden | P (plugin) | **S** (Leiden ou Louvain, no estilo do PhenoGraph; tamanho mínimo de cluster) | FCS Express, OMIQ, CellEngine |
 | X-Shift, SPADE, CITRUS | P / N | N | OMIQ, Cytobank, FCS Express (SPADE) |
 | Trajetória (Wanderlust, Wishbone) | P (plugins) | N | OMIQ |
 | Explorador de clusters com painéis ligados | S | **S** | FCS Express, OMIQ, FlowLogic |
@@ -198,10 +198,10 @@ Sem isto, o programa não substitui o FlowJo no dia a dia, só no fim da anális
    gráfico, com deslocamento. É como se confere um FMO ou um controle.
 3. ~~**Gates que faltam.**~~ **Feito**: elipse, quadrante e booleanos (E / OU / NÃO), desenhados no
    programa. Ler elipses e quadrantes de um workspace do FlowJo continua por fazer.
-4. ~~**Escala por parâmetro.**~~ **Feito**, menos a logicle (biexponencial ajustável, arcsinh,
+4. ~~**Escala por parâmetro.**~~ **Feito**, com a logicle (biexponencial ajustável, arcsinh,
    logarítmica e linear). Ajustar a biexponencial (largura, décadas negativas), e oferecer
    logicle e arcsinh também na visualização.
-5. ~~**Ver e editar a matriz de compensação.**~~ **Feito** (uma matriz para todas as amostras).
+5. ~~**Ver e editar a matriz de compensação.**~~ **Feito** (uma matriz por amostra, ou uma para todas).
 6. ~~**Exportar uma população gatada**~~ **Feito**: FCS ou CSV, por amostra.
 7. ~~**Gráfico de contorno e densidade.**~~ **Feito** (contornos de probabilidade; zebra não).
 
@@ -255,6 +255,11 @@ abundância diferencial com volcano; testes pareados, de medidas repetidas e ANO
 normalização também em Gates e Statistics, com lote alvo; leitura de quadrantes, booleanos e
 elipses do workspace do FlowJo; violino e box, matriz N×N e backgating.
 
+E, no mesmo dia, os seis primeiros itens da lista seguinte: comparação com os pacotes originais
+(`docs/comparacao.md`); escala Logicle e matriz de compensação por amostra; expressão
+diferencial por cluster; Leiden e tamanho mínimo de cluster; pranchas guardadas com o projeto,
+mais de uma; limpeza pela linha de comando (`milc qc`, `--qc`) e o resumo dela no relatório.
+
 ### A conferir, antes de qualquer item novo
 
 Coisas feitas que ainda dependem de um olhar de fora:
@@ -268,28 +273,47 @@ Coisas feitas que ainda dependem de um olhar de fora:
 - **Um workspace com elipse, quadrante ou booleano.** As regras de leitura vieram do FlowKit e
   do CytoML; nenhum arquivo nosso tem esses gates. A contagem do FlowJo aparece ao lado de cada
   população lida assim: é só comparar.
-- **A abundância diferencial ao lado do edgeR/diffcyt**, e o PhenoGraph ao lado do pacote. Os
-  dois foram calibrados por simulação, não comparados com o original.
-- **A limpeza automática numa amostra que se sabe ruim.** Em dados simulados acerta o trecho; nos
-  arquivos reais tirou de 0 a 8%, sem gabarito. A `14Ctrl1` perde os primeiros ~23 s.
+- **A limpeza automática, sem gabarito.** Nos 32 arquivos reais tira de 0 a 7,7% (1,4% do
+  total; a `14Ctrl1` perde 1,1%: 0–2,3 s, 23,2–23,6 s e 210,8–211,7 s). O PeacoQC tira 5,1% e o
+  flowAI 12,0% dos mesmos arquivos, e não há como dizer quem tem razão sem uma amostra que se
+  sabe ruim.
 - **A normalização "em Gates e Statistics".** Os gates foram desenhados nos valores originais:
   depois de ligá-la, vale rever cada um.
+- **As matrizes de compensação dos arquivos diferem entre os dias** (4 matrizes nas 32
+  amostras). Com o workspace aberto todas usam a dele; sem ele, as amostras não são compensadas
+  da mesma forma. Vale decidir qual é a certa.
+- **A expressão diferencial no dia 7.** A diferença Case × Ctrl aparece nos três clusters grandes
+  ao mesmo tempo (TIGIT sobretudo), só no dia 7: pode ser biologia ou diferença de marcação
+  entre os tubos daquele dia. E todos os 8 marcadores entraram no cluster, então o teste é
+  circular; o ideal é testar marcadores que não definiram os clusters.
+- **Um workspace que declare escala logicle.** A leitura foi testada só num XML escrito à mão.
+
+### O que a comparação com os originais mostrou
+
+O detalhe está em `docs/comparacao.md`. Em resumo: a abundância diferencial dá os números do
+edgeR quando ele é chamado do mesmo jeito (a comparação achou e corrigiu dois defeitos no teste
+F); a expressão diferencial dá os do limma; o PhenoGraph concorda com o pacote tanto quanto o
+pacote concorda consigo mesmo, e a divisão excessiva na resolução 1 é do método (o pacote
+também dá 15 clusters nos 3.488 eventos); a normalização sem clusters é a curva do CytoNorm; e
+a limpeza acerta degraus e entupimentos, mas **deixa passar derivas moderadas e duradouras** que
+o PeacoQC pega (na `7Ctrl5` ele tira 19% e o MIL-C 1%).
 
 ### Próximas implementações, na ordem em que eu faria
 
-1. **Comparar com os originais** o que foi escrito a partir dos artigos: abundância diferencial
-   com o edgeR, PhenoGraph com o pacote, limpeza com o PeacoQC, normalização com o CytoNorm
-   inteiro. Precisa de R com Bioconductor.
-2. **Logicle**, e matriz de compensação por amostra.
-3. **Expressão diferencial por cluster** (o "DS" do diffcyt): a mediana de um marcador dentro de
-   cada cluster, entre grupos.
-4. **Leiden** no lugar do Louvain, e tamanho mínimo de cluster no PhenoGraph, que hoje divide
-   demais as populações grandes na resolução 1.
-5. **Prancha guardada com o projeto**, e mais de uma prancha; hoje ela dura a sessão.
-6. **Limpeza pela linha de comando**, e o resumo dela no relatório.
-7. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
-8. **Distribuição.** Publicar a versão 0.1.0; instalador para Linux; assinatura dos instaladores
+1. **Limpeza: derivas moderadas.** Julgar a trajetória suavizada, como o PeacoQC, em vez da
+   mediana corrida de 5 janelas; e pôr os limites (MAD, janelas consecutivas) no diálogo, que
+   hoje só usa os padrões.
+2. **Depois de mudar a matriz de compensação**, avisar que o concatenado e a normalização
+   ficaram velhos; hoje só as amostras carregadas e as contagens são refeitas.
+3. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
+4. **Distribuição.** Publicar a versão 0.1.0; instalador para Linux; assinatura dos instaladores
    (hoje o macOS e o Windows avisam na primeira abertura).
+5. **Expressão diferencial ao lado do diffcyt** em si, com os pesos e o `duplicateCorrelation`
+   dele; e o estimador novo do limma para graus de liberdade desiguais.
+6. **Eixos com a escala do workspace**: hoje a escala declarada no `.wsp` vale para testar os
+   gates, não para desenhar os eixos.
+7. **Acabamento do relatório**: nome da prancha em cada página; o motivo de um arquivo não ter
+   sido conferido pela limpeza; `milc analyze` escrevendo abundância e expressão diferencial.
 
 Mais adiante, sem mudança: proliferação, ciclo celular e cinética; autocompensação e AutoSpill;
 GatingML; autogating; unmixing espectral; trilha de auditoria.
