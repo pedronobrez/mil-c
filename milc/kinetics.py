@@ -120,10 +120,15 @@ def smoothed(y: np.ndarray, se: np.ndarray, smoothing: str = MOVING,
     one."""
     w = _weights(smoothing, window)
     have = np.isfinite(y)
-    total = np.convolve(have.astype(np.float64), w, mode="same")
+    half = (w.size - 1) // 2
+
+    def over(values, weights):      # centred on each slice, whatever the two lengths
+        return np.convolve(values, weights)[half:half + y.size]
+
+    total = over(have.astype(np.float64), w)
     with np.errstate(invalid="ignore", divide="ignore"):
-        mean = np.convolve(np.where(have, y, 0.0), w, mode="same") / total
-        error = np.sqrt(np.convolve(np.where(have, se, 0.0) ** 2, w ** 2, mode="same")) / total
+        mean = over(np.where(have, y, 0.0), w) / total
+        error = np.sqrt(over(np.where(have, se, 0.0) ** 2, w ** 2)) / total
     return np.where(have, mean, np.nan), np.where(have, error, np.nan)
 
 
@@ -213,7 +218,8 @@ def measure(c: Curve, baseline: tuple, response: tuple) -> dict[str, float]:
         out["Slope SE"] = float(np.sqrt((left ** 2).sum() / (rise.size - 2)
                                         / (centred ** 2).sum()))
     if np.isfinite(base) and slices.size > 1:
-        out["AUC"] = float(np.trapezoid(c.smooth[slices] - base, c.t[slices]))
+        height, at = c.smooth[slices] - base, c.t[slices]
+        out["AUC"] = float(((height[1:] + height[:-1]) / 2 * np.diff(at)).sum())
     return out
 
 

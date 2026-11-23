@@ -50,7 +50,9 @@ class Source:
         return next((text for text, d in self.parameters if d == dim), dim)
 
     def group(self, entry) -> str:
-        return entry.name if self.colour_by is None else (entry.meta.get(self.colour_by, "") or "—")
+        if self.colour_by is None:
+            return entry.name
+        return entry.meta.get(self.colour_by, "") or "—"
 
     def sample(self, entry):
         return self.session.load(entry)

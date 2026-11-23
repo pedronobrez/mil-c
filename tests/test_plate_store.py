@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from milc import expression
 from milc.expression_figures import DifferenceHeatmap, ExpressionVolcano
 from milc import abundance, figures, plate, plate_store, views  # noqa: E402
+from milc import cellcycle, kinetics, proliferation  # noqa: E402
 from milc.gating import GateNode, PolygonGate, RectangleGate  # noqa: E402
 from milc.session import PROJECT_FILE, Session  # noqa: E402
 from milc.transforms import Biex, decade_ticks  # noqa: E402
@@ -73,6 +74,18 @@ def _all_contents() -> dict:
         ["CD8", "CD4", "Foxp3"], ["A"] * 5 + ["B"] * 5, ("A", "B"))
     c["expression volcano"] = ExpressionVolcano(found)
     c["difference heatmap"] = DifferenceHeatmap(found)
+    dye = proliferation.simulate(4000, [20, 30, 30, 20], rng=rng)
+    c["proliferation"] = proliferation.content(proliferation.fit(dye), "CFSE", "3Case1")
+    dna = cellcycle.simulate(4000, 60, 25, 15, rng=rng)
+    c["cell cycle"] = cellcycle.content(cellcycle.fit(dna, cellcycle.DJF), "PI", "3Case1")
+    seconds = np.sort(rng.uniform(0, 100, 3000))
+    signal = rng.lognormal(5, 0.3, 3000) * (1 + (seconds > 30))
+    curves = [kinetics.curve(seconds[k::2], signal[k::2], name, group, width=5.0)
+              for k, (name, group) in enumerate((("3Ctrl1", "Ctrl"), ("3Case1", "Case")))]
+    curves.append(kinetics.curve(seconds[:40], signal[:40], "few", "Case",
+                                 span=(0.0, 100.0)))                       # NaN inside
+    c["kinetics"] = kinetics.KineticsContent(curves, "Time (s)", "Median of Indo-1",
+                                             (0.0, 25.0), (30.0, 100.0))
     return c
 
 

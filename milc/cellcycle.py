@@ -40,8 +40,9 @@ points of a phase:
       by 0.5 to 1.5 from one acquisition to the next. At a CV of 8% the
       peaks run into S: the bias stays about 1 but S and G2 trade 3 to 5
       points between them from one acquisition to the next.
-      Watson is unbiased (under 1) at any of those CVs where S is even,
-      and noisier: 1.5 to 2.5 points, since it uses half of each peak.
+      Watson is within 1 of the truth on average at any of those CVs
+      where S is even (1.5 where most cells are in G2), and noisier: 1.5
+      to 3 points, since it uses half of each peak.
   S piled up against one of the peaks:
       Watson moves 1 to 2 points from S to that peak at a CV of 5%, and
       4 to 5 at 8%: it takes S to be level under the side of the peak.
@@ -278,11 +279,11 @@ def _watson(x, counts, width, p, same_cv, ratio):
     under = np.zeros(x.size)
     for k in range(_ROUNDS):
         rest = counts - under
-        n1, m1, sd1, curve1, kept1 = _side(x, rest, width, m1, sd1, left=True, again=3 if k == 0 else 1)
+        again = 3 if k == 0 else 1
+        n1, m1, sd1, curve1, kept1 = _side(x, rest, width, m1, sd1, left=True, again=again)
         n2, m2, sd2, curve2, kept2 = _side(x, rest, width, m2, sd2, left=False,
                                            bounds=(ratio[0] * m1, ratio[1] * m1),
-                                           cv=sd1 / m1 if same_cv else None,
-                                           again=3 if k == 0 else 1)
+                                           cv=sd1 / m1 if same_cv else None, again=again)
         g1 = n1 * modelfit.gaussian(x, m1, sd1, width)
         g2 = n2 * modelfit.gaussian(x, m2, sd2, width)
         left = counts - g1 - g2

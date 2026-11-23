@@ -266,8 +266,9 @@ def _unanchored(u, residual, search, tail) -> np.ndarray:
     grid = np.arange(high + 0.1, low - 0.01, -0.02)
     errors = np.array([min(float(np.sum(residual([m, s, *tail[0]]) ** 2)) for s in _WIDTHS)
                        for m in grid])
+    last = grid.size - 1
     dips = [k for k in range(grid.size)
-            if errors[k] <= errors[max(k - 1, 0)] and errors[k] <= errors[min(k + 1, grid.size - 1)]]
+            if errors[k] <= errors[max(k - 1, 0)] and errors[k] <= errors[min(k + 1, last)]]
     dips = sorted(dips, key=lambda k: errors[k])[:6]
     tried = []
     for k in dips:
