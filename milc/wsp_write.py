@@ -237,6 +237,11 @@ class _Sample:
     def _ellipse_256(self, g: EllipseGate, stretch, shift) -> ET.Element:
         centre = np.asarray(g.center, dtype=np.float64) * stretch + shift
         a, b, angle = ellipse_axes(ellipse_covariance(g.radii, g.angle, stretch))
+        if a - b < 1e-9 * a:
+            # a circle's foci are one point, and a reader that takes its
+            # direction from them (FlowKit) cannot place it: a billionth
+            # longer along X, it is the same circle with two foci
+            a, angle = b * (1 + 1e-9), 0.0
         along = np.array([np.cos(angle), np.sin(angle)])
         across = np.array([-along[1], along[0]])
         c = np.sqrt(max(a * a - b * b, 0.0))
@@ -285,7 +290,8 @@ class _Sample:
             names = []
         names = (names + ["", ""])[:2]
         el = ET.Element("Graph", {"smoothing": "0", "backColor": "#ffffff", "foreColor": "#000000",
-                                  "type": "Pseudocolor" if names[1] else "Histogram", "fast": "1"})
+                                  "type": "Histogram" if names[0] and not names[1]
+                                  else "Pseudocolor", "fast": "1"})
         for axis, name in zip("xy", names):
             ET.SubElement(el, "Axis", {"dimension": axis, "name": name, "label": "",
                                        "auto": "auto"})
@@ -412,7 +418,8 @@ def _plain(el: ET.Element | None) -> str:
     samples gated alike: the identifiers and the counts."""
     if el is None:
         return ""
-    return re.sub(r' (?:count|\w+:id|\w+:parent_id)="[^"]*"', "", ET.tostring(el, encoding="unicode"))
+    return re.sub(r' (?:count|\w+:id|\w+:parent_id)="[^"]*"', "",
+                  ET.tostring(el, encoding="unicode"))
 
 
 def write_wsp(samples: list[ExportSample], path: str) -> Report:
@@ -471,10 +478,12 @@ def write_wsp(samples: list[ExportSample], path: str) -> Report:
     group = ET.SubElement(groups, "GroupNode", {
         "name": GROUP, "annotation": "", "owningGroup": GROUP, "expanded": "1",
         "sortPriority": "10", "count": "-1"})
+    first = kept[0][0] if shared else None
+    group.append(first.graph(first.tree) if shared else ET.Element("Graph", {
+        "smoothing": "0", "backColor": "#ffffff", "foreColor": "#000000", "type": "Pseudocolor",
+        "fast": "1"}))
     if shared:
-        first = kept[0][0]
-        quiet = Report()
-        _Sample(Prepared(first.sample, first.tree, first.counts), 0, quiet, ids).populations(
+        _Sample(Prepared(first.sample, first.tree, first.counts), 0, Report(), ids).populations(
             group, first.tree, None, GROUP)
     members = ET.SubElement(group, "Group", {
         "name": GROUP, "live": "1", "role": "ws.group.dlog.test", "key": "", "synchronized": "0",

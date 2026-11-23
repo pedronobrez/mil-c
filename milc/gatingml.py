@@ -49,7 +49,7 @@ import numpy as np
 from . import __version__
 from .gate_export import (GATINGML, ExportSample, Prepared, Report, Unwritable, affine, bend,
                           counted, ellipse_covariance, ellipse_points, is_helper, logicle_like,
-                          off, on, prepare, scales_of, source_of, walk)
+                          on, prepare, scales_of, source_of, walk)
 from .gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode, PolygonGate,
                      QuadrantGate, RectangleGate)
 from .transforms import Arcsinh, Biex, Log, Logicle, to_spec
@@ -469,6 +469,9 @@ def write_gatingml(samples: list[ExportSample], path: str) -> Report:
     stem, ext = os.path.splitext(path)
     for d in documents:
         name = re.sub(r"[^\w.-]+", "_", os.path.splitext(d.sample.name)[0])
-        report.files.append(f"{stem}_{name}{ext or '.xml'}")
-        _write(report.files[-1], [d])
+        file, k = f"{stem}_{name}{ext or '.xml'}", 2
+        while file in report.files:       # two names that differ only in what a file cannot hold
+            file, k = f"{stem}_{name}_{k}{ext or '.xml'}", k + 1
+        report.files.append(file)
+        _write(file, [d])
     return report

@@ -24,7 +24,7 @@ import numpy as np
 from .compensation import Compensation, strip_prefix
 from .gating import (AND, NOT, OR, BooleanGate, ClusterGate, EllipseGate, GateNode,
                      PolygonGate, QuadrantGate, RectangleGate, TimeGate)
-from .transforms import Biex, Linear, Logicle, same, to_spec
+from .transforms import Biex, Linear, Logicle, same
 
 WSP, GATINGML = "wsp", "gatingml"
 FORMATS = {WSP: "FlowJo workspace", GATINGML: "Gating-ML 2.0"}
@@ -593,6 +593,3 @@ def export_gates(session, path: str, format: str | None = None, entries=None,
                             "program does not have: it will count other events in them")
     return report
 
-
-def spec_key(scale) -> str:
-    return repr(to_spec(scale))

@@ -3,7 +3,7 @@ A FlowJo 10 workspace (.wsp), read for what the analysis needs from it:
 which files, the compensation matrix each was given, the axis transforms,
 and the gating tree with the counts FlowJo reported.
 
-Nothing is written back. Plugin nodes (UMAP, FlowSOM, ClusterExplorer) are
+Writing one is `wsp_write.py`. Plugin nodes (UMAP, FlowSOM, ClusterExplorer) are
 skipped: their results are recomputed here, not imported.
 
 Rectangles and polygons are read by rules checked against FlowJo's own
