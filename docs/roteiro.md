@@ -90,13 +90,14 @@ material de divulgação.
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Contagem e % do pai | S | **S** | todos |
-| % do avô e do total | S | N | todos |
-| Mediana, média, média geométrica por população | S | P (mediana e média, só por cluster) | todos |
-| CV, DP, CV robusto, MAD, percentis | S | N | FCS Express (parte), Kaluza (parte) |
+| % do avô e do total | S | **S** | todos |
+| Mediana, média, média geométrica por população | S | **S** | todos |
+| CV, DP, CV robusto, MAD | S | **S** | FCS Express (parte), Kaluza (parte) |
+| Percentis arbitrários, moda | S | N | FCS Express (percentil) |
 | Stain index | P (plugin) | N | Cytobank |
 | Contagem absoluta | P | N | FCS Express |
 | Parâmetros derivados e fórmulas | S | N | FCS Express, Kaluza |
-| Tabela de estatísticas exportável | S | P (só as dos clusters) | todos |
+| Tabela de estatísticas exportável | S | **S** (CSV e área de transferência) | todos |
 
 ### Módulos especializados
 
@@ -188,7 +189,7 @@ concorrentes fazem melhor que o FlowJo, e o que este experimento em particular p
 
 Sem isto, o programa não substitui o FlowJo no dia a dia, só no fim da análise.
 
-1. **Tabela de estatísticas.** Por população e por amostra: contagem, % do pai, do avô e do total,
+1. ~~**Tabela de estatísticas.**~~ **Feito** (aba Statistics e `milc stats`). Por população e por amostra: contagem, % do pai, do avô e do total,
    mediana, média, média geométrica, CV e CV robusto de qualquer marcador. Exportável, com as
    colunas de anotação junto. É o que alimenta todo gráfico de comparação.
 2. **Sobreposição de amostras.** Histogramas e contornos de várias amostras ou grupos num mesmo

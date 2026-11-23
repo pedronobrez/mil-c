@@ -17,6 +17,7 @@ from .explore_tab import ExploreTab
 from .gates_tab import GatesTab
 from .samples_tab import SamplesTab
 from .settings import settings
+from .statistics_tab import StatisticsTab
 
 SETTING_FOLDER = "files/last_folder"
 SETTING_APPEARANCE = "view/appearance"
@@ -36,6 +37,8 @@ class MainShell(QtWidgets.QMainWindow):
         self.gates = GatesTab(self.session)
         self.tabs.addTab(self.samples, "Samples")
         self.tabs.addTab(self.gates, "Gates")
+        self.statistics = StatisticsTab(self.session)
+        self.tabs.addTab(self.statistics, "Statistics")
         self.clusters = ClustersTab(self.session)
         self.tabs.addTab(self.explore, "Explore")
         self.tabs.addTab(self.clusters, "Clusters")
@@ -47,6 +50,10 @@ class MainShell(QtWidgets.QMainWindow):
         self.samples.sigStatus.connect(self.status)
         self.gates.sigStatus.connect(self.status)
         self.gates.sigGatesChanged.connect(self.samples.refresh)
+        self.gates.sigGatesChanged.connect(self.statistics.refresh)
+        self.samples.sigGatesChanged.connect(self.statistics.refresh)
+        self.samples.sigColumnsChanged.connect(self.statistics.mark_stale)
+        self.statistics.sigStatus.connect(self.status)
         self.samples.sigGatesChanged.connect(self.gates.refresh)
         self.explore.sigStatus.connect(self.status)
         self.explore.sigResults.connect(self.clusters.refresh)
@@ -120,6 +127,8 @@ class MainShell(QtWidgets.QMainWindow):
         settings().setValue(SETTING_FOLDER, folder)
         self.samples.refresh()
         self.gates.refresh()
+        self.statistics.result = None
+        self.statistics.refresh()
         self.explore.dataset_changed()
         self.clusters.refresh()
         self.tabs.setCurrentWidget(self.samples)
@@ -147,6 +156,7 @@ class MainShell(QtWidgets.QMainWindow):
                 return
             self.samples.refresh()
             self.gates.refresh()
+            self.statistics.refresh()
 
     def open_dataset(self, path: str) -> None:
         self.session.dataset = (Dataset.load(path) if path.endswith(".npz")

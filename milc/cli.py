@@ -284,6 +284,43 @@ def _selftest(a, print) -> int:
     return 0
 
 
+def cmd_stats(a) -> int:
+    from . import stats
+    from .session import Session
+    session = Session()
+    session.open_folder(a.data)
+    if a.wsp:
+        session.set_workspace(a.wsp)
+    session.set_extend_gates(not a.listed_only)
+    if a.pattern:
+        session.annotate(a.pattern)
+    available = session.stat_channels()
+    wanted = [w.strip().lower() for w in (a.channels or "").split(",") if w.strip()]
+    channels = []
+    for w in wanted:
+        hits = [c for c in available
+                if w in (c[0].lower(), c[1].lower(), c[0].lower().split()[0],
+                         c[1].lower().replace("comp-", ""))]
+        if len(hits) != 1:
+            print(f"{w!r}: " + ("matches " + ", ".join(h[0] for h in hits) if hits
+                                else "no such parameter"), file=sys.stderr)
+            return 2
+        channels += hits
+    by_lower = {name.lower(): name for name in stats.STATISTICS}
+    chosen = []
+    for w in (a.stats or "").split(","):
+        if w.strip():
+            if w.strip().lower() not in by_lower:
+                print(f"{w!r}: choose among " + ", ".join(stats.STATISTICS), file=sys.stderr)
+                return 2
+            chosen.append(by_lower[w.strip().lower()])
+    table = session.statistics(None if a.population is None else a.population.split(";"),
+                               channels, chosen)
+    table.to_csv(a.out)
+    print(f"{len(table.rows):,d} rows, {len(table.columns)} columns -> {a.out}")
+    return 0
+
+
 def cmd_gui(a) -> int:
     # imported by name, here, where a packager can see it. Asked for through
     # __import__ it was left out of the first bundle, which then passed its
@@ -351,6 +388,20 @@ def main(argv=None) -> int:
                    help="for a .fcs: the column that says which sample")
     s.add_argument("--out", default="analysis")
     s.set_defaults(run=cmd_analyze)
+
+    s = sub.add_parser("stats", help="counts, percentages and statistics of every population")
+    s.add_argument("data")
+    s.add_argument("--wsp", help="a FlowJo workspace; without it, the one in the folder")
+    s.add_argument("--listed-only", action="store_true")
+    s.add_argument("--pattern", help="columns from the file names, as for concat")
+    s.add_argument("--population", help="gate paths, separated by ';'; all of them without it")
+    s.add_argument("--channels", help="parameters to report on: CD8,CD4,FSC-A")
+    s.add_argument("--stats", default="Median",
+                   help="comma-separated: " + ", ".join(
+                       ["Median", "Mean", "Geometric mean", "SD", "CV", "Robust SD",
+                        "Robust CV", "MAD"]))
+    s.add_argument("--out", default="statistics.csv")
+    s.set_defaults(run=cmd_stats)
 
     s = sub.add_parser("selftest", help="the whole route on invented data: is this build sound?")
     s.add_argument("--no-window", action="store_true", help="skip the part that needs Qt")

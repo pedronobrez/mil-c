@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import cluster_stats, sampling
+from . import cluster_stats, sampling, stats
 from .dataset import Dataset, concatenate
 from .fcs import read_header
 from .gating import GateNode, copy_tree, tree_from_dict, tree_to_dict
@@ -449,6 +449,43 @@ class Session:
         for e in self.entries:
             e.sample = None
         return self.dataset
+
+    # --- statistics ------------------------------------------------------
+
+    def stat_channels(self) -> list[tuple[str, str]]:
+        """(label, column) for every parameter a statistic can be asked
+        of: the stain's name where there is one, and `Comp-…` as the column
+        where the parameter is compensated — the value FlowJo reports."""
+        entries = self.usable()
+        if not entries:
+            return []
+        first = entries[0]
+        matrix = self.matrix_of(first)
+        spill = None
+        if matrix is None:
+            from . import compensation
+            spill = compensation.from_keywords(read_header(first.path))
+        compensated = set((matrix or spill).channels) if (matrix or spill) else set()
+        return [(m or c, ("Comp-" + c) if c in compensated else c)
+                for c, m in zip(first.channels, first.markers)]
+
+    def statistics(self, populations: list[str] | None = None,
+                   channels: list[tuple[str, str]] | None = None,
+                   statistics: list[str] | None = None, progress=None,
+                   only_included: bool = True) -> stats.StatsTable:
+        """The table: a row for each population of each sample, with the
+        annotation columns beside the name so it can be sorted, filtered
+        and compared by group wherever it is taken."""
+        chosen = [e for e in self.usable() if e.include or not only_included]
+        table = stats.StatsTable(stats.headers(self.columns, channels, statistics))
+        for i, e in enumerate(chosen):
+            sample = self.load(e)
+            notes = [e.meta.get(c, "") for c in self.columns]
+            for row in stats.population_rows(sample, populations, channels, statistics):
+                table.rows.append([e.name, *notes, row[1], row[0], *row[2:]])
+            if progress:
+                progress(i + 1, len(chosen), e.name)
+        return table
 
     # --- analysis --------------------------------------------------------
 

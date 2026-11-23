@@ -524,6 +524,28 @@ QCheckBox::indicator:checked {{
     border-color: {t['accent']};
     image: url({icon['tick']});
 }}
+/* the boxes inside lists, trees and tables. Without these an unticked
+   row showed nothing at all — no box to aim at — and only the ticked
+   ones drew a mark: a list of markers looked like a list of words. */
+QAbstractItemView::indicator {{
+    width: 14px;
+    height: 14px;
+    border: 1px solid {t['line_strong']};
+    border-radius: 3px;
+    background: {t['surface']};
+}}
+QAbstractItemView::indicator:hover {{
+    border-color: {t['accent']};
+}}
+QAbstractItemView::indicator:checked {{
+    background: {t['accent']};
+    border-color: {t['accent']};
+    image: url({icon['tick']});
+}}
+QAbstractItemView::indicator:disabled {{
+    background: {t['surface_alt']};
+    border-color: {t['line']};
+}}
 QCheckBox::indicator:indeterminate {{
     background: {t['accent_soft']};
     border-color: {t['accent']};

@@ -463,3 +463,76 @@ def test_selftest_never_raises_when_logging(tmp_path, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no UMAP today")))
     assert cli.main(["selftest", "--no-window", "--log", str(log)]) == 1
     assert "no UMAP today" in log.read_text() and "Traceback" in log.read_text()
+
+
+# --- statistics --------------------------------------------------------------
+
+def test_statistic_definitions():
+    from milc import stats
+    x = np.array([1.0, 2, 3, 4, 100])
+    assert stats.compute("Median", x) == 3 and stats.compute("Mean", x) == 22
+    assert stats.compute("SD", x) == pytest.approx(np.std(x, ddof=1))
+    assert stats.compute("CV", x) == pytest.approx(100 * np.std(x, ddof=1) / 22)
+    assert stats.compute("MAD", x) == 1
+    lo, hi = np.percentile(x, [15.87, 84.13])
+    assert stats.compute("Robust SD", x) == pytest.approx((hi - lo) / 2)
+    assert stats.compute("Robust CV", x) == pytest.approx(100 * (hi - lo) / 2 / 3)
+    # no logarithm at or below zero: those events are left out, not an error
+    assert stats.compute("Geometric mean", np.array([-5.0, 0, 10, 1000])) == pytest.approx(100)
+    assert np.isnan(stats.compute("Geometric mean", np.array([-1.0, 0])))
+    # nothing to compute on is no value, for every statistic
+    assert all(np.isnan(stats.compute(name, np.array([]))) for name in stats.STATISTICS)
+    assert np.isnan(stats.compute("SD", np.array([5.0]))) and np.isnan(stats.compute("CV", np.zeros(3)))
+    # a robust SD of normal data is its SD
+    normal = np.random.default_rng(0).normal(50, 7, 200_000)
+    assert stats.compute("Robust SD", normal) == pytest.approx(7, rel=0.01)
+
+
+def test_statistics_table(tmp_path):
+    from milc import stats
+    from milc.cli import main
+    from milc.session import Session
+    rng = np.random.default_rng(1)
+    for name, n in (("3Ctrl1", 400), ("3Case1", 900)):
+        ev = np.column_stack([np.linspace(0, 999, n), np.abs(rng.normal(500, 100, (n, 2)))])
+        _write(tmp_path, name + ".fcs", ev.astype(np.float32),
+               markers=["", "CD8", "CD4"], keywords={"SPILL": "2,FITC-A,PE-A,1,0.1,0.02,1"})
+    s = Session()
+    s.open_folder(str(tmp_path))
+    assert s.stat_channels() == [("FSC-A", "FSC-A"), ("CD8", "Comp-FITC-A"), ("CD4", "Comp-PE-A")]
+    for e in s.usable():
+        cells = e.gates.add(GateNode("Cells", RectangleGate(["FSC-A"], [500], [None])))
+        cells.add(GateNode("Top", RectangleGate(["FSC-A"], [750], [None])))
+    t = s.statistics(channels=[("CD8", "Comp-FITC-A")], statistics=["Median", "CV"])
+    assert t.columns == ["Sample", "Group", "Population", "Path", "Count", "% of parent",
+                         "% of grandparent", "% of total", "CD8 · Median", "CD8 · CV"]
+    assert len(t.rows) == 6 and t.column("Population")[:3] == ["All events", "Cells", "Top"]
+    trt = {r[3]: r for r in t.rows if r[0] == "3Case1"}
+    sample = s.load(s.entries[0])
+    fsc, cd8 = sample.column("FSC-A"), sample.column("Comp-FITC-A")
+    assert trt["Cells"][4] == (fsc >= 500).sum() and trt["Cells/Top"][4] == (fsc >= 750).sum()
+    assert trt["Cells"][5] == pytest.approx(100 * (fsc >= 500).mean())
+    assert np.isnan(trt[""][5]) and np.isnan(trt["Cells"][6])       # no parent, no grandparent
+    assert trt["Cells/Top"][5] == pytest.approx(100 * (fsc >= 750).sum() / (fsc >= 500).sum())
+    assert trt["Cells/Top"][6] == pytest.approx(trt["Cells/Top"][7])  # grandparent is everything
+    assert trt["Cells/Top"][8] == pytest.approx(np.median(cd8[fsc >= 750]))   # compensated values
+    assert trt["Cells"][1] == "Case"                                  # the sample's own column
+    # only what was asked for
+    one = s.statistics(populations=["Cells"])
+    assert len(one.rows) == 2 and one.columns[-1] == "% of total"
+
+    path = tmp_path / "out.csv"
+    t.to_csv(str(path))
+    lines = path.read_text().splitlines()
+    assert lines[0].startswith("Sample,Group,Population,Path,Count") and len(lines) == 7
+    assert lines[1].split(",")[5] == ""                              # no value is an empty cell
+    assert t.to_text().splitlines()[0].split("\t")[-1] == "CD8 · CV"
+
+    s.save_project()                                                 # the gates, for the command line
+    out = tmp_path / "cli.csv"
+    assert main(["stats", str(tmp_path), "--channels", "cd8,FSC-A", "--stats", "median,robust cv",
+                 "--out", str(out)]) == 0
+    head = out.read_text().splitlines()[0]
+    assert head.endswith("CD8 · Median,CD8 · Robust CV,FSC-A · Median,FSC-A · Robust CV")
+    assert main(["stats", str(tmp_path), "--channels", "nope"]) == 2
+    assert main(["stats", str(tmp_path), "--stats", "mode"]) == 2

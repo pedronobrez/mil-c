@@ -10,6 +10,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 QtWidgets = pytest.importorskip("PyQt6.QtWidgets")
+from PyQt6 import QtCore  # noqa: E402
 
 from milc.fcs import write_fcs  # noqa: E402
 
@@ -368,4 +369,59 @@ def test_columns_are_the_users(app, folder):
                                dpi=40)[:4] == b"\x89PNG"
     c.facet_by.setCurrentIndex(0)
     assert len(c.freq.panels) == 1 and c.freq.content().facets is None
+    w.close()
+
+
+def test_statistics_tab(app, folder, tmp_path):
+    from milc.ui import worker
+    from milc.ui.gates_tab import HISTOGRAM
+    from milc.ui.shell import MainShell
+
+    def settle():
+        for _ in range(3):
+            worker.wait_all()
+            app.processEvents()
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    st = w.statistics
+    assert st.populations.topLevelItemCount() == 1 and st.parameters.count() == 4
+    assert st.chosen_statistics() == ["Median"] and not st.export_button.isEnabled()
+
+    # a gate drawn in Gates is offered here at once
+    w.tabs.setCurrentWidget(w.gates)
+    settle()
+    w.gates.set_axes("FSC-A", HISTOGRAM)
+    w.gates.add_rectangle(85000, 0, 95000, 0, "Cells")
+    assert st.chosen_populations() == ["", "Cells"]
+
+    st.tick(parameters=["CD4", "Comp-FITC-A"], statistics=["Median", "Robust CV"])
+    st.compute()
+    settle()
+    t = st.result
+    assert len(t.rows) == 8 and t.columns[-4:] == ["CD8 · Median", "CD8 · Robust CV",
+                                                    "CD4 · Median", "CD4 · Robust CV"]
+    assert st.table.rowCount() == 8 and st.table.columnCount() == len(t.columns) - 1  # no Path
+    assert "4 samples × 2 populations" in st.caption.text() and st.export_button.isEnabled()
+
+    # sorting is by the number, not by its text
+    count = [st.table.horizontalHeaderItem(i).text() for i in range(st.table.columnCount())].index("Count")
+    st.table.sortItems(count, QtCore.Qt.SortOrder.DescendingOrder)
+    shown = [st.table.item(r, count).value for r in range(8)]
+    assert shown == sorted(shown, reverse=True) and st.table.item(0, count).text() == "1,500"
+
+    # leaving a sample out, and knowing when the table is behind
+    w.session.entries[0].include = False
+    st.compute()
+    settle()
+    assert len(st.result.rows) == 6 and st.stale.text() == ""
+    w.samples.add_column("Day")
+    assert "again" in st.stale.text()
+    st.tick(populations=["Cells"])
+    st.compute()
+    settle()
+    assert len(st.result.rows) == 3 and st.result.columns[:3] == ["Sample", "Group", "Day"]
+    st.copy()
+    assert QtWidgets.QApplication.clipboard().text().splitlines()[0].startswith("Sample\tGroup\tDay")
     w.close()

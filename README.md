@@ -49,6 +49,13 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
 - What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
 
+**Statistics** — a row for each population of each sample.
+- Count and percent of parent, of grandparent and of all events.
+- For any parameter: median, mean, geometric mean, SD, CV, robust SD, robust CV, MAD — on
+  compensated values in the file's own units, by FlowJo's definitions.
+- The samples' own columns sit beside the name; sort by any header; export as CSV or copy
+  into Excel or Prism.
+
 **Explore** — UMAP, tSNE and FlowSOM, run in the background with FlowJo's defaults.
 - Any two axes: an embedding, or two markers on a biexponential scale ticked in decades.
 - Colour by group, day, animal, sample, cluster, or the expression of a marker.
@@ -132,6 +139,7 @@ Everything the window does, without the window.
 ```bash
 python -m milc inspect DATA                      # what a folder holds
 python -m milc counts  DATA --wsp analysis.wsp   # every gate, against FlowJo's count
+python -m milc stats   DATA --channels CD8,CD4 --stats "median,robust cv" --out stats.csv
 python -m milc concat  DATA --wsp analysis.wsp --out concat \
     --pattern '(?P<Day>\d+)(?P<Group>[A-Za-z]+)' --group-by Day,Group
 python -m milc analyze concat.npz --channels CD8,CD4,Foxp3 --umap --tsne --flowsom --out run
@@ -155,6 +163,7 @@ milc/
   embed.py          UMAP and tSNE; how well a map keeps neighbours
   flowsom.py        the self-organising map, consensus metaclustering, the tree
   cluster_stats.py  expression and frequency tables
+  stats.py          the statistics table: counts, percentages, medians, CVs
   figures.py        a plot and a style into SVG, PDF, PNG or TIFF (matplotlib)
   session.py        the open analysis; what the window reads and writes
   cli.py            the command line
