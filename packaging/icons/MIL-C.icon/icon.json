@@ -1,0 +1,43 @@
+{
+  "fill": {
+    "solid": "srgb:0.35294,0.26667,0.69020,1.00000"
+  },
+  "fill-specializations": [
+    {
+      "appearance": "dark",
+      "solid": "srgb:0.21569,0.14510,0.47843,1.00000"
+    }
+  ],
+  "groups": [
+    {
+      "name": "mark",
+      "specular": true,
+      "layers": [
+        {
+          "image-name": "head.svg",
+          "name": "head",
+          "glass": true
+        },
+        {
+          "image-name": "gate.svg",
+          "name": "gate",
+          "glass": true
+        }
+      ]
+    },
+    {
+      "name": "outside",
+      "layers": [
+        {
+          "image-name": "events.svg",
+          "name": "events",
+          "glass": false,
+          "opacity": 0.6
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

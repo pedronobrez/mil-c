@@ -34,6 +34,11 @@ python3 -m PyInstaller "$here/milc.spec" --noconfirm --log-level WARN \
     --distpath "$build" --workpath "$build/.build"
 [ -d "$app" ] || { echo "no $app was produced" >&2; exit 1; }
 
+echo "==> the icon for macOS 26"
+# before the checks: it adds a file and signs the application again, and
+# what is checked should be what is shipped
+bash "$here/make_liquid_icon.sh" "$app"
+
 echo "==> checking it runs before shipping it"
 # from an empty folder, so nothing is imported from the repository by accident
 ( cd "$(mktemp -d)" && "$app/Contents/MacOS/MIL-C" selftest )

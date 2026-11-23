@@ -270,8 +270,90 @@ def export(variant="gate", name="MIL-C"):
     (OUT / f"{name}.svg").write_text(tile_svg(variant), encoding="utf-8")
     (OUT / "mil-c-front.svg").write_text(mark_svg(variant), encoding="utf-8")
     render(256, variant).save(ROOT / "milc" / "icon.png")
+    if variant == "gate":
+        liquid(name)
     print(f"[icon] {variant} -> {OUT}: PNGs, {name}.iconset, {name}.icns, {name}.ico, {name}.svg, "
           "mil-c-front.svg; milc/icon.png")
+
+
+# ---- Liquid Glass (macOS 26) --------------------------------------------------------------------
+#
+# A classic .icns is only set inside the system's glass frame on macOS 26 and keeps its colours
+# whatever appearance the person chose. An icon that follows Clear and Tinted is an Icon Composer
+# document: a folder with a background fill and layers of artwork that the system renders as
+# glass. This writes that folder; `make_liquid_icon.sh` has Xcode 26's actool compile it into the
+# application.
+#
+# The document's canvas is the icon's whole shape — the system draws the rounded square — so the
+# mark is placed on 1024 units as it sits on our own tile, not inside a margin.
+#
+# Each layer is one path under the even-odd rule, traced from the same masks the PNGs are made
+# of. The suite's SVGs knock the eyes and the muzzle out through a <mask>, which is not something
+# to rely on an icon compiler to honour; a traced outline has nothing to honour.
+
+LIQUID_FILL = "srgb:0.35294,0.26667,0.69020,1.00000"          # #5a44b0, the tile's middle
+LIQUID_FILL_DARK = "srgb:0.21569,0.14510,0.47843,1.00000"     # #37257a
+
+
+def _traced(mask, scale):
+    """An 8-bit mask as SVG path data: every outline, to be filled even-odd."""
+    import numpy as np
+    from contourpy import contour_generator
+    z = np.asarray(mask, dtype=np.float64) / 255.0
+    z = np.pad(z, 1)                      # a shape touching the edge still closes
+    parts = []
+    for line in contour_generator(z=z).lines(0.5):
+        pts = (line[::3] - 1.0) * scale   # a third of the samples is far below a pixel
+        if len(pts) < 4:
+            continue
+        parts.append("M " + " L ".join("%.1f %.1f" % (x, y) for x, y in pts) + " Z")
+    return " ".join(parts)
+
+
+def liquid(name="MIL-C"):
+    g = shared()
+    size, ss = 1024, 4
+    s = size * ss
+    unit = s * 0.66 / (g.MARK_BOX[2] - g.MARK_BOX[0])
+    centre = s / 2
+    gate = Image.new("L", (s, s), 0)
+    _decorations(ImageDraw.Draw(gate), "gate", centre, centre, unit, colour=255, outside=0)
+    head = g.cow_mask(s, (0, 0, s, s), s, shrink=SHRINK)
+
+    doc = OUT / f"{name}.icon"
+    shutil.rmtree(doc, ignore_errors=True)
+    (doc / "Assets").mkdir(parents=True)
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">\n'
+           % (size, size, size, size))
+    for file, mask in (("gate.svg", gate), ("head.svg", head)):
+        (doc / "Assets" / file).write_text(
+            svg + '<path fill="#ffffff" fill-rule="evenodd" d="%s"/>\n</svg>\n'
+            % _traced(mask, 1 / ss), encoding="utf-8")
+    u = unit / ss
+    (doc / "Assets" / "events.svg").write_text(
+        svg + "".join('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="#c9bdf2"/>\n'
+                      % (512 + x * u, 512 + y * u, r * u) for x, y, r in EVENTS)
+        + "</svg>\n", encoding="utf-8")
+
+    import json
+    (doc / "icon.json").write_text(json.dumps({
+        "fill": {"solid": LIQUID_FILL},
+        "fill-specializations": [{"appearance": "dark", "solid": LIQUID_FILL_DARK}],
+        "groups": [
+            # the gate and the head are the glass; the events stay flat behind them, as they
+            # are the part of the picture that was left out
+            {"name": "mark", "specular": True, "layers": [
+                {"image-name": "head.svg", "name": "head", "glass": True},
+                {"image-name": "gate.svg", "name": "gate", "glass": True},
+            ]},
+            {"name": "outside", "layers": [
+                {"image-name": "events.svg", "name": "events", "glass": False, "opacity": 0.6},
+            ]},
+        ],
+        "supported-platforms": {"squares": "shared"},
+    }, indent=2) + "\n", encoding="utf-8")
+    print(f"[icon] liquid -> {doc}")
+    return doc
 
 
 def _font(size):
