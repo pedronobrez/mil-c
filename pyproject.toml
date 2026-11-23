@@ -15,6 +15,7 @@ dependencies = [
     "numba>=0.59",
     "umap-learn>=0.5",
     "openTSNE>=1.0",
+    "matplotlib>=3.7",
     "PyQt6>=6.5",
     "pyqtgraph>=0.13",
 ]
