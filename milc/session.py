@@ -24,8 +24,10 @@ from .compensation import Compensation, strip_prefix
 from .fcs import read_header, write_fcs
 from .gating import ClusterGate, GateNode, copy_tree, follow_scale, tree_from_dict, tree_to_dict
 from .gating import TimeGate, keep_times, time_node, unwrap, wrap
+from .gating import keep_fits
 from .sample import Sample, annotate
 from .transforms import Arcsinh, Biex, Linear, Logicle, from_spec, to_spec
+from .transforms import display_range
 from .wsp import Workspace, WspSample, read_wsp
 
 #: the one column a new folder starts with; every other is the user's
@@ -177,6 +179,9 @@ class Session:
         #: None where it is not applied, or was before this was kept
         self.quality_settings: dict | None = None
         self._counts: dict[tuple[str, str], int] = {}
+        #: after `gates_changed`: (sample, population, why) for each gate
+        #: that was to be fitted on a sample's own events and could not be
+        self.unfitted: list[tuple[str, str, str]] = []
         #: the last FlowSOM, kept for its map and tree
         self.flowsom = None
         #: the pages of several panels (`plate.Plate`), kept with the project
@@ -571,12 +576,15 @@ class Session:
         copy — FlowJo's group, where one gate is every sample's gate.
         Counts are forgotten and the trees saved beside the files."""
         changed = [e]
+        to_fit = []
         if everyone:
             for other in self.usable():
                 if other is not e:
                     own = other.gates
                     other.gates = copy_tree(e.gates, keep_counts=False)
                     keep_times(other.gates, own)   # its bad stretches are its own
+                    # and so are the gates fitted to its own events
+                    to_fit.append((other, keep_fits(other.gates, own)))
                     changed.append(other)
         for node in e.gates.walk():
             node.reference_count = None   # no longer what another program counted
@@ -584,9 +592,58 @@ class Session:
             c.edited, c.borrowed = True, False
             if c.sample is not None:
                 c.sample.gates, c.sample._masks = c.gates, None
+        self.unfitted = []
+        for other, nodes in to_fit:
+            for node in nodes:           # parents first: each is fitted inside the last
+                self._fit_here(other, node, e.name)
         self._counts.clear()
         self._keep_population()
         self.save_project()
+
+    # --- gates fitted to each sample's own events ----------------------------------
+
+    def axis_range(self, e: Entry, dim: str) -> tuple[float, float]:
+        """The ends of a parameter's axis on the scale it is drawn on."""
+        scale = self.scale_of(dim)
+        if scale is not None:
+            return display_range(scale)
+        f = self.load(e).fcs
+        channel = strip_prefix(dim)[0]
+        if channel in f.channels:
+            return (0.0, float(f.ranges[f.index(channel)]))
+        return (0.0, float(self.load(e).column(dim).max()))
+
+    def fit_gate(self, e: Entry, parent: str, spec: dict):
+        """What `autogate.propose` finds for `spec` on the events of this
+        sample's population `parent`: a gate to accept or not, with what
+        was found — or no gate, and why."""
+        from . import autogate
+        sample = self.load(e)
+        rows = sample.mask(parent)
+        scales = [self.scale_of(d) for d in spec["dims"]]
+
+        def values(dim):
+            x = sample.column(dim)[rows].astype(np.float64)
+            scale = self.scale_of(dim)
+            return scale(x) if scale is not None else x
+        return autogate.propose(spec, values, [self.axis_range(e, d) for d in spec["dims"]],
+                                scales)
+
+    def _fit_here(self, e: Entry, node: GateNode, source: str) -> None:
+        """`node` came with a tree copied from the sample `source` and is
+        one fitted on each sample: fit it on this one. Where nothing can
+        be proposed here the copy stays, and says so."""
+        from . import autogate
+        proposal = self.fit_gate(e, node.parent.path, node.fit)
+        if proposal.found:
+            node.gate = proposal.gate
+            node.note = autogate.note(node.fit)
+        else:
+            node.note = (f"{autogate.NOT_FITTED}: {proposal.why}. "
+                         f"The gate is where it is on {source}.")
+            self.unfitted.append((e.name, node.path, proposal.why))
+        if e.sample is not None:
+            e.sample._masks = None
 
     def discard_gates(self) -> None:
         """Back to the workspace's gates: the saved ones are deleted. The

@@ -28,6 +28,7 @@ import numpy as np
 from . import density, figures, order
 from .gating import (BooleanGate, EllipseGate, GateNode, PolygonGate, QuadrantGate,
                      RectangleGate)
+from .gating import OffsetQuadrantGate
 from .transforms import decade_ticks, same
 
 VIOLIN, BOX = "violin", "box"
@@ -364,7 +365,7 @@ def outline(gate, scale_of, ranges: list[tuple[float, float]]) -> list[np.ndarra
     one parameter is its bounds as vertical lines from 0 to 1: of whatever
     height the plot has. A polygon or an ellipse is straight, or round,
     on the scales it is tested on; shown on others, it is the curve it
-    has become. A quadrant is the two lines of its crossing. A
+    has become. A quadrant is the two lines of its crossing, or its four arms. A
     combination has no outline."""
     if isinstance(gate, BooleanGate):
         return []
@@ -384,6 +385,18 @@ def outline(gate, scale_of, ranges: list[tuple[float, float]]) -> list[np.ndarra
         return [np.array([[px, ranges[1][0]], [px, ranges[1][1]]]),
                 np.array([[ranges[0][0], py], [ranges[0][1], py]])]
     drawn = list(gate.scales or [None, None])
+    if isinstance(gate, OffsetQuadrantGate):
+        # each arm from the centre to well past the ends of the axes,
+        # followed in steps: straight where it was drawn, a curve elsewhere
+        centre, _ = gate.shown()
+        ends = _carried(np.array(ranges, dtype=np.float64).T, shown, drawn)
+        spans = [abs(float(v)) or 1.0 for v in ends[1] - ends[0]]
+        lines = []
+        for d in gate.directions().values():
+            far = 1.5 / max(abs(d[0]) / spans[0], abs(d[1]) / spans[1], 1e-12)
+            t = np.linspace(0.0, far, 48)[:, None]
+            lines.append(_carried(centre + t * np.array(d), drawn, shown))
+        return lines
     if isinstance(gate, PolygonGate):
         own = np.array(gate.vertices, dtype=np.float64)
         for k in range(2):

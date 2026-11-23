@@ -21,9 +21,10 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .. import density, figures, order, views
+from .. import autogate, density, figures, order, views
 from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
+from ..gating import ARMS, OffsetQuadrantGate
 from ..gating import TimeGate, time_node
 from ..session import Session
 from ..transforms import Arcsinh, Biex, Log, Logicle, decade_ticks, display_range, same
@@ -50,10 +51,14 @@ class _DrawBox(pg.ViewBox):
         self.mode: str | None = None
         self._points: list[tuple[float, float]] = []
         self._shape = None
+        self._listening = False
 
     def set_mode(self, mode: str | None) -> None:
         self.cancel()
         self.mode = mode
+        if mode and not self._listening and self.scene() is not None:
+            self.scene().sigMouseClicked.connect(self._scene_clicked)
+            self._listening = True
 
     def cancel(self) -> None:
         if self._shape is not None:
@@ -66,6 +71,11 @@ class _DrawBox(pg.ViewBox):
             self._shape = pg.PlotCurveItem(pen=pen)
             self.addItem(self._shape, ignoreBounds=True)
         self._shape.setData(np.asarray(xs, dtype=float), np.asarray(ys, dtype=float))
+
+    def propose(self, xs, ys) -> None:
+        """Show an outline that is not a gate yet."""
+        self.cancel()
+        self._outline(xs, ys)
 
     def mouseDragEvent(self, ev, axis=None):
         if self.mode not in ("rect", "ellipse") or ev.button() != QtCore.Qt.MouseButton.LeftButton:
@@ -87,12 +97,28 @@ class _DrawBox(pg.ViewBox):
                 signal.emit(min(a.x(), b.x()), min(a.y(), b.y()),
                             max(a.x(), b.x()), max(a.y(), b.y()))
 
+    def _drawing_click(self, ev) -> bool:
+        return (self.mode in ("poly", "quad", "seed")
+                and ev.button() == QtCore.Qt.MouseButton.LeftButton)
+
+    def _scene_clicked(self, ev) -> None:
+        """A click that something above took — an event's dot takes the
+        clicks on it, and where the events are is where one clicks — is
+        still a click on the plot while drawing."""
+        if (self._drawing_click(ev) and not getattr(ev, "drawn", False)
+                and self.sceneBoundingRect().contains(ev.scenePos())):
+            self._click(ev)
+
     def mouseClickEvent(self, ev):
-        if self.mode not in ("poly", "quad") or ev.button() != QtCore.Qt.MouseButton.LeftButton:
+        if not self._drawing_click(ev):
             return super().mouseClickEvent(ev)
         ev.accept()
+        self._click(ev)
+
+    def _click(self, ev) -> None:
+        ev.drawn = True
         p = self.mapSceneToView(ev.scenePos())
-        if self.mode == "quad":
+        if self.mode in ("quad", "seed"):
             self.sigPoint.emit(p.x(), p.y())
             return
         if ev.double() and len(self._points) >= 3:
@@ -104,6 +130,151 @@ class _DrawBox(pg.ViewBox):
             self._points.append((p.x(), p.y()))
             xs, ys = zip(*self._points)
             self._outline(xs, ys)
+
+
+#: where each arm of a quadrant is seen when its two parameters are shown
+#: the other way round
+_MIRRORED = {"right": "up", "up": "right", "left": "down", "down": "left"}
+_ALONG = {"right": (1, 0), "up": (0, 1), "left": (-1, 0), "down": (0, -1)}
+
+
+class _Crossing(QtCore.QObject):
+    """One quadrant gate on the plot: its lines, and a handle on each arm.
+
+    Until an arm is moved it is two lines that cross, dragged as lines.
+    Dragging an arm's handle turns that arm about the centre — the four
+    become half-lines of their own — and from then on there is a handle
+    at the centre too, which moves them all."""
+
+    #: the lines were let go where they cross: (x, y)
+    sigCrossingMoved = QtCore.pyqtSignal(float, float)
+    #: an arm, or the centre of arms that are their own, was let go
+    sigArmsMoved = QtCore.pyqtSignal()
+    #: an arm was let go past its neighbour, and put back
+    sigRefused = QtCore.pyqtSignal()
+
+    def __init__(self, plot, centre, ends: dict | None, xr, yr, pen, hover):
+        super().__init__()
+        self.xr, self.yr = xr, yr
+        self.centre = np.array(centre, dtype=np.float64)
+        self.offset = ends is not None
+        self.ends = ({a: np.array(ends[a], dtype=np.float64) for a in ARMS} if self.offset
+                     else self._straight())
+        self._busy = False
+        self._before = None
+        self.vertical = pg.InfiniteLine(self.centre[0], angle=90, movable=True, pen=pen,
+                                        hoverPen=hover)
+        self.horizontal = pg.InfiniteLine(self.centre[1], angle=0, movable=True, pen=pen,
+                                          hoverPen=hover)
+        self.rays = {a: pg.PlotCurveItem(pen=pen) for a in ARMS}
+        fill = pg.mkBrush(theme.background())
+        self.handles = {a: pg.TargetItem(self.ends[a].tolist(), size=9, symbol="s", pen=pen,
+                                         hoverPen=hover, brush=fill, hoverBrush=fill)
+                        for a in ARMS}
+        self.middle = pg.TargetItem(self.centre.tolist(), size=11, symbol="o", pen=pen,
+                                    hoverPen=hover, brush=fill, hoverBrush=fill)
+        for item in (self.vertical, self.horizontal, *self.rays.values()):
+            plot.addItem(item, ignoreBounds=True)
+        for item in (*self.handles.values(), self.middle):
+            item.setZValue(20)
+            plot.addItem(item, ignoreBounds=True)
+        for line in (self.vertical, self.horizontal):
+            line.sigPositionChanged.connect(self._lines_dragged)
+            line.sigPositionChangeFinished.connect(
+                lambda _=None: self.sigCrossingMoved.emit(*self.centre))
+        for arm, handle in self.handles.items():
+            handle.sigPositionChanged.connect(lambda _=None, a=arm: self._arm_dragged(a))
+            handle.sigPositionChangeFinished.connect(lambda _=None: self._let_go())
+        self.middle.sigPositionChanged.connect(lambda _=None: self._middle_dragged())
+        self.middle.sigPositionChangeFinished.connect(lambda _=None: self._let_go())
+        self._show()
+
+    def _straight(self) -> dict:
+        """Where the handles sit while the arms are the two lines: a third
+        of the plot from the centre, and inside the plot."""
+        out = {}
+        for arm, (ux, uy) in _ALONG.items():
+            p = self.centre.copy()
+            for k, (u, (lo, hi)) in enumerate(zip((ux, uy), (self.xr, self.yr))):
+                if u:
+                    room = (hi - p[k]) if u > 0 else (p[k] - lo)
+                    p[k] += u * max(min(0.3 * (hi - lo), 0.9 * room), 0.04 * (hi - lo))
+            out[arm] = p
+        return out
+
+    def _show(self) -> None:
+        """Put every item where the centre and the arms' points are."""
+        self._busy = True
+        w, h = self.xr[1] - self.xr[0], self.yr[1] - self.yr[0]
+        for arm in ARMS:
+            d = self.ends[arm] - self.centre
+            far = 5.0 / max(abs(d[0]) / w, abs(d[1]) / h, 1e-12)
+            tip = self.centre + d * max(far, 1.0)
+            self.rays[arm].setData([self.centre[0], tip[0]], [self.centre[1], tip[1]])
+            self.rays[arm].setVisible(self.offset)
+            self.handles[arm].setPos(*self.ends[arm])
+        self.middle.setPos(*self.centre)
+        self.middle.setVisible(self.offset)
+        self.vertical.setValue(self.centre[0])
+        self.horizontal.setValue(self.centre[1])
+        self.vertical.setVisible(not self.offset)
+        self.horizontal.setVisible(not self.offset)
+        self._busy = False
+
+    def _remember(self) -> None:
+        if self._before is None:
+            self._before = (self.centre.copy(), {a: p.copy() for a, p in self.ends.items()},
+                            self.offset)
+
+    def _lines_dragged(self) -> None:
+        if self._busy:
+            return
+        self.centre = np.array([self.vertical.value(), self.horizontal.value()])
+        self.ends = self._straight()
+        self._show()
+
+    def _arm_dragged(self, arm: str) -> None:
+        if self._busy:
+            return
+        self._remember()
+        p = self.handles[arm].pos()
+        self.ends[arm] = np.array([p.x(), p.y()])
+        self.offset = True
+        self._show()
+
+    def _middle_dragged(self) -> None:
+        if self._busy:
+            return
+        self._remember()
+        p = self.middle.pos()
+        by = np.array([p.x(), p.y()]) - self.centre
+        self.centre = self.centre + by
+        self.ends = {a: e + by for a, e in self.ends.items()}
+        self._show()
+
+    def ordered(self) -> bool:
+        return OffsetQuadrantGate(["x", "y"], self.centre.tolist(),
+                                  {a: self.ends[a].tolist() for a in ARMS}, "Q1").ordered()
+
+    def _let_go(self) -> None:
+        before, self._before = self._before, None
+        if not self.ordered():
+            if before is not None:
+                self.centre, self.ends, self.offset = before
+                self._show()
+            self.sigRefused.emit()
+            return
+        self.sigArmsMoved.emit()
+
+    def move_arm(self, arm: str, x: float, y: float) -> None:
+        """As dragging that arm's handle there and letting go."""
+        self.handles[arm].setPos(x, y)
+        self._let_go()
+
+    def move_centre(self, x: float, y: float) -> None:
+        """As dragging the centre of arms that are their own."""
+        self.middle.setPos(x, y)
+        self._let_go()
 
 
 class GatesTab(QtWidgets.QWidget):
@@ -150,7 +321,14 @@ class GatesTab(QtWidgets.QWidget):
         self.quad_button = QtWidgets.QPushButton("Quadrant")
         self.quad_button.setCheckable(True)
         self.quad_button.setToolTip("Click where the two lines cross: four populations, "
-                                    "named by which side of each line they are on.")
+                                    "named by which side of each line they are on. Then drag "
+                                    "the square on an arm to tilt that arm alone.")
+        self.auto_button = QtWidgets.QPushButton("Auto…")
+        self.auto_button.setToolTip(
+            "A gate proposed from the events shown: the valley between two peaks, the "
+            "contour or the ellipse of a population, the band of singlets. It is shown "
+            "first, and is a gate like any other once accepted.")
+        self.auto_button.setMenu(self._auto_menu())
         self.combine_button = QtWidgets.QPushButton("Combine…")
         self.combine_button.setToolTip("A population made of others of this one: the events "
                                        "in all of them, in any of them, or in none of them.")
@@ -168,7 +346,8 @@ class GatesTab(QtWidgets.QWidget):
         tools.addWidget(self.poly_button, 0, 1)
         tools.addWidget(self.ellipse_button, 0, 2)
         tools.addWidget(self.quad_button, 1, 0)
-        tools.addWidget(self.combine_button, 1, 1, 1, 2)
+        tools.addWidget(self.auto_button, 1, 1)
+        tools.addWidget(self.combine_button, 1, 2)
         tools.addWidget(self.rename_button, 2, 0)
         tools.addWidget(self.delete_button, 2, 1, 1, 2)
         left = QtWidgets.QVBoxLayout()
@@ -295,7 +474,7 @@ class GatesTab(QtWidgets.QWidget):
         self.box.sigRectangle.connect(self._rectangle_drawn)
         self.box.sigEllipse.connect(self._ellipse_drawn)
         self.box.sigPolygon.connect(self._polygon_drawn)
-        self.box.sigPoint.connect(self._quadrant_drawn)
+        self.box.sigPoint.connect(self._point_clicked)
         self.combine_button.clicked.connect(self._ask_combination)
         self.rename_button.clicked.connect(self.rename_selected)
         self.delete_button.clicked.connect(self.delete_selected)
@@ -901,6 +1080,8 @@ class GatesTab(QtWidgets.QWidget):
         self.plot.setXRange(*xr, padding=0.01)
         self.plot.setYRange(*yr, padding=0.01)
         self._crossings = []
+        #: the handles of each crossing, in the order of `_crossings`
+        self._arms: list[_Crossing] = []
         self._draw_gates(xdim, ydim, xr, yr)
         self._draw_quadrants(xdim, ydim, xr, yr, self.sample.masks(),
                              max(int(self.sample.mask(self.node.path).sum()), 1))
@@ -988,7 +1169,7 @@ class GatesTab(QtWidgets.QWidget):
                 item = pg.EllipseROI(corner, [w, h], angle=float(np.degrees(g.angle)),
                                      pen=pen, hoverPen=hover)
                 anchor = (g.center[0] - g.radii[0], g.center[1] + g.radii[1])
-            elif isinstance(g, QuadrantGate):
+            elif isinstance(g, (QuadrantGate, OffsetQuadrantGate)):
                 continue   # the four corners of a crossing are drawn once, below
             elif isinstance(g, TimeGate):
                 # what quality control removed, to see and not to drag
@@ -1032,17 +1213,21 @@ class GatesTab(QtWidgets.QWidget):
         groups: dict[str, list[GateNode]] = {}
         for child in self.node.children:
             g = child.gate
-            if isinstance(g, QuadrantGate) and set(g.dims) == {xdim, ydim}:
+            if isinstance(g, (QuadrantGate, OffsetQuadrantGate)) and set(g.dims) == {xdim, ydim}:
                 groups.setdefault(g.group or child.name, []).append(child)
         pen = pg.mkPen(theme.foreground(), width=1.6)
         hover = pg.mkPen(theme.accent(), width=2.2)
         for members in groups.values():
             g = members[0].gate
             flipped = g.dims[0] != xdim
-            px, py = self._to_display([[g.x, g.y] if not flipped else [g.y, g.x]],
-                                      [xdim, ydim])[0]
-            vertical = pg.InfiniteLine(px, angle=90, movable=True, pen=pen, hoverPen=hover)
-            horizontal = pg.InfiniteLine(py, angle=0, movable=True, pen=pen, hoverPen=hover)
+
+            def placed(point, flipped=flipped):
+                return self._to_display([point[::-1] if flipped else point], [xdim, ydim])[0]
+            if isinstance(g, OffsetQuadrantGate):
+                centre = placed(list(g.center))
+                ends = {(_MIRRORED[a] if flipped else a): placed(list(g.arms[a])) for a in ARMS}
+            else:
+                centre, ends = placed([g.x, g.y]), None
             labels = []
             for child in members:
                 high_x, high_y = QUADRANTS[child.gate.quadrant]
@@ -1056,12 +1241,14 @@ class GatesTab(QtWidgets.QWidget):
                 label.setPos(xr[1] if high_x else xr[0], yr[1] if high_y else yr[0])
                 self.plot.addItem(label)
                 labels.append((child, label))
-            for line in (vertical, horizontal):
-                self.plot.addItem(line)
-                line.sigPositionChangeFinished.connect(
-                    lambda _=None, m=members, v=vertical, h=horizontal:
-                    self._crossing_moved(m, v.value(), h.value()))
-            self._crossings.append((members, vertical, horizontal, labels))
+            crossing = _Crossing(self.plot, centre, ends, xr, yr, pen, hover)
+            crossing.sigCrossingMoved.connect(
+                lambda px, py, m=members: self._crossing_moved(m, px, py))
+            crossing.sigArmsMoved.connect(lambda m=members, c=crossing: self._arms_moved(m, c))
+            crossing.sigRefused.connect(lambda: self.sigStatus.emit(
+                "An arm cannot be turned onto or past the one next to it"))
+            self._crossings.append((members, crossing.vertical, crossing.horizontal, labels))
+            self._arms.append(crossing)
 
     def _crossing_moved(self, members, px: float, py: float) -> None:
         xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
@@ -1069,6 +1256,26 @@ class GatesTab(QtWidgets.QWidget):
         for child in members:
             g = child.gate
             g.x, g.y = (float(sx), float(sy)) if g.dims[0] == xdim else (float(sy), float(sx))
+        self._commit(redraw=False)
+
+    def _arms_moved(self, members, crossing: "_Crossing") -> None:
+        """An arm of a quadrant was moved: its four corners are from now
+        on bounded by arms of their own, where the handles are."""
+        xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
+        flipped = members[0].gate.dims[0] != xdim
+
+        def stored(point):
+            p = self._to_stored([point], [xdim, ydim])[0]
+            return [float(v) for v in (p[::-1] if flipped else p)]
+        centre = stored(crossing.centre)
+        arms = {(_MIRRORED[a] if flipped else a): stored(crossing.ends[a]) for a in ARMS}
+        for child in members:
+            g = child.gate
+            scales = [self._scale(d) for d in g.dims]
+            child.gate = OffsetQuadrantGate(
+                list(g.dims), list(centre), {a: list(p) for a, p in arms.items()},
+                g.quadrant, g.group, g.inside,
+                scales if any(sc is not None for sc in scales) else None)
         self._commit(redraw=False)
 
     def _to_display(self, vertices, dims) -> np.ndarray:
@@ -1127,7 +1334,8 @@ class GatesTab(QtWidgets.QWidget):
     # --- making, renaming, deleting ---------------------------------------------------
 
     def _tool(self, mode: str, on: bool) -> None:
-        hints = {"rect": "Drag across the events to gate",
+        hints = {"seed": "Click on the population to outline",
+                 "rect": "Drag across the events to gate",
                  "poly": "Click each corner; double-click to close. Esc cancels.",
                  "ellipse": "Drag the box the ellipse fits in",
                  "quad": "Click where the two lines should cross"}
@@ -1137,7 +1345,8 @@ class GatesTab(QtWidgets.QWidget):
                     button.setChecked(False)
             if mode != "rect" and self.y_axis.currentData() == HISTOGRAM:
                 self.sigStatus.emit("That gate needs two parameters: choose a Y axis")
-                self._tools[mode].setChecked(False)
+                if mode in self._tools:
+                    self._tools[mode].setChecked(False)
                 return
             self.box.set_mode(mode)
             self.sigStatus.emit(hints[mode])
@@ -1177,6 +1386,157 @@ class GatesTab(QtWidgets.QWidget):
     def _quadrant_drawn(self, x, y) -> None:
         self._stop_drawing()
         self.add_quadrants(x, y)
+
+    def _point_clicked(self, x, y) -> None:
+        """A click in a mode that takes one: where a quadrant's lines
+        cross, or the population to outline."""
+        if self.box.mode == "seed":
+            method = self._seed_for
+            self._stop_drawing()
+            self._ask_auto(method, near=(x, y))
+        else:
+            self._quadrant_drawn(x, y)
+
+    # --- gates the program proposes ---------------------------------------------------
+
+    def _auto_menu(self) -> QtWidgets.QMenu:
+        menu = QtWidgets.QMenu(self)
+        menu.setToolTipsVisible(True)
+
+        def add(text, tip, run):
+            action = menu.addAction(text)
+            action.setToolTip(tip)
+            action.triggered.connect(lambda _=False: run())
+            return action
+        valley = ("Where the histogram of X dips between its two peaks. Nothing is proposed "
+                  "when it has one peak only, or no real dip.")
+        add("Valley on X: the positive side", valley,
+            lambda: self._ask_auto(autogate.VALLEY, side=autogate.ABOVE))
+        add("Valley on X: the negative side", valley,
+            lambda: self._ask_auto(autogate.VALLEY, side=autogate.BELOW))
+        menu.addSeparator()
+        contour = ("The contour holding 90% of one population's events, stopped at the "
+                   "valley to its neighbours, as a polygon.")
+        ellipse = ("The ellipse of a Gaussian fitted to one population's core, which "
+                   "stragglers and other populations do not pull on.")
+        add("Population at a click: contour", contour,
+            lambda: self._seed(autogate.POPULATION))
+        add("Population at a click: ellipse", ellipse, lambda: self._seed(autogate.ELLIPSE))
+        add("Largest population: contour", contour, lambda: self._ask_auto(autogate.POPULATION))
+        add("Largest population: ellipse", ellipse, lambda: self._ask_auto(autogate.ELLIPSE))
+        menu.addSeparator()
+        band = ("The events along a straight line of Y against X, three standard deviations "
+                "either side: singlets on area against height.")
+        add("Singlets: band along the diagonal", band, lambda: self._ask_auto(autogate.BAND))
+        add("Singlets: a tighter band", band + " Tighter: the spread is measured on the "
+            "cleaner side of the line only.", lambda: self._ask_auto(autogate.BAND, tight=True))
+        menu.addSeparator()
+        self.per_sample = menu.addAction("Fit on each sample separately")
+        self.per_sample.setCheckable(True)
+        self.per_sample.setToolTip(
+            "With \"Apply to every sample\" ticked: instead of the same coordinates on every "
+            "sample, the gate is fitted again on each sample's own events, so it sits "
+            "where that sample's population is. Each sample then keeps its own.")
+        self._seed_for = None
+        self.proposal = None
+        self.auto_said = ""
+        return menu
+
+    def _seed(self, method: str) -> None:
+        if self.sample is None or self.node is None:
+            return
+        self._stop_drawing()
+        self._seed_for = method
+        self._tool("seed", True)
+
+    def propose_gate(self, method: str, near=None, side=None, tight=None):
+        """What `autogate` proposes on the plot shown for the population
+        shown: an `autogate.Proposal`, drawn dashed when it holds a gate.
+        Nothing is added until `accept_proposal`."""
+        self.proposal = None
+        self.box.cancel()
+        xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
+        if method != autogate.VALLEY and ydim == HISTOGRAM:
+            return autogate.Proposal(None, "that gate needs two parameters: choose a Y axis")
+        dims = [xdim] if method == autogate.VALLEY else [xdim, ydim]
+        spec = autogate.make_spec(method, dims, near=near, side=side, tight=tight)
+        found = self.session.fit_gate(self.entry, self.node.path, spec)
+        if found.found:
+            if found.near is not None:
+                # where the population is: what the same one is looked for
+                # near on another sample, not where the mouse happened to be
+                spec["near"] = [float(v) for v in found.near]
+            self.proposal = (spec, found)
+            if method == autogate.VALLEY:
+                at = found.shown[1] if spec.get("side") == autogate.BELOW else found.shown[0]
+                (_, _), (y0, y1) = self.box.viewRange()
+                self.box.propose([at, at], [y0, y1])
+            else:
+                self.box.propose(found.shown[:, 0], found.shown[:, 1])
+        return found
+
+    def accept_proposal(self, name: str | None = None) -> GateNode | None:
+        """Make the proposal shown a gate of the population shown. With
+        "Fit on each sample separately" and "Apply to every sample", every
+        other sample gets the gate fitted on its own events."""
+        if self.proposal is None:
+            return None
+        spec, found = self.proposal
+        self.proposal = None
+        self.box.cancel()
+        node = self.node.add(GateNode(self._free_name(name or self._auto_name(spec)),
+                                      found.gate))
+        each = self.per_sample.isChecked() and self.everyone.isChecked()
+        if each:
+            node.fit, node.note = spec, autogate.note(spec)
+            self.sigStatus.emit("Fitting the gate on every sample…")
+            QtWidgets.QApplication.processEvents()
+        self._commit()
+        missed = self.session.unfitted
+        if each and missed:
+            self.sigStatus.emit(
+                f"{node.name}: fitted on each sample's own events, except "
+                + ", ".join(sample for sample, _, _ in missed)
+                + f" ({missed[0][2]}): there the gate is {self.entry.name}'s")
+        elif each:
+            self.sigStatus.emit(f"{node.name}: fitted on each sample's own events")
+        else:
+            self.sigStatus.emit(f"{node.name}: {found.why}")
+        return node
+
+    def auto_gate(self, method: str, name: str | None = None, **settings) -> GateNode | None:
+        """Propose and accept. None when nothing is proposed: `auto_said`
+        then holds why."""
+        found = self.propose_gate(method, **settings)
+        self.auto_said = found.why
+        return self.accept_proposal(name) if found.found else None
+
+    def _auto_name(self, spec: dict) -> str:
+        if spec["method"] == autogate.VALLEY:
+            short = (self.x_axis.currentText().split() or ["X"])[0]
+            return short + ("-" if spec.get("side") == autogate.BELOW else "+")
+        return "Singlets" if spec["method"] == autogate.BAND else "Population"
+
+    def _ask_auto(self, method: str, **settings) -> None:
+        if self.sample is None or self.node is None:
+            return
+        self._stop_drawing()
+        found = self.propose_gate(method, **settings)
+        self.auto_said = found.why
+        if not found.found:
+            self.sigStatus.emit(f"No gate proposed: {found.why}")
+            QtWidgets.QMessageBox.information(self, "No gate proposed",
+                                              found.why[:1].upper() + found.why[1:] + ".")
+            return
+        self.sigStatus.emit(found.why)
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Proposed gate", f"Proposed: {found.why}.\n\nName",
+            text=self._free_name(self._auto_name(self.proposal[0])))
+        if ok and name.strip():
+            self.accept_proposal(name.strip())
+        else:
+            self.proposal = None
+            self.box.cancel()
 
     def _polygon_drawn(self, points) -> None:
         self._stop_drawing()
