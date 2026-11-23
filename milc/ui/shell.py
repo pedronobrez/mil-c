@@ -90,6 +90,7 @@ class MainShell(QtWidgets.QMainWindow):
         self._action(menu, "Save concatenated file…", self.save_dataset,
                      QtGui.QKeySequence.StandardKey.Save)
         self._action(menu, "Export tables…", self.export_tables)
+        self._action(menu, "Export gates…", self.choose_gates_export)
 
         view = self.menuBar().addMenu("&View")
         looks = view.addMenu("Appearance")
@@ -263,6 +264,42 @@ class MainShell(QtWidgets.QMainWindow):
         expression.to_csv(os.path.join(folder, "cluster_expression.csv"), "cluster")
         freq.to_csv(os.path.join(folder, "cluster_frequency.csv"), "cluster")
         self.status(f"Wrote cluster_expression.csv and cluster_frequency.csv to {folder}")
+
+    # --- the gates, for another program ------------------------------------------------
+
+    def export_gates(self, path: str, fmt: str | None = None, ticked_only: bool = False,
+                     counts: bool = True):
+        """Write the gates of every sample that has any — or of those
+        ticked in Samples — as a FlowJo workspace or Gating-ML, by the
+        file's name where `fmt` is not given. Returns the report."""
+        from ..gate_export import export_gates
+        entries = [e for e in self.session.usable()
+                   if e.gated and (e.include or not ticked_only)]
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            report = export_gates(self.session, path, fmt, entries, counts)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        self.status(report.summary() if report.files else "No gates were written")
+        return report
+
+    def choose_gates_export(self) -> None:
+        from .gates_export_dialog import GatesExportDialog, GatesReportDialog
+        gated = [e for e in self.session.usable() if e.gated]
+        if not gated:
+            self.status("No sample has gates to export")
+            return
+        dialog = GatesExportDialog(self.session.folder, len(gated),
+                                   sum(e.include for e in gated), self)
+        if not dialog.exec() or not dialog.path.text():
+            return
+        try:
+            report = self.export_gates(dialog.path.text(), dialog.format.currentData(),
+                                       dialog.ticked.isChecked(), dialog.counts.isChecked())
+        except OSError as exc:
+            self.status(f"{os.path.basename(dialog.path.text())}: {exc}")
+            return
+        GatesReportDialog(report, self).exec()
 
     def order_changed(self) -> None:
         """The groups come in another order: everything that shows them is

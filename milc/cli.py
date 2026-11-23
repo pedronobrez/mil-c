@@ -6,6 +6,7 @@ The command line: everything the window will do, without the window.
     python -m milc counts   DATA --wsp analysis.wsp
     python -m milc concat   DATA --wsp analysis.wsp --population PATH --out NAME
     python -m milc qc       DATA --out qc.csv --plots qc.pdf
+    python -m milc gates    DATA --wsp analysis.wsp --out gates.wsp   (or gates.xml)
 """
 
 from __future__ import annotations
@@ -453,6 +454,42 @@ def cmd_export(a) -> int:
     return 0
 
 
+# --- the gates, for another program ----------------------------------------------
+
+def cmd_gates(a) -> int:
+    """The gates of every sample as a FlowJo workspace or as Gating-ML:
+    what the window's File ▸ Export gates… writes."""
+    from .gate_export import GATINGML, WSP, export_gates
+    from .session import Session
+    session = Session()
+    session.open_folder(a.data)
+    if a.wsp:
+        session.set_workspace(a.wsp)
+    session.set_extend_gates(not a.listed_only)
+    try:
+        reasons = _clean(session, a)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    entries = [e for e in session.usable() if e.gated]
+    if not entries:
+        print("no sample here has gates: give a workspace with --wsp, or draw them in "
+              "the window", file=sys.stderr)
+        return 2
+    fmt = a.format or (WSP if a.out.lower().endswith(".wsp") else GATINGML)
+    _say_removed(session.quality_record([session.load(e) for e in entries]), reasons)
+    try:
+        report = export_gates(session, a.out, fmt, entries, counts=not a.no_counts)
+    except OSError as exc:
+        print(f"{a.out}: {exc}", file=sys.stderr)
+        return 2
+    print(report.text())
+    if fmt == WSP:
+        print("This workspace was read back here and by FlowKit; it has not been "
+              "opened in FlowJo.")
+    return 0 if report.files else 1
+
+
 # --- quality of the acquisition ------------------------------------------------
 
 _QC_COLUMNS = ["Sample", "Events", "Checked", "Removed", "Removed %", "Intervals",
@@ -791,6 +828,23 @@ def main(argv=None) -> int:
     s.add_argument("--out", default="exported")
     _quality_arguments(s, apply=True)
     s.set_defaults(run=cmd_export)
+
+    s = sub.add_parser("gates", help="the gates of every sample, for another program: "
+                                     "a FlowJo workspace (.wsp) or Gating-ML 2.0 (.xml)")
+    s.add_argument("data")
+    s.add_argument("--wsp", help="a FlowJo workspace to take the gates from; without it, "
+                                 "the one in the folder, or the gates saved beside the files")
+    s.add_argument("--listed-only", action="store_true")
+    s.add_argument("--out", required=True, metavar="FILE",
+                   help="FILE.wsp for a FlowJo workspace; anything else is Gating-ML — one "
+                        "file where every sample is gated alike, FILE_<sample>.xml for each "
+                        "where they are not")
+    s.add_argument("--format", choices=("wsp", "gatingml"),
+                   help="instead of going by the name of the file")
+    s.add_argument("--no-counts", action="store_true",
+                   help="do not open the files to write each population's count")
+    _quality_arguments(s, apply=True)
+    s.set_defaults(run=cmd_gates)
 
     s = sub.add_parser("qc", help="the acquisition of every sample: which stretches of "
                                   "time went wrong, and how much they hold")

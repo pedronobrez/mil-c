@@ -3,7 +3,7 @@ A FlowJo 10 workspace (.wsp), read for what the analysis needs from it:
 which files, the compensation matrix each was given, the axis transforms,
 and the gating tree with the counts FlowJo reported.
 
-Nothing is written back. Plugin nodes (UMAP, FlowSOM, ClusterExplorer) are
+Writing one is `wsp_write.py`. Plugin nodes (UMAP, FlowSOM, ClusterExplorer) are
 skipped: their results are recomputed here, not imported.
 
 Rectangles and polygons are read by rules checked against FlowJo's own
@@ -166,7 +166,13 @@ def read_wsp(path: str) -> Workspace:
         tree = GateNode(name=node.get("name", ""),
                         reference_count=_int(node.get("count")))
         transforms = _read_transforms(_child(s, "Transformations"))
+        seconds = _time_unit(keywords)
+        if seconds and isinstance(transforms.get(seconds[0]), Linear):
+            t = transforms[seconds[0]]
+            transforms[seconds[0]] = Linear(t.min / seconds[1], t.max / seconds[1])
         _read_populations(node, tree, transforms, skipped, tree.name)
+        if seconds:
+            _time_as_stored(tree, *seconds)
         samples.append(WspSample(
             name=node.get("name", ""),
             uri=dataset.get("uri", ""),
@@ -189,6 +195,36 @@ def read_wsp(path: str) -> Workspace:
             groups[tree.name] = tree
     return Workspace(path=path, flowjo_version=root.get("flowJoVersion", ""),
                      samples=samples, groups=groups, skipped=skipped)
+
+
+def _time_unit(keywords: dict[str, str]) -> tuple[str, float] | None:
+    """(the Time parameter, seconds in one of its units), where the file
+    says. FlowJo shows Time in seconds — the stored values times
+    `$TIMESTEP`: the range it writes for Time in a workspace is that of
+    the file times the step — so that is what a gate on Time is in."""
+    try:
+        step = float(keywords.get("$TIMESTEP") or 0)
+    except ValueError:
+        return None
+    name = next((v.strip() for k, v in keywords.items()
+                 if k and re.fullmatch(r"\$P\d+N", k) and v.strip().lower() == "time"), None)
+    return (name, step) if name and step > 0 and step != 1 else None
+
+
+def _time_as_stored(tree: GateNode, name: str, step: float) -> None:
+    """Gates on Time, from FlowJo's seconds to the units of the file."""
+    for node in tree.walk():
+        g = node.gate
+        if g is None or name not in g.dims:
+            continue
+        k = g.dims.index(name)
+        if isinstance(g, RectangleGate):
+            g.mins[k] = None if g.mins[k] is None else g.mins[k] / step
+            g.maxs[k] = None if g.maxs[k] is None else g.maxs[k] / step
+        elif isinstance(g, PolygonGate):
+            g.vertices[:, k] /= step
+        elif isinstance(g, QuadrantGate):
+            g.x, g.y = (g.x / step, g.y) if k == 0 else (g.x, g.y / step)
 
 
 def signature(tree: GateNode) -> list:
