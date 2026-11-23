@@ -247,6 +247,10 @@ def _run_line(name: str, run: dict, dataset) -> str:
     if name == "FlowSOM":
         parts.append(f"{run.get('n_clusters')} clusters on a "
                      f"{run.get('grid')} × {run.get('grid')} grid")
+    elif name == "PhenoGraph" and "k" in run and "resolution" in run:
+        from . import graphcluster
+        parts.append(f"{run.get('n_clusters', '?')} clusters ({graphcluster.describe(run)})"
+                     if "n_clusters" in run else graphcluster.describe(run))
     else:
         parts += [f"{k} {run[k]:g}" for k in ("n_neighbors", "min_dist", "perplexity")
                   if k in run]
