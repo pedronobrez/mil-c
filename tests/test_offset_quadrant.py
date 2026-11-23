@@ -204,6 +204,35 @@ def test_outline_is_the_four_arms():
         assert d @ along > 0 and max(abs(line[-1])) > 10      # out of the plot
 
 
+def test_a_corner_as_a_polygon():
+    """For a program that has polygons and no such quadrant: the polygon
+    of a corner holds the events the corner does, inside the box."""
+    from milc.gating import points_in_polygon
+    data = events(seed=5)
+    box = ((-12.0, 14.0), (-11.0, 15.0))
+    within = ((data["a"] > box[0][0]) & (data["a"] < box[0][1])
+              & (data["b"] > box[1][0]) & (data["b"] < box[1][1]))
+    within[:9] = False                  # not the ones put on the arms
+    assert within.sum() > 19000
+    for arms in ({"right": [6.0, 1.0], "up": [2.5, 7.0], "left": [-4.0, 4.0],
+                  "down": [0.0, -5.0]},
+                 {"right": [5.0, 6.0], "up": [0.0, 7.0], "left": [-1.0, 5.0],
+                  "down": [6.0, 4.0]}):          # one corner wider than half a turn
+        total = np.zeros(20000, int)
+        for q, gate in corners((1.0, 2.0), arms).items():
+            polygon = gate.corner(*box)
+            assert polygon[0] == pytest.approx([1.0, 2.0])
+            inside = points_in_polygon(data["a"], data["b"], polygon)
+            assert np.array_equal(inside[within], gate.contains(data.__getitem__)[within]), q
+            total += inside
+        assert np.array_equal(total[within], np.ones(int(within.sum()), int))
+    # along the axes, Q2 is the rectangle from the centre to the box's corner
+    plain = offset_quadrant(QuadrantGate(["a", "b"], 1.0, 2.0, "Q2"))
+    assert plain.corner(*box) == pytest.approx(
+        np.array([[1.0, 2.0], [14.0, 2.0], [14.0, 15.0], [1.0, 15.0]]))
+    assert plain.corner((2.0, 5.0), (0.0, 5.0)) is None      # the centre is outside
+
+
 # --- in the window ----------------------------------------------------------------
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

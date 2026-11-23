@@ -201,6 +201,34 @@ class OffsetQuadrantGate:
         steps = [(angles[(k + 1) % 4] - angles[k]) % (2 * np.pi) for k in range(4)]
         return all(s > 1e-9 for s in steps) and abs(sum(steps) - 2 * np.pi) < 1e-6
 
+    def corner(self, xr: tuple[float, float], yr: tuple[float, float]) -> np.ndarray | None:
+        """This corner as a polygon, n x 2 on the display scales: its
+        sector cut off at the box from `xr` to `yr` — for a program that
+        has polygons and no such quadrant. The centre first, then round
+        counter-clockwise. None when the centre is not inside the box."""
+        centre, _ = self.shown()
+        if not (xr[0] < centre[0] < xr[1] and yr[0] < centre[1] < yr[1]):
+            return None
+        d = self.directions()
+        first, second = (np.array(d[arm]) for arm in SECTORS[self.quadrant])
+
+        def leaves(v):
+            steps = [((hi if u > 0 else lo) - c) / u
+                     for u, c, (lo, hi) in zip(v, centre, (xr, yr)) if u != 0]
+            return centre + min(steps) * v
+
+        def angle(p):
+            return np.arctan2(p[1] - centre[1], p[0] - centre[0])
+        start = angle(centre + first)
+        sweep = (angle(centre + second) - start) % (2 * np.pi)
+        corners = [np.array(p, dtype=np.float64)
+                   for p in ((xr[1], yr[1]), (xr[0], yr[1]), (xr[0], yr[0]), (xr[1], yr[0]))]
+        between = sorted((((angle(p) - start) % (2 * np.pi), k)
+                          for k, p in enumerate(corners)))
+        return np.array([centre, leaves(first)]
+                        + [corners[k] for turn, k in between if 0 < turn < sweep]
+                        + [leaves(second)])
+
     def contains(self, column: Column) -> np.ndarray:
         scales = self.scales or [None, None]
         centre, _ = self.shown()
