@@ -162,8 +162,13 @@ class ExploreTab(QtWidgets.QWidget):
         scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # room for the bar beside the fields, not over them
-        scroll.setMinimumWidth(settings.minimumSizeHint().width()
-                               + scroll.verticalScrollBar().sizeHint().width())
+        # a label that wraps asks, in some styles, for the width of its whole
+        # text on one line: it takes the width the fields leave it instead
+        for label in (self.pheno_hint, self.result):
+            label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                QtWidgets.QSizePolicy.Policy.Preferred)
+        scroll.setMinimumWidth(min(settings.minimumSizeHint().width()
+                                   + scroll.verticalScrollBar().sizeHint().width(), 360))
         left = QtWidgets.QVBoxLayout()
         left.addWidget(scroll, 1)
         left.addSpacing(6)
@@ -171,7 +176,7 @@ class ExploreTab(QtWidgets.QWidget):
         left.addWidget(self.result)
         left_panel = QtWidgets.QWidget()
         left_panel.setLayout(left)
-        left_panel.setFixedWidth(max(280, left_panel.minimumSizeHint().width()))
+        left_panel.setFixedWidth(min(max(280, left_panel.minimumSizeHint().width()), 380))
 
         # --- middle: the plot --------------------------------------------------
         self.view = MapView()

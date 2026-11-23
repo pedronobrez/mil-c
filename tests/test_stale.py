@@ -86,6 +86,19 @@ def test_normalising_the_samples_asks_for_the_gates_to_be_reviewed(batches):
     assert s.review == "the batch normalisation was turned off"
 
 
+def _widest(widget, depth=0) -> list:
+    """What asks for the width, for the message of a failure: the widgets
+    under `widget` that want more than 600 points, with their text."""
+    from PyQt6 import QtWidgets
+    found = []
+    for child in widget.findChildren(QtWidgets.QWidget):
+        width = child.minimumSizeHint().width()
+        if width > 600:
+            text = getattr(child, "text", lambda: "")()
+            found.append((type(child).__name__, width, str(text)[:40]))
+    return found[:12]
+
+
 def test_the_window_says_so_and_fits_a_laptop(app, batches):
     from milc.ui import worker
     from milc.ui.shell import MainShell
@@ -125,6 +138,6 @@ def test_the_window_says_so_and_fits_a_laptop(app, batches):
     for tab in (w.samples, w.gates, w.statistics, w.explore, w.clusters):
         w.tabs.setCurrentWidget(tab)
         settle()
-        assert tab.minimumSizeHint().width() <= 1280, type(tab).__name__
+        assert tab.minimumSizeHint().width() <= 1280, (type(tab).__name__, _widest(tab))
     assert w.minimumSizeHint().width() <= 1280
     w.close()
