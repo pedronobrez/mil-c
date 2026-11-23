@@ -182,6 +182,81 @@ def test_squeeze_finds_the_prior_it_was_simulated_with():
     # one alone has nobody to learn from
     alone, found = abundance.squeeze(np.array([1.3]), np.array([8.0]))
     assert found == 0.0 and alone[0] == 1.3
+    # and that one variance is their mean (limma's fitFDist), not a geometric one
+    rng = np.random.default_rng(5)
+    s2 = rng.chisquare(40, 12) / 40 * 0.9          # spread narrower than df 4 would give
+    same, found = abundance.squeeze(s2, np.full(12, 4.0))
+    assert found == float("inf") and np.allclose(same, s2.mean())
+
+
+# --- against edgeR itself ------------------------------------------------------------
+#
+# Two of the simulated tables of tests/reference/abundance_compare.py, with
+# what edgeR 4.10.7 (R 4.6.1) gave for them on 2026-11-23:
+#   QL   estimateGLMCommonDisp; glmQLFit(dispersion = common, legacy = TRUE,
+#        abundance.trend = FALSE); glmQLFTest
+#   LRT  estimateGLMCommonDisp; estimateGLMTagwiseDisp(prior.df = 10,
+#        trend = FALSE); glmFit; glmLRT
+# In the first the clusters' quasi-dispersions differ no more than chance
+# would have them (prior df infinite): edgeR then tests against F with the
+# pooled degrees of freedom, 15 clusters x 4, not against a chi-square —
+# which is what this did before it was set beside edgeR, and gave p values
+# up to 2.7 times too small on this table. In the second the prior df is
+# 2.7.
+
+EDGER = [
+    dict(counts=[[18, 23, 13, 17, 44, 30], [41, 44, 15, 22, 80, 58], [61, 32, 24, 95, 63, 52],
+                 [165, 137, 84, 83, 141, 125], [72, 79, 48, 169, 160, 116],
+                 [266, 317, 144, 190, 222, 293], [131, 182, 112, 268, 545, 543],
+                 [531, 323, 201, 392, 965, 647], [687, 1238, 743, 715, 681, 885],
+                 [553, 826, 413, 1348, 1166, 1224], [702, 1574, 821, 1440, 2831, 3601],
+                 [886, 1909, 1228, 2176, 4552, 2066], [2229, 2698, 1598, 5197, 4870, 5060],
+                 [2429, 2935, 2928, 5180, 6699, 7794], [4820, 5201, 2816, 7743, 13679, 10362]],
+         groups=["A"] * 3 + ["B"] * 3, common=0.0634867335169191,
+         log2fc=[0.430817, 0.506613, 0.265776, 1.32235, -0.0481592, 1.166, -0.487003, 0.29078,
+                 1.34189, 0.0233302, -0.1847, 0.0520464, -0.100886, -0.0439685, -0.143038],
+         ql_p=[0.278547, 0.159895, 0.446287, 0.000139293, 0.8835, 0.000474721, 0.125701,
+               0.348065, 5.78629e-05, 0.939289, 0.545485, 0.864364, 0.740227, 0.884989,
+               0.638045],
+         tagwise=[0.0554298, 0.0801731, 0.103056, 0.0547271, 0.0614491, 0.0554601, 0.0509252,
+                  0.0847814, 0.0555543, 0.0569004, 0.0714959, 0.0744185, 0.0515151, 0.0547473,
+                  0.0484705],
+         lrt_p=[0.248732, 0.183559, 0.526498, 9.74606e-06, 0.879761, 6.08694e-05, 0.0800159,
+                0.402459, 2.56059e-06, 0.93411, 0.559578, 0.871762, 0.706983, 0.873436,
+                0.582013]),
+    dict(counts=[[166, 82, 15, 123, 61, 13, 18, 39, 53, 62],
+                 [443, 331, 121, 416, 216, 54, 43, 69, 142, 77],
+                 [463, 162, 125, 495, 247, 109, 93, 194, 223, 179],
+                 [2267, 837, 586, 2323, 1287, 199, 212, 272, 844, 526],
+                 [3615, 3480, 883, 3959, 2532, 665, 579, 783, 973, 892],
+                 [4927, 1169, 1145, 2003, 2482, 1328, 2427, 2659, 1825, 3056],
+                 [9371, 4292, 3084, 8604, 9678, 3839, 3738, 4480, 4778, 4307],
+                 [21420, 10550, 4998, 22211, 14636, 8501, 10997, 13608, 16706, 12727]],
+         groups=["A"] * 5 + ["B"] * 5, common=0.0697432771471718,
+         log2fc=[0.732636, 1.56885, 0.390974, 1.37332, 1.41771, -0.456133, 0.223911, -0.289137],
+         ql_p=[0.0677971, 9.96474e-05, 0.0672225, 0.000821602, 5.22104e-05, 0.123229, 0.17875,
+               0.0168784],
+         tagwise=[0.107219, 0.0754774, 0.0559855, 0.0939017, 0.064659, 0.0861426, 0.0476792,
+                  0.0360769],
+         lrt_p=[0.0248741, 5.39839e-09, 0.0843069, 1.68487e-06, 2.55009e-09, 0.0901783,
+                0.262391, 0.0959461]),
+]
+
+
+@pytest.mark.parametrize("table", EDGER)
+def test_the_numbers_are_edgers(table):
+    counts = np.array(table["counts"], dtype=float)
+    names = [str(i) for i in range(len(counts))]
+    ql = abundance.differential(counts, names, table["groups"], ("A", "B"), test=abundance.QL)
+    lrt = abundance.differential(counts, names, table["groups"], ("A", "B"), test=abundance.LRT)
+    # measured: fold changes to 1e-4, the common dispersion to 0.4%, QL p
+    # values to 0.3% and LRT p values to 14% (the cluster-wise dispersions,
+    # found on another grid, are within 1.5%)
+    assert np.allclose([r.log2_fold for r in ql], table["log2fc"], atol=1e-3)
+    assert np.isclose(ql[0].dispersion, table["common"], rtol=0.01)
+    assert np.allclose([r.p for r in ql], table["ql_p"], rtol=0.02)
+    assert np.allclose([r.dispersion for r in lrt], table["tagwise"], rtol=0.03)
+    assert np.allclose([r.p for r in lrt], table["lrt_p"], rtol=0.25)
 
 
 # --- calibration and power ---------------------------------------------------------

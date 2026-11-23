@@ -15,11 +15,26 @@ event is corrected with the curve of the cluster it falls in.
 Written after the R package's steps — 99 quantiles from 0.01 to 0.99, the
 goal the mean of the batches' quantiles or one batch's own, a
 Fritsch-Carlson monotone spline, the identity where a batch has under 50
-events in a cluster — and NOT checked against its output. It knowingly
-differs in three places: beyond the outermost quantiles the correction
-continues as a shift (R continues the spline's end slope); the map is
-trained on the same number of events from every batch; and the map is
-this project's FlowSOM, 10 x 10 by default where CytoNorm's is 15 x 15.
+events in a cluster. It knowingly differs in three places: beyond the
+outermost quantiles the correction continues as a shift (R continues the
+spline's end slope); the map is trained on the same number of events
+from every batch; and the map is this project's FlowSOM, 10 x 10 by
+default where CytoNorm's is 15 x 15.
+
+Set beside the package itself (CytoNorm 2.0.13) on 2026-11-23, on the
+same events (`tests/reference/normalize_compare.py`, written up in
+`docs/comparacao.md`). Without clusters, on the real experiment, the two
+differ inside the references' 1%-99% by 1e-5 to 2e-5 of the axis on
+average, where the mean correction is 0.02 to 0.04: the same curve.
+Beyond it they part on purpose: of 1.4 million values, CytoNorm carried
+231 more than a tenth of the axis past the range of what went in, down to
+-0.18, and this 14. With ten metaclusters the two programs' maps are not
+the same map, and their results are as far apart as two seeds of either
+(a quarter to a third of the mean correction); both leave the references
+equally close (0.013 to 0.014, from 0.022). There the end slope did what
+the comment in `_curve` fears: CytoNorm moved single values by up to 1.1
+of an axis that runs from 0 to 1, as far as -0.89 and 1.55; this by 0.17
+at most.
 
 Everything here is in transformed units: the caller applies the display
 transform before and inverts it after.
