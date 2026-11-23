@@ -50,6 +50,7 @@ class MainShell(QtWidgets.QMainWindow):
         self.samples.sigStatus.connect(self.status)
         self.gates.sigStatus.connect(self.status)
         self.gates.sigGatesChanged.connect(self.samples.refresh)
+        self.gates.sigScalesChanged.connect(self.explore._draw)
         self.gates.sigGatesChanged.connect(self.statistics.refresh)
         self.samples.sigGatesChanged.connect(self.statistics.refresh)
         self.samples.sigColumnsChanged.connect(self.statistics.mark_stale)

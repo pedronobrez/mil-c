@@ -52,6 +52,10 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - A quadrant gate: one click where two lines cross makes four populations, and moving a line
   moves them all.
 - Combine populations: the events in all of them, in any of them, or in none of them.
+- The scale of each axis is yours: biexponential with its width and decades, arcsinh,
+  logarithmic or linear — for one parameter or for every marker.
+- See the compensation matrix in use and type over any cell; every sample is compensated again.
+- Export the population shown, of the samples selected or of all, as FCS or CSV.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
 - What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
 
@@ -86,7 +90,8 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 
 - **Gating is not all of FlowJo's.** Rectangles, polygons, ellipses, quadrants, ranges and
   boolean combinations are drawn here; from a FlowJo workspace only rectangles and polygons are
-  read. No offset or curly quadrants, no automatic gates, no compensation editor.
+  read. No offset or curly quadrants, no automatic gates, no logicle scale, and one
+  compensation matrix for all the samples rather than one each.
 - **No statistics between groups.** Means and standard deviations, no test.
 - **One figure at a time.** No multi-panel plates.
 - **Its maps are not FlowJo's maps point for point.** See below.
@@ -146,6 +151,7 @@ Everything the window does, without the window.
 python -m milc inspect DATA                      # what a folder holds
 python -m milc counts  DATA --wsp analysis.wsp   # every gate, against FlowJo's count
 python -m milc stats   DATA --channels CD8,CD4 --stats "median,robust cv" --out stats.csv
+python -m milc export  DATA --population "Cells/Live" --format csv --out exported
 python -m milc concat  DATA --wsp analysis.wsp --out concat \
     --pattern '(?P<Day>\d+)(?P<Group>[A-Za-z]+)' --group-by Day,Group
 python -m milc analyze concat.npz --channels CD8,CD4,Foxp3 --umap --tsne --flowsom --out run

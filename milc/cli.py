@@ -321,6 +321,26 @@ def cmd_stats(a) -> int:
     return 0
 
 
+def cmd_export(a) -> int:
+    from .session import Session
+    session = Session()
+    session.open_folder(a.data)
+    if a.wsp:
+        session.set_workspace(a.wsp)
+    session.set_extend_gates(not a.listed_only)
+    population = a.population or ""
+    entries = [e for e in session.usable() if e.include and
+               (not population or population in {n.path for n in e.gates.walk()})]
+    if not entries:
+        print(f"no sample has the population {population!r}; there are: "
+              + ", ".join(session.populations()), file=sys.stderr)
+        return 2
+    written = session.export_population(entries, population, a.out, a.format,
+                                        compensated=not a.raw)
+    print(f"{len(written)} file(s) -> {a.out}")
+    return 0
+
+
 def cmd_gui(a) -> int:
     # imported by name, here, where a packager can see it. Asked for through
     # __import__ it was left out of the first bundle, which then passed its
@@ -402,6 +422,17 @@ def main(argv=None) -> int:
                         "Robust CV", "MAD"]))
     s.add_argument("--out", default="statistics.csv")
     s.set_defaults(run=cmd_stats)
+
+    s = sub.add_parser("export", help="the events of one population, a file per sample")
+    s.add_argument("data")
+    s.add_argument("--wsp", help="a FlowJo workspace; without it, the one in the folder")
+    s.add_argument("--listed-only", action="store_true")
+    s.add_argument("--population", help="the gate's path; every event without it")
+    s.add_argument("--format", choices=("fcs", "csv"), default="fcs")
+    s.add_argument("--raw", action="store_true",
+                   help="as acquired, not compensated; an FCS file then carries the matrix")
+    s.add_argument("--out", default="exported")
+    s.set_defaults(run=cmd_export)
 
     s = sub.add_parser("selftest", help="the whole route on invented data: is this build sound?")
     s.add_argument("--no-window", action="store_true", help="skip the part that needs Qt")

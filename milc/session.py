@@ -18,10 +18,11 @@ import numpy as np
 
 from . import cluster_stats, sampling, stats
 from .dataset import Dataset, concatenate
-from .fcs import read_header
-from .gating import GateNode, copy_tree, tree_from_dict, tree_to_dict
+from .compensation import Compensation, strip_prefix
+from .fcs import read_header, write_fcs
+from .gating import GateNode, copy_tree, follow_scale, tree_from_dict, tree_to_dict
 from .sample import Sample, annotate
-from .transforms import Arcsinh, Biex
+from .transforms import Arcsinh, Biex, from_spec, to_spec
 from .wsp import Workspace, WspSample, read_wsp
 
 #: the one column a new folder starts with; every other is the user's
@@ -125,6 +126,11 @@ class Session:
         #: matrix the listed ones share, where they do share them
         self.extend_gates = True
         self._shared = None
+        #: channel → the scale its axis is drawn on, where the user chose
+        #: one; a channel not here has the usual one (see `scale_of`)
+        self.scales: dict[str, object] = {}
+        #: a compensation matrix edited here, in place of every other
+        self.matrix: object = None
         self._counts: dict[tuple[str, str], int] = {}
         #: the last FlowSOM, kept for its map and tree
         self.flowsom = None
@@ -155,6 +161,7 @@ class Session:
                 if e.channels and tuple(e.channels) != common:
                     e.problem, e.include = "different channels from the others", False
         self.columns, self.group_by = [GROUP], [GROUP]
+        self.scales, self.matrix = {}, None
         usable = [e for e in self.entries if not e.problem]
         for e, group in zip(usable, guess_groups([e.name for e in usable])):
             e.meta = {GROUP: group}
@@ -216,13 +223,78 @@ class Session:
         """The compensation this file is given: the workspace's for it,
         the one the workspace's samples share where it lists none, and
         otherwise None — the file's own."""
+        if self.matrix is not None:
+            return self.matrix
         if e.wsp is not None and e.wsp.compensation is not None:
             return e.wsp.compensation
         if self._shared is not None and self.extend_gates:
             return self._shared[1]
         return None
 
-    # --- gates of the user's own ---------------------------------------------
+    # --- compensation ------------------------------------------------------------
+
+    def current_matrix(self):
+        """(matrix, where it comes from) as the first usable file has it:
+        `edited`, `workspace` or `file`. None where there is none at all."""
+        entries = self.usable()
+        if not entries:
+            return None, ""
+        first = entries[0]
+        given = self.matrix_of(first)
+        if given is not None:
+            return given, "edited" if self.matrix is not None else "workspace"
+        from . import compensation
+        own = compensation.from_keywords(read_header(first.path))
+        return own, "file" if own is not None else ""
+
+    def set_matrix(self, matrix) -> None:
+        """Compensate every file with this matrix — or, with None, go
+        back to the workspace's or the files' own. Everything computed
+        from compensated values is forgotten."""
+        self.matrix = matrix
+        for e in self.entries:
+            e.sample = None
+        self._counts.clear()
+        self.save_project()
+
+    # --- scales ----------------------------------------------------------------------
+
+    def fluorescence(self) -> set[str]:
+        """The channels a compensation matrix covers."""
+        matrix, _ = self.current_matrix()
+        return set(matrix.channels) if matrix is not None else set()
+
+    def scale_of(self, name: str):
+        """The scale a parameter's axis is drawn on: the one chosen for
+        it, else FlowJo's biexponential for fluorescence and none — the
+        values as they are — for scatter and time. `name` may carry the
+        `Comp-` of a gate's dimension."""
+        channel = strip_prefix(name)[0]
+        if channel in self.scales:
+            return self.scales[channel]
+        return Biex() if channel in self.fluorescence() else None
+
+    def set_scale(self, channels: list[str], scale) -> None:
+        """Give these parameters this scale (None: linear, as stored).
+        Polygons drawn on them follow; counts are forgotten."""
+        for channel in channels:
+            channel = strip_prefix(channel)[0]
+            self.scales[channel] = scale
+            for e in self.usable():
+                for dim in (channel, "Comp-" + channel):
+                    if follow_scale(e.gates, dim, scale) and e.sample is not None:
+                        e.sample._masks = None
+        self._counts.clear()
+        self.save_project()
+
+    def reset_scale(self, channels: list[str]) -> None:
+        """Back to the usual scale for these parameters."""
+        for channel in channels:
+            channel = strip_prefix(channel)[0]
+            self.scales.pop(channel, None)
+            self.set_scale([channel], self.scale_of(channel))
+            self.scales.pop(channel, None)   # the usual one is not a choice to keep
+        self.save_project()
 
     def project_file(self) -> str:
         return os.path.join(self.folder, PROJECT_FILE)
@@ -249,6 +321,14 @@ class Session:
 
     def _restore_annotations(self) -> None:
         data = self._project
+        self.scales = {c: from_spec(spec) for c, spec in data.get("scales", {}).items()}
+        saved = data.get("compensation")
+        if saved:
+            try:
+                self.matrix = Compensation(list(saved["channels"]),
+                                           np.array(saved["matrix"], dtype=float), "edited")
+            except (KeyError, TypeError, ValueError):
+                self.matrix = None
         if not data.get("columns"):
             return
         self.columns = [str(c) for c in data["columns"]]
@@ -273,6 +353,10 @@ class Session:
             "excluded": [os.path.basename(e.path) for e in usable if not e.include],
             "gates": {os.path.basename(e.path): tree_to_dict(e.gates)
                       for e in usable if e.edited},
+            "scales": {c: to_spec(t) for c, t in self.scales.items()},
+            "compensation": ({"channels": self.matrix.channels,
+                              "matrix": np.asarray(self.matrix.matrix).tolist()}
+                             if self.matrix is not None else None),
         }
         self._project = data
         with open(self.project_file(), "w", encoding="utf-8") as f:
@@ -450,6 +534,54 @@ class Session:
             e.sample = None
         return self.dataset
 
+    # --- taking a population elsewhere ---------------------------------------
+
+    def export_population(self, entries: list[Entry], population: str, folder: str,
+                          fmt: str = "fcs", compensated: bool = True,
+                          progress=None) -> list[str]:
+        """One file per sample holding only the events of `population`.
+
+        Compensated, the fluorescence columns carry the values this
+        program works with and are named `Comp-…`, so nothing downstream
+        compensates them again. Not compensated, the events are as
+        acquired and the FCS file carries the matrix in use as its
+        `$SPILLOVER`, for whatever reads it next to apply."""
+        os.makedirs(folder, exist_ok=True)
+        tail = re.sub(r"[^A-Za-z0-9+._ -]+", "_", population.split("/")[-1]).strip() or "all"
+        written = []
+        for i, e in enumerate(entries):
+            sample = self.load(e)
+            masks = sample.masks()
+            if population not in masks:
+                continue
+            rows = masks[population]
+            f = sample.fcs
+            touched = set(sample.compensation.channels) if sample.compensation else set()
+            data = (sample.compensated if compensated else f.events)[rows]
+            names = [("Comp-" + c) if compensated and c in touched else c for c in f.channels]
+            path = os.path.join(folder, f"{e.name}_{tail}.{fmt}")
+            if fmt == "csv":
+                heads = [m or c for c, m in zip(names, f.markers)]
+                with open(path, "w", encoding=cluster_stats.CSV_ENCODING) as out:
+                    out.write(",".join('"' + h.replace('"', '""') + '"' if "," in h else h
+                                       for h in heads) + "\n")
+                    np.savetxt(out, data, delimiter=",", fmt="%.6g")
+            else:
+                keep = {k: f.keywords[k] for k in ("$CYT", "$DATE", "$BTIM", "$ETIM", "TUBE NAME")
+                        if f.keywords.get(k)}
+                keep["MILC POPULATION"] = population or "All events"
+                keep["MILC SOURCE"] = f.name
+                if not compensated and sample.compensation is not None:
+                    m = sample.compensation
+                    keep["$SPILLOVER"] = ",".join(
+                        [str(len(m.channels)), *m.channels,
+                         *(f"{v:.10g}" for v in np.asarray(m.matrix).ravel())])
+                write_fcs(path, data, names, list(f.markers), list(f.ranges), keep)
+            written.append(path)
+            if progress:
+                progress(i + 1, len(entries), e.name)
+        return written
+
     # --- statistics ------------------------------------------------------
 
     def stat_channels(self) -> list[tuple[str, str]]:
@@ -498,9 +630,22 @@ class Session:
 
     def features(self, channels: list[str], transform: str = "biex",
                  cofactor: float = 150.0) -> np.ndarray:
-        if transform == "biex":
-            return self.dataset.matrix(channels, Biex(), 1023.0)
-        return self.dataset.matrix(channels, Arcsinh(cofactor))
+        """What the algorithms are fed. `biex` is each marker on the scale
+        its axis has — FlowJo's biexponential unless another was chosen —
+        on 0 to 1023, which is what FlowJo hands its plugins."""
+        if transform != "biex":
+            return self.dataset.matrix(channels, Arcsinh(cofactor))
+        columns = []
+        for c in channels:
+            x = self.dataset.column(c).astype(np.float64)
+            scale = self.scale_of(c) if c in self.scales else Biex()
+            if scale is None:
+                columns.append(x / 262144.0 * 1023.0)
+            elif isinstance(scale, Arcsinh):
+                columns.append(scale(x))
+            else:
+                columns.append(scale(x) * 1023.0)
+        return np.column_stack(columns)
 
     def run_umap(self, channels, transform="biex", cofactor=150.0,
                  n_neighbors=15, min_dist=0.5, seed=0) -> None:

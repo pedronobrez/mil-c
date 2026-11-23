@@ -257,15 +257,13 @@ def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
 
 
 def _scale_out(scale):
-    from .transforms import Biex
-    if isinstance(scale, Biex):
-        return {"biex": [scale.length, scale.max_range, scale.neg, scale.width, scale.pos]}
-    return None
+    from .transforms import to_spec
+    return to_spec(scale)
 
 
 def _scale_in(spec):
-    from .transforms import Biex
-    return Biex(*spec["biex"]) if isinstance(spec, dict) and "biex" in spec else None
+    from .transforms import from_spec
+    return from_spec(spec)
 
 
 def tree_to_dict(tree: GateNode) -> dict:
@@ -322,3 +320,19 @@ def tree_from_dict(d: dict) -> GateNode:
 def depends_on(node: GateNode, name: str) -> bool:
     """Is `node` a combination that names the sister `name`?"""
     return isinstance(node.gate, BooleanGate) and name in node.gate.operands
+
+
+def follow_scale(tree: GateNode, dim: str, scale) -> bool:
+    """A parameter's axis was given another scale: the polygons drawn on
+    it are tested on the new one, as their sides are now straight there.
+    (An ellipse keeps the scale it was drawn on; it cannot be carried
+    over without becoming another shape.) Says whether anything changed."""
+    changed = False
+    for node in tree.walk():
+        g = node.gate
+        if isinstance(g, PolygonGate) and dim in g.dims:
+            scales = list(g.scales or [None, None])
+            scales[g.dims.index(dim)] = scale
+            g.scales = scales if any(x is not None for x in scales) else None
+            changed = True
+    return changed

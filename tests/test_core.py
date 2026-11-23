@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pytest
 
@@ -649,3 +651,148 @@ def test_ellipse_quadrant_and_boolean_gates():
         assert all(np.array_equal(again[k], v) for k, v in root.apply(col, 4000).items())
     e = tree_from_dict(tree_to_dict(root)).find("P/E").gate
     assert isinstance(e.scales[0], Biex) and e.scales[1] is None and e.angle == 0.3
+
+
+# --- scales, compensation, export ------------------------------------------------
+
+def test_scales_as_values():
+    from milc.transforms import (Arcsinh, Biex, Linear, Log, decade_ticks, display_range,
+                                 from_spec, same, to_spec)
+    log = Log(10)
+    x = np.array([10.0, 100, 1000, 262144])
+    assert log(x) == pytest.approx(np.log10(x / 10) / np.log10(26214.4))
+    assert np.allclose(log.inverse(log(x)), x) and log(-50) == 0 and log(0) == 0
+    for t in (Biex(), Biex(256, 262144, 1.0, -400, 5.0), Arcsinh(25), Log(3), Linear(0, 1000)):
+        assert same(from_spec(to_spec(t)), t)
+    assert to_spec(None) is None and from_spec(None) is None and from_spec({"what": 1}) is None
+    assert not same(Biex(), Biex(width=-400)) and not same(Biex(), Arcsinh(150))
+    assert display_range(Biex()) == (0.0, 1.0) and display_range(None, 1000) == (0.0, 1000.0)
+    lo, hi = display_range(Arcsinh(150))
+    assert lo < 0 < hi == pytest.approx(np.arcsinh(262144 / 150))
+    # a logarithmic axis has decades and no zero; the others begin at zero
+    assert [t for _, t in decade_ticks(Log(10))] == ["10²", "10³", "10⁴", "10⁵"]
+    assert decade_ticks(Arcsinh(150))[0] == (0.0, "0")
+    # a wider linear part pushes the decades up the axis
+    assert Biex(width=-1000)(0.0) > Biex(width=-100)(0.0)
+
+
+def _two_samples(tmp_path):
+    from milc.session import Session
+    rng = np.random.default_rng(3)
+    for name, n in (("3Ctrl1", 500), ("3Case1", 800)):
+        ev = np.column_stack([rng.uniform(0, 1000, n), np.abs(rng.lognormal(6, 1.2, (n, 2)))])
+        _write(tmp_path, name + ".fcs", ev.astype(np.float32), markers=["", "CD8", "CD4"],
+               keywords={"SPILL": "2,FITC-A,PE-A,1,0.1,0.02,1"})
+    s = Session()
+    s.open_folder(str(tmp_path))
+    return s
+
+
+def test_scale_of_a_parameter(tmp_path):
+    from milc.session import Session
+    from milc.transforms import Arcsinh, Biex, same
+    s = _two_samples(tmp_path)
+    assert s.fluorescence() == {"FITC-A", "PE-A"}
+    assert same(s.scale_of("Comp-PE-A"), Biex()) and s.scale_of("FSC-A") is None
+    # a polygon drawn on the usual scale…
+    t = Biex()
+    box = np.array([[0.4, 0.4], [0.9, 0.4], [0.9, 0.9], [0.4, 0.9]])
+    raw = np.column_stack([t.inverse(box[:, 0]), t.inverse(box[:, 1])])
+    for e in s.usable():
+        e.gates.add(GateNode("P", PolygonGate(["Comp-PE-A", "Comp-FITC-A"], raw, scales=[t, t])))
+    first = s.usable()[0]
+    s.gates_changed(first)                      # drawn, so kept beside the files
+    before = s.load(first).count("P")
+    # …follows its axis onto another: same corners, sides straight somewhere else
+    wide = Biex(width=-2000)
+    s.set_scale(["Comp-PE-A"], wide)
+    gate = first.gates.find("P").gate
+    assert same(gate.scales[0], wide) and same(gate.scales[1], t) and same(s.scale_of("PE-A"), wide)
+    sample = s.load(first)
+    pe, fitc = wide(sample.column("Comp-PE-A")), t(sample.column("Comp-FITC-A"))
+    lo, hi = wide(raw[0, 0]), wide(raw[1, 0])
+    assert sample.count("P") == ((pe > lo) & (pe < hi) & (fitc > 0.4) & (fitc < 0.9)).sum()
+    assert sample.count("P") == before          # a box with sides along the axes is the same box
+    s.set_scale(["PE-A"], None)                 # linear: no scale at all on that side
+    assert first.gates.find("P").gate.scales[0] is None and s.scale_of("PE-A") is None
+    s.set_scale(["FITC-A"], Arcsinh(150))
+    # it is all there next time, and the usual one comes back when asked
+    again = Session()
+    again.open_folder(str(tmp_path))
+    assert again.scale_of("PE-A") is None and same(again.scale_of("FITC-A"), Arcsinh(150))
+    assert "PE-A" in again.scales
+    again.reset_scale(["PE-A", "FITC-A"])
+    assert again.scales == {} and same(again.scale_of("Comp-PE-A"), Biex())
+    assert same(again.usable()[0].gates.find("P").gate.scales[0], Biex())
+
+
+def test_features_follow_the_scale(tmp_path):
+    from milc import sampling
+    from milc.transforms import Arcsinh, Biex
+    s = _two_samples(tmp_path)
+    s.build()
+    ds = s.dataset
+    x = ds.column("PE-A").astype(np.float64)
+    assert np.allclose(s.features(["PE-A"])[:, 0], Biex()(x) * 1023)      # as FlowJo feeds it
+    s.set_scale(["PE-A"], Biex(width=-1000))
+    assert np.allclose(s.features(["PE-A"])[:, 0], Biex(width=-1000)(x) * 1023)
+    s.set_scale(["PE-A"], Arcsinh(150))
+    assert np.allclose(s.features(["PE-A"])[:, 0], np.arcsinh(x / 150))
+    assert np.allclose(s.features(["PE-A"], "arcsinh", 5)[:, 0], np.arcsinh(x / 5))
+
+
+def test_compensation_can_be_edited(tmp_path):
+    from milc.compensation import Compensation
+    from milc.session import Session
+    s = _two_samples(tmp_path)
+    matrix, source = s.current_matrix()
+    assert source == "file" and matrix.matrix[0, 1] == 0.1
+    first = s.usable()[0]
+    raw = s.load(first).fcs.events.astype(np.float64)
+    usual = s.load(first).compensated.copy()
+    edited = Compensation(["FITC-A", "PE-A"], np.array([[1, 0.3], [0.02, 1]]), "edited")
+    s.set_matrix(edited)
+    assert s.current_matrix()[1] == "edited"
+    now = s.load(first).compensated
+    assert np.allclose(now[:, 1:], raw[:, 1:] @ np.linalg.inv(edited.matrix), rtol=1e-4)
+    assert not np.allclose(now, usual) and np.array_equal(now[:, 0], usual[:, 0])   # scatter untouched
+    again = Session()
+    again.open_folder(str(tmp_path))
+    assert again.current_matrix()[1] == "edited" and again.matrix.matrix[0, 1] == 0.3
+    again.set_matrix(None)
+    assert again.current_matrix()[1] == "file"
+    assert np.allclose(again.load(again.usable()[0]).compensated, usual)
+
+
+def test_export_a_population(tmp_path):
+    from milc.cli import main
+    s = _two_samples(tmp_path)
+    for e in s.usable():
+        e.gates.add(GateNode("Big cells", RectangleGate(["FSC-A"], [600], [None])))
+    out = tmp_path / "out"
+    written = s.export_population(s.usable(), "Big cells", str(out))
+    assert [os.path.basename(p) for p in written] == ["3Case1_Big cells.fcs", "3Ctrl1_Big cells.fcs"]
+    sample = s.load(s.usable()[0])
+    mask = sample.mask("Big cells")
+    f = read_fcs(written[0])
+    assert f.channels == ["FSC-A", "Comp-FITC-A", "Comp-PE-A"] and f.markers == ["", "CD8", "CD4"]
+    assert np.allclose(f.events, sample.compensated[mask]) and len(f) == mask.sum()
+    assert f.keywords["MILC POPULATION"] == "Big cells" and "$SPILLOVER" not in f.keywords
+    # as acquired: the events untouched and the matrix beside them
+    raw = s.export_population(s.usable()[:1], "Big cells", str(tmp_path / "raw"), compensated=False)
+    g = read_fcs(raw[0])
+    assert g.channels == ["FSC-A", "FITC-A", "PE-A"] and np.allclose(g.events, sample.fcs.events[mask])
+    from milc.compensation import from_keywords
+    assert np.allclose(from_keywords(g.keywords).matrix, [[1, 0.1], [0.02, 1]])
+    # as a table
+    table = s.export_population(s.usable()[:1], "Big cells", str(tmp_path / "csv"), fmt="csv")
+    lines = open(table[0], encoding="utf-8-sig").read().splitlines()
+    assert lines[0] == "FSC-A,CD8,CD4" and len(lines) == mask.sum() + 1
+    assert float(lines[1].split(",")[1]) == pytest.approx(sample.compensated[mask][0, 1], rel=1e-5)
+    # every event when no population is named, and from the command line
+    assert len(read_fcs(s.export_population(s.usable()[:1], "", str(tmp_path / "all"))[0])) == 800
+    s.gates_changed(s.usable()[0])
+    assert main(["export", str(tmp_path), "--population", "Big cells", "--format", "csv",
+                 "--out", str(tmp_path / "cli")]) == 0
+    assert sorted(os.listdir(tmp_path / "cli")) == ["3Case1_Big cells.csv", "3Ctrl1_Big cells.csv"]
+    assert main(["export", str(tmp_path), "--population", "Nothing"]) == 2

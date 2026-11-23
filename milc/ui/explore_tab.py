@@ -308,10 +308,18 @@ class ExploreTab(QtWidgets.QWidget):
         if kind == "derived":
             return ds.derived[key], key, None
         x = ds.column(key).astype(np.float64)
-        if ds.compensated[ds.channels.index(key)]:
-            t = Biex()
+        t = self._scale(key)
+        if t is not None:
             return t(x), ds.label(key), decade_ticks(t)
         return x, ds.label(key), None
+
+    def _scale(self, channel: str):
+        """The scale chosen for the parameter in Gates; without a folder
+        open — a dataset read from a file — the usual one."""
+        ds = self.session.dataset
+        if channel in self.session.scales or self.session.usable():
+            return self.session.scale_of(channel)
+        return Biex() if ds.compensated[ds.channels.index(channel)] else None
 
     def _labels(self, spec) -> Categories | None:
         ds = self.session.dataset
@@ -346,8 +354,9 @@ class ExploreTab(QtWidgets.QWidget):
             color = None
         elif _parse(spec)[0] == "expression":
             ch = _parse(spec)[1]
-            color = Values(Biex()(ds.column(ch).astype(np.float64)),
-                           title=ds.label(ch), ticks=decade_ticks(Biex()))
+            t = self._scale(ch) or Biex()
+            color = Values(t(ds.column(ch).astype(np.float64)),
+                           title=ds.label(ch), ticks=decade_ticks(t))
         else:
             color = self._labels(spec)
         split_spec, second = self.split_by.currentData(), self.split_by2.currentData()

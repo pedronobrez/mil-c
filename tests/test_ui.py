@@ -581,3 +581,87 @@ def test_ellipse_quadrants_and_combinations_in_gates(app, folder):
     first = again.usable()[0]
     assert again.load(first).count("Double positive") == ((pe >= 0.6) & (fitc >= 0.4)).sum()
     assert again.load(first).count("Blob") == turned.sum()
+
+
+def test_scale_compensation_and_export_from_gates(app, folder, tmp_path):
+    from milc.fcs import read_fcs
+    from milc.transforms import Arcsinh, Biex, Log, same
+    from milc.ui import worker
+    from milc.ui.gates_tab import CompensationDialog, ExportDialog, ScaleDialog
+    from milc.ui.shell import MainShell
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    for _ in range(3):
+        worker.wait_all()
+        app.processEvents()
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    usual = g.plot.getAxis("bottom")._tickLevels
+
+    # the dialog says what it is set to, and gives it back as a scale
+    d = ScaleDialog("CD4", g._scale("Comp-PE-A"), g)
+    assert d.kind.currentData() == "biex" and d.width.value() == 100
+    assert same(d.scale(), Biex())
+    d.width.setValue(800)
+    assert same(d.scale(), Biex(width=-800))
+    d.kind.setCurrentIndex(d.kind.findData("arcsinh"))
+    assert same(d.scale(), Arcsinh(150)) and d.cofactor.isVisibleTo(d) and not d.width.isVisibleTo(d)
+    d.kind.setCurrentIndex(d.kind.findData("linear"))
+    assert d.scale() is None
+    d.close()
+
+    # one parameter on another scale: its axis changes, the other's does not
+    g.set_scale("Comp-PE-A", Log(10))
+    assert same(w.session.scale_of("PE-A"), Log(10)) and same(g._scale("Comp-FITC-A"), Biex())
+    assert g.plot.getAxis("bottom")._tickLevels != usual
+    assert [t for _, t in g.plot.getAxis("bottom")._tickLevels[0]][0] == "10²"
+    assert g.content().xticks[0][1] == "10²"            # and the figure with it
+    # every marker at once, and back to the usual
+    g.set_scale("Comp-PE-A", Arcsinh(150), every_marker=True)
+    assert all(same(w.session.scale_of(c), Arcsinh(150)) for c in ("FITC-A", "PE-A", "APC-A"))
+    assert w.session.scale_of("FSC-A") is None
+    g.reset_scale("Comp-PE-A", every_marker=True)
+    assert w.session.scales == {} and g.plot.getAxis("bottom")._tickLevels == usual
+
+    # an ellipse keeps the scale it was drawn on, and is still shown where it is
+    cx, cy = float(np.median(Biex()(g.sample.column("Comp-PE-A")))), 0.5
+    g.add_ellipse(cx, cy, 0.2, 0.2, "Round")
+    inside = g.sample.count("Round")
+    g.set_scale("Comp-PE-A", Biex(width=-900))
+    assert g.sample.count("Round") == inside            # the gate did not move
+    child, item, _ = next(o for o in g._overlays if o[0].name == "Round")
+    assert not hasattr(item, "getLocalHandlePositions") and not hasattr(item, "size")  # an outline
+    g.reset_scale("Comp-PE-A")
+
+    # compensation: see it, change a cell, every sample is compensated again
+    matrix, source = w.session.current_matrix()
+    d = CompensationDialog(matrix, source, {}, g)
+    assert d.table.rowCount() == 3 and d.table.item(0, 1).text() == "5"
+    assert not (d.table.item(1, 1).flags() & QtCore.Qt.ItemFlag.ItemIsEditable)
+    assert np.array_equal(d.matrix().matrix, matrix.matrix)   # opened and untouched: unchanged
+    d.set_value("FITC-A", "PE-A", 25)
+    assert d.matrix().matrix[0, 1] == 0.25
+    d.table.item(0, 1).setText("abc")
+    d._accept()
+    assert "number" in d.state.text() and d.result() == 0
+    d.set_value("FITC-A", "PE-A", 25)
+    before = g.sample.compensated.copy()
+    g.set_compensation(d.matrix())
+    d.close()
+    assert w.session.current_matrix()[1] == "edited" and not np.allclose(g.sample.compensated, before)
+    g.set_compensation(None)
+    assert np.allclose(g.sample.compensated, before) and w.session.current_matrix()[1] == "file"
+
+    # export the population shown
+    g.select("Round")
+    d = ExportDialog("Round", 1, folder, g)
+    assert d.folder.text().endswith("exported") and d.compensated.isChecked()
+    d.close()
+    one = g.export_population(str(tmp_path / "one"))
+    assert len(one) == 1 and len(read_fcs(one[0])) == inside
+    every = g.export_population(str(tmp_path / "all"), "csv", every_sample=True)
+    assert len(every) == 4 and all(p.endswith("_Round.csv") for p in every)
+    w.close()

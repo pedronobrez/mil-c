@@ -15,16 +15,17 @@ the events are compared with.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from .. import density, figures
-from ..compensation import PREFIXES
 from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
 from ..session import Session
-from ..transforms import Biex, decade_ticks
+from ..transforms import Arcsinh, Biex, Log, decade_ticks, display_range, same
 from . import palette, style, theme
 
 HISTOGRAM = "#histogram"
@@ -106,6 +107,8 @@ class GatesTab(QtWidgets.QWidget):
     sigStatus = QtCore.pyqtSignal(str)
     #: the gates of one sample or of all changed: counts elsewhere are stale
     sigGatesChanged = QtCore.pyqtSignal()
+    #: an axis was given another scale: other plots of that parameter are stale
+    sigScalesChanged = QtCore.pyqtSignal()
 
     def __init__(self, session: Session, parent=None):
         super().__init__(parent)
@@ -196,16 +199,32 @@ class GatesTab(QtWidgets.QWidget):
         self.offset.setToolTip("Overlaid histograms one above the other "
                                "instead of on one baseline")
         self.figure_button = QtWidgets.QPushButton("Figure…")
+        self.x_scale = QtWidgets.QToolButton()
+        self.y_scale = QtWidgets.QToolButton()
+        for b, which in ((self.x_scale, "x"), (self.y_scale, "y")):
+            b.setText("Scale…")
+            b.setToolTip("How this parameter's axis is drawn: linear, biexponential, "
+                         "arcsinh or logarithmic, and with what settings")
+            b.clicked.connect(lambda _=False, w=which: self._ask_scale(w))
+        self.compensation_button = QtWidgets.QPushButton("Compensation…")
+        self.compensation_button.setToolTip("See the spillover matrix in use, and edit it")
+        self.export_button = QtWidgets.QPushButton("Export…")
+        self.export_button.setToolTip("The events of the population shown, of the samples "
+                                      "selected or of all, as FCS or CSV files")
         bar = QtWidgets.QHBoxLayout()
-        for text, w in (("X", self.x_axis), ("Y", self.y_axis), ("Plot", self.kind),
-                        ("Colour by", self.colour_by)):
+        for text, w, extra in (("X", self.x_axis, self.x_scale), ("Y", self.y_axis, self.y_scale),
+                               ("Plot", self.kind, None), ("Colour by", self.colour_by, None)):
             cap = QtWidgets.QLabel(text)
             cap.setProperty("role", "caption")
             bar.addWidget(cap)
             bar.addWidget(w)
+            if extra is not None:
+                bar.addWidget(extra)
             bar.addSpacing(10)
         bar.addWidget(self.offset)
         bar.addStretch(1)
+        bar.addWidget(self.compensation_button)
+        bar.addWidget(self.export_button)
         bar.addWidget(self.figure_button)
         self.box = _DrawBox()
         self.plot = pg.PlotWidget(viewBox=self.box)
@@ -234,6 +253,8 @@ class GatesTab(QtWidgets.QWidget):
         self.colour_by.currentIndexChanged.connect(self._axes_changed)
         self.offset.toggled.connect(self._axes_changed)
         self.figure_button.clicked.connect(self.make_figure)
+        self.compensation_button.clicked.connect(self._ask_compensation)
+        self.export_button.clicked.connect(self._ask_export)
         self.tree.currentItemChanged.connect(self._node_chosen)
         self.x_axis.currentIndexChanged.connect(self._axes_changed)
         self.y_axis.currentIndexChanged.connect(self._axes_changed)
@@ -309,9 +330,8 @@ class GatesTab(QtWidgets.QWidget):
         comp = self.sample.compensation
         return "Comp-" + channel if comp is not None and channel in comp.channels else channel
 
-    @staticmethod
-    def _scale(dim: str):
-        return Biex() if dim.startswith(PREFIXES) else None
+    def _scale(self, dim: str):
+        return self.session.scale_of(dim)
 
     def _display(self, dim: str, sample=None) -> np.ndarray:
         x = (sample or self.sample).column(dim).astype(np.float64)
@@ -427,6 +447,89 @@ class GatesTab(QtWidgets.QWidget):
     def content(self):
         """What is on the plot, for a figure."""
         return self._content
+
+    # --- scales, compensation, export ----------------------------------------------
+
+    def set_scale(self, dim: str, scale, every_marker: bool = False) -> None:
+        """Draw this parameter on this scale (None: linear, as stored) —
+        or, with `every_marker`, every fluorescence parameter."""
+        s = self.session
+        s.set_scale(sorted(s.fluorescence()) if every_marker else [dim], scale)
+        self._scales_changed()
+
+    def reset_scale(self, dim: str, every_marker: bool = False) -> None:
+        s = self.session
+        s.reset_scale(sorted(s.fluorescence()) if every_marker else [dim])
+        self._scales_changed()
+
+    def _scales_changed(self) -> None:
+        if self.sample is not None:
+            self._keep_axes = True
+            try:
+                self._fill_tree(select=self.node.path if self.node is not None else "")
+            finally:
+                self._keep_axes = False
+        self.sigScalesChanged.emit()
+        self.sigGatesChanged.emit()   # a polygon follows its axis: counts may have moved
+
+    def _ask_scale(self, which: str) -> None:
+        combo = self.x_axis if which == "x" else self.y_axis
+        dim = combo.currentData()
+        if self.sample is None or dim in (None, HISTOGRAM):
+            return
+        dialog = ScaleDialog(combo.currentText(), self._scale(dim), self)
+        if dialog.exec():
+            if dialog.reset_asked:
+                self.reset_scale(dim, dialog.every.isChecked())
+            else:
+                self.set_scale(dim, dialog.scale(), dialog.every.isChecked())
+
+    def set_compensation(self, matrix) -> None:
+        """Compensate every sample with this matrix; None goes back to
+        the workspace's or the files' own."""
+        row = self.samples.currentRow()
+        path = self.node.path if self.node is not None else ""
+        self.session.set_matrix(matrix)
+        if self.entry is not None:
+            self.sample = self.session.load(self.entry)
+            self._keep_axes = True
+            try:
+                self._fill_tree(select=path)
+            finally:
+                self._keep_axes = False
+        self.samples.setCurrentRow(row, QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
+        self.sigGatesChanged.emit()
+
+    def _ask_compensation(self) -> None:
+        matrix, source = self.session.current_matrix()
+        if matrix is None:
+            self.sigStatus.emit("These files carry no compensation matrix")
+            return
+        labels = dict((c, m) for c, m in zip(self.sample.fcs.channels, self.sample.fcs.markers)) \
+            if self.sample is not None else {}
+        dialog = CompensationDialog(matrix, source, labels, self)
+        if dialog.exec():
+            self.set_compensation(None if dialog.reset_asked else dialog.matrix())
+
+    def export_population(self, folder: str, fmt: str = "fcs", compensated: bool = True,
+                          every_sample: bool = False) -> list[str]:
+        """The population shown, of the samples selected here — or of all
+        that are ticked in Samples."""
+        entries = ([e for e in self.session.usable() if e.include] if every_sample
+                   else self.overlaid())
+        written = self.session.export_population(entries, self.node.path, folder, fmt,
+                                                 compensated)
+        self.sigStatus.emit(f"Wrote {len(written)} file(s) to {folder}")
+        return written
+
+    def _ask_export(self) -> None:
+        if self.node is None:
+            return
+        name = self.node.name if self.node.gate is not None else "All events"
+        dialog = ExportDialog(name, len(self.overlaid()), self.session.folder, self)
+        if dialog.exec() and dialog.folder.text():
+            self.export_population(dialog.folder.text(), dialog.format.currentData(),
+                                   dialog.compensated.isChecked(), dialog.all_samples.isChecked())
 
     def make_figure(self) -> None:
         from .figure_dialog import open_for
@@ -621,8 +724,9 @@ class GatesTab(QtWidgets.QWidget):
             f"{self.entry.name} · {name}: {rows.size:,d} events{of}{more}{together}")
 
     def _range(self, dim: str) -> tuple[float, float]:
-        if self._scale(dim) is not None:
-            return (0.0, 1.0)
+        scale = self._scale(dim)
+        if scale is not None:
+            return display_range(scale)
         base = dim
         f = self.sample.fcs
         top = f.ranges[f.index(base)] if base in f.channels else float(self._display(dim).max())
@@ -649,6 +753,30 @@ class GatesTab(QtWidgets.QWidget):
                     pts = pts[:, ::-1]
                 item = pg.PolyLineROI(pts.tolist(), closed=True, pen=pen, hoverPen=hover)
                 anchor = (pts[:, 0].min(), pts[:, 1].max())
+            elif (isinstance(g, EllipseGate) and ydim != HISTOGRAM and g.dims == [xdim, ydim]
+                    and not all(same(a, self._scale(d))
+                                for a, d in zip(g.scales or [None, None], g.dims))):
+                # drawn on another scale than the axes have now: shown where it
+                # is, as the curve it has become, but not for dragging
+                t = np.linspace(0, 2 * np.pi, 121)
+                c, sn = np.cos(g.angle), np.sin(g.angle)
+                u, v = g.radii[0] * np.cos(t), g.radii[1] * np.sin(t)
+                own = np.column_stack([g.center[0] + u * c - v * sn,
+                                       g.center[1] + u * sn + v * c])
+                for k, scale in enumerate(g.scales or [None, None]):
+                    if scale is not None:
+                        own[:, k] = scale.inverse(own[:, k])
+                shown = self._to_display(own, g.dims)
+                outline = pg.PlotCurveItem(shown[:, 0], shown[:, 1], pen=pen)
+                self.plot.addItem(outline)
+                n = int(masks[child.path].sum())
+                label = pg.TextItem(f"{child.name}  {100 * n / here:.1f}%", anchor=(0, 1),
+                                    color=theme.foreground(),
+                                    fill=pg.mkBrush(theme.legend_brush().color()))
+                label.setPos(float(shown[:, 0].min()), float(shown[:, 1].max()))
+                self.plot.addItem(label)
+                self._overlays.append((child, outline, label))
+                continue
             elif (isinstance(g, EllipseGate) and ydim != HISTOGRAM
                     and g.dims == [xdim, ydim]):
                 # pyqtgraph turns an ellipse about its corner, not its centre
@@ -1036,3 +1164,226 @@ class CombineDialog(QtWidgets.QDialog):
         self.name.setPlaceholderText(self.suggestion())
         self.box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setEnabled(
             bool(self.chosen()))
+
+
+class ScaleDialog(QtWidgets.QDialog):
+    """The scale of one parameter's axis."""
+
+    def __init__(self, label: str, current, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Scale of {label}")
+        self.reset_asked = False
+        self.kind = QtWidgets.QComboBox()
+        for text, key in (("Biexponential", "biex"), ("Arcsinh", "arcsinh"),
+                          ("Logarithmic", "log"), ("Linear", "linear")):
+            self.kind.addItem(text, key)
+        b = current if isinstance(current, Biex) else Biex()
+        self.width = QtWidgets.QDoubleSpinBox()
+        self.width.setRange(1, 5000)
+        self.width.setDecimals(0)
+        self.width.setValue(abs(b.width))
+        self.width.setToolTip("How wide the nearly linear part around zero is. Larger "
+                              "pulls a smeared negative population together.")
+        self.neg = QtWidgets.QDoubleSpinBox()
+        self.neg.setRange(0, 3)
+        self.neg.setSingleStep(0.25)
+        self.neg.setValue(b.neg)
+        self.neg.setToolTip("More room below zero, in decades")
+        self.pos = QtWidgets.QDoubleSpinBox()
+        self.pos.setRange(2, 7)
+        self.pos.setSingleStep(0.25)
+        self.pos.setDecimals(4)
+        self.pos.setValue(b.pos)
+        # FlowJo's own number of decades has nine decimals; shown with four,
+        # it must not come back rounded just because the dialog was opened
+        self._pos = b.pos
+        self.cofactor = QtWidgets.QDoubleSpinBox()
+        self.cofactor.setRange(1, 10000)
+        self.cofactor.setDecimals(0)
+        self.cofactor.setValue(current.cofactor if isinstance(current, Arcsinh) else 150)
+        self.cofactor.setToolTip("150 is usual for fluorescence, 5 for mass cytometry")
+        self.lowest = QtWidgets.QDoubleSpinBox()
+        self.lowest.setRange(0.01, 10000)
+        self.lowest.setDecimals(2)
+        self.lowest.setValue(current.min if isinstance(current, Log) else 10)
+        self.lowest.setToolTip("Zero and everything below it is drawn at this edge")
+        self.every = QtWidgets.QCheckBox("Every fluorescence parameter, not just this one")
+        self.note = QtWidgets.QLabel(
+            "Polygons drawn on this parameter are tested on the new scale. "
+            "The algorithms in Explore are fed each marker on its own scale.")
+        self.note.setWordWrap(True)
+        self.note.setProperty("role", "caption")
+        self.form = QtWidgets.QFormLayout(self)
+        self.form.addRow("Scale", self.kind)
+        self.rows = {"biex": [("Linear width", self.width), ("Negative decades", self.neg),
+                              ("Positive decades", self.pos)],
+                     "arcsinh": [("Cofactor", self.cofactor)],
+                     "log": [("Lowest value", self.lowest)], "linear": []}
+        self._labels = {}
+        for rows in self.rows.values():
+            for text, widget in rows:
+                label = QtWidgets.QLabel(text)
+                self._labels[widget] = label
+                self.form.addRow(label, widget)
+        self.form.addRow(self.every)
+        self.form.addRow(self.note)
+        box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                         | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        usual = box.addButton("The usual one", QtWidgets.QDialogButtonBox.ButtonRole.ResetRole)
+        usual.clicked.connect(self._reset)
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        self.form.addRow(box)
+        key = ("biex" if isinstance(current, Biex) else "arcsinh" if isinstance(current, Arcsinh)
+               else "log" if isinstance(current, Log) else "linear")
+        self.kind.setCurrentIndex(self.kind.findData(key))
+        self.kind.currentIndexChanged.connect(self._show)
+        self._show()
+
+    def _show(self, *_) -> None:
+        for key, rows in self.rows.items():
+            for _text, widget in rows:
+                on = key == self.kind.currentData()
+                widget.setVisible(on)
+                self._labels[widget].setVisible(on)
+
+    def _reset(self) -> None:
+        self.reset_asked = True
+        self.accept()
+
+    def scale(self):
+        key = self.kind.currentData()
+        if key == "biex":
+            pos = self._pos if abs(self.pos.value() - self._pos) < 5e-5 else self.pos.value()
+            return Biex(256, 262144.0, self.neg.value(), -self.width.value(), pos)
+        if key == "arcsinh":
+            return Arcsinh(self.cofactor.value())
+        if key == "log":
+            return Log(self.lowest.value())
+        return None
+
+
+class CompensationDialog(QtWidgets.QDialog):
+    """The spillover matrix in use, as percentages: row, the fluorochrome;
+    column, the detector it spills into."""
+
+    def __init__(self, matrix, source: str, labels: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Compensation")
+        self.reset_asked = False
+        self.channels = list(matrix.channels)
+        self._start = np.array(matrix.matrix, dtype=float)
+        n = len(self.channels)
+        where = {"edited": "edited here", "workspace": "from the FlowJo workspace",
+                 "file": "from the files themselves"}.get(source, source)
+        head = QtWidgets.QLabel(
+            f"The matrix in use, {where}. Each cell is the percentage of the row's "
+            "fluorochrome seen in the column's detector. Type over a number to change it; "
+            "every sample is compensated again with the result.")
+        head.setWordWrap(True)
+        head.setProperty("role", "caption")
+        self.table = QtWidgets.QTableWidget(n, n)
+        names = [(labels.get(c) or c).split()[0] if labels.get(c) else c for c in self.channels]
+        self.table.setHorizontalHeaderLabels(self.channels)
+        self.table.setVerticalHeaderLabels([f"{c}  ({m})" if m != c else c
+                                            for c, m in zip(self.channels, names)])
+        for i in range(n):
+            for j in range(n):
+                item = QtWidgets.QTableWidgetItem(self._shown(i, j))
+                item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignRight
+                                      | QtCore.Qt.AlignmentFlag.AlignVCenter)
+                if i == j:   # a fluorochrome is all of itself in its own detector
+                    item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+                self.table.setItem(i, j, item)
+        self.table.resizeColumnsToContents()
+        self.state = QtWidgets.QLabel("")
+        self.state.setProperty("role", "warning")
+        box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                         | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Use this matrix")
+        back = box.addButton("Back to the original", QtWidgets.QDialogButtonBox.ButtonRole.ResetRole)
+        back.setEnabled(source == "edited")
+        back.clicked.connect(self._reset)
+        box.accepted.connect(self._accept)
+        box.rejected.connect(self.reject)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(head)
+        layout.addWidget(self.table, 1)
+        layout.addWidget(self.state)
+        layout.addWidget(box)
+        self.resize(min(260 + 86 * n, 1100), min(210 + 32 * n, 720))
+
+    def _shown(self, i: int, j: int) -> str:
+        return f"{100 * self._start[i, j]:.5g}"
+
+    def set_value(self, row: str, column: str, percent: float) -> None:
+        self.table.item(self.channels.index(row), self.channels.index(column)).setText(f"{percent:g}")
+
+    def matrix(self):
+        from ..compensation import Compensation
+        n = len(self.channels)
+        values = np.empty((n, n))
+        for i in range(n):
+            for j in range(n):
+                text = self.table.item(i, j).text()
+                # a cell nobody typed in keeps its value to the last digit,
+                # not the five it is shown with
+                values[i, j] = (self._start[i, j] if text == self._shown(i, j)
+                                else float(text.replace(",", ".")) / 100.0)
+        return Compensation(self.channels, values, "edited")
+
+    def _accept(self) -> None:
+        try:
+            m = self.matrix()
+            np.linalg.inv(m.matrix)
+        except ValueError:
+            self.state.setText("Every cell has to be a number")
+            return
+        except np.linalg.LinAlgError:
+            self.state.setText("This matrix cannot be inverted: two fluorochromes "
+                               "would be indistinguishable")
+            return
+        self.accept()
+
+    def _reset(self) -> None:
+        self.reset_asked = True
+        self.accept()
+
+
+class ExportDialog(QtWidgets.QDialog):
+    def __init__(self, population: str, selected: int, start: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Export {population}")
+        self.format = QtWidgets.QComboBox()
+        self.format.addItem("FCS 3.1", "fcs")
+        self.format.addItem("CSV", "csv")
+        self.all_samples = QtWidgets.QCheckBox("Every sample ticked in Samples")
+        self.all_samples.setToolTip(f"Unticked: the {selected} selected here")
+        self.compensated = QtWidgets.QCheckBox("Compensated values")
+        self.compensated.setChecked(True)
+        self.compensated.setToolTip(
+            "Ticked: fluorescence as this program works with it, in columns named Comp-…. "
+            "Unticked: as acquired; an FCS file then carries the matrix in use.")
+        self.folder = QtWidgets.QLineEdit(os.path.join(start, "exported") if start else "")
+        browse = QtWidgets.QPushButton("Choose…")
+        browse.clicked.connect(self._browse)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(self.folder, 1)
+        row.addWidget(browse)
+        box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                         | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Export")
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        form = QtWidgets.QFormLayout(self)
+        form.addRow("Format", self.format)
+        form.addRow(self.all_samples)
+        form.addRow(self.compensated)
+        form.addRow("Into", row)
+        form.addRow(box)
+        self.resize(560, 200)
+
+    def _browse(self) -> None:
+        chosen = QtWidgets.QFileDialog.getExistingDirectory(self, "Export into", self.folder.text())
+        if chosen:
+            self.folder.setText(chosen)

@@ -36,14 +36,14 @@ material de divulgação.
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Aplicar a matriz do arquivo ou do workspace | S | **S** | todos |
-| Editor de matriz | S | N | FCS Express, OMIQ, CellEngine, Kaluza |
+| Editor de matriz | S | **S** (uma matriz para todas as amostras) | FCS Express, OMIQ, CellEngine, Kaluza |
 | Autocompensação por single stains | S | N | FCS Express, OMIQ, FlowLogic, Floreada |
 | AutoSpill | S | N | Floreada, R |
 | Unmixing espectral | S | N | FCS Express, OMIQ |
 | Biexponencial | S | **S** (a do FlowJo, conferida) | FCS Express |
 | Logicle, hyperlog | S | N | Floreada (logicle), R |
-| Arcsinh | S | P (só na análise) | OMIQ, Cytobank, CellEngine |
-| Ajuste de escala por parâmetro | S | N (biex fixa) | quase todos |
+| Arcsinh, logarítmica | S | **S** | OMIQ, Cytobank, CellEngine |
+| Ajuste de escala por parâmetro | S | **S** | quase todos |
 
 ### Controle de qualidade
 
@@ -153,7 +153,7 @@ material de divulgação.
 | Editor de layout com vários painéis | S | N | todos os comerciais |
 | Relatório em lote | S | N | todos os comerciais |
 | PowerPoint | S | N | FCS Express, OMIQ, FlowLogic |
-| Exportar população gatada como FCS / CSV | S | P (só o concatenado) | FCS Express, Cytobank, CellEngine, Floreada |
+| Exportar população gatada como FCS / CSV | S | **S** | FCS Express, Cytobank, CellEngine, Floreada |
 
 ### Fluxo de trabalho e plataforma
 
@@ -197,10 +197,11 @@ Sem isto, o programa não substitui o FlowJo no dia a dia, só no fim da anális
    gráfico, com deslocamento. É como se confere um FMO ou um controle.
 3. ~~**Gates que faltam.**~~ **Feito**: elipse, quadrante e booleanos (E / OU / NÃO), desenhados no
    programa. Ler elipses e quadrantes de um workspace do FlowJo continua por fazer.
-4. **Escala por parâmetro.** Ajustar a biexponencial (largura, décadas negativas), e oferecer
+4. ~~**Escala por parâmetro.**~~ **Feito**, menos a logicle (biexponencial ajustável, arcsinh,
+   logarítmica e linear). Ajustar a biexponencial (largura, décadas negativas), e oferecer
    logicle e arcsinh também na visualização.
-5. **Ver e editar a matriz de compensação.**
-6. **Exportar uma população gatada** como FCS ou CSV, por amostra.
+5. ~~**Ver e editar a matriz de compensação.**~~ **Feito** (uma matriz para todas as amostras).
+6. ~~**Exportar uma população gatada**~~ **Feito**: FCS ou CSV, por amostra.
 7. ~~**Gráfico de contorno e densidade.**~~ **Feito** (contornos de probabilidade; zebra não).
 
 ### Segunda leva: onde vale passar o FlowJo

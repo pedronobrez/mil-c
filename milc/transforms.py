@@ -109,18 +109,81 @@ class Biex:
 _SUPER = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
 
 
+@dataclass(frozen=True)
+class Log:
+    """A plain logarithmic axis from `min` to `max`, 0 to 1. Everything at
+    or below `min` — zero and the negatives a compensated marker has —
+    is drawn at the bottom edge: the reason biexponential scales exist."""
+    min: float = 10.0
+    max: float = 262144.0
+
+    def __call__(self, x):
+        x = np.maximum(np.asarray(x, dtype=np.float64), self.min)
+        return np.log10(x / self.min) / np.log10(self.max / self.min)
+
+    def inverse(self, y):
+        return self.min * (self.max / self.min) ** np.asarray(y, dtype=np.float64)
+
+
+def display_range(transform, max_value: float = 262144.0) -> tuple[float, float]:
+    """The ends of an axis under `transform`, in the transform's own
+    coordinates."""
+    if isinstance(transform, (Biex, Log)):
+        return (0.0, 1.0)
+    if isinstance(transform, Arcsinh):
+        # room below zero for the spread a compensated negative has
+        return (float(transform(-10.0 * transform.cofactor)), float(transform(max_value)))
+    if isinstance(transform, Linear):
+        return (0.0, 1.0)
+    return (0.0, float(max_value))
+
+
+def to_spec(transform):
+    """A scale as plain values, for a file; None for no scale at all."""
+    if isinstance(transform, Biex):
+        return {"biex": [transform.length, transform.max_range, transform.neg,
+                         transform.width, transform.pos]}
+    if isinstance(transform, Arcsinh):
+        return {"arcsinh": transform.cofactor}
+    if isinstance(transform, Log):
+        return {"log": [transform.min, transform.max]}
+    if isinstance(transform, Linear):
+        return {"linear": [transform.min, transform.max]}
+    return None
+
+
+def from_spec(spec):
+    if not isinstance(spec, dict):
+        return None
+    if "biex" in spec:
+        return Biex(*spec["biex"])
+    if "arcsinh" in spec:
+        return Arcsinh(float(spec["arcsinh"]))
+    if "log" in spec:
+        return Log(*[float(v) for v in spec["log"]])
+    if "linear" in spec:
+        return Linear(*[float(v) for v in spec["linear"]])
+    return None
+
+
+def same(a, b) -> bool:
+    return to_spec(a) == to_spec(b)
+
+
 def decade_ticks(transform, max_value: float = 262144.0,
                  scale: float = 1.0) -> list[tuple[float, str]]:
     """Where 0, 10², 10³… fall on a transformed axis, with their labels:
     an axis in biexponential units reads as a cytometrist expects."""
-    ticks = [(float(transform(0.0)) * scale, "0")]
-    top = float(transform(max_value)) * scale
-    exp = 2
+    lo, top = (v * scale for v in display_range(transform, max_value))
+    # a logarithmic axis has no zero on it
+    ticks = [] if isinstance(transform, Log) else [(float(transform(0.0)) * scale, "0")]
+    exp = 1
     while 10.0 ** exp <= max_value:
         at = float(transform(10.0 ** exp)) * scale
         # near zero a biexponential is almost linear and 10² lands on
         # top of 0: a label is kept only where there is room for it
-        if at - ticks[-1][0] > 0.05 * top:
+        room = at - ticks[-1][0] > 0.05 * (top - lo) if ticks else at > lo
+        if room and (exp >= 2 or isinstance(transform, Log)):
             ticks.append((at, "10" + str(exp).translate(_SUPER)))
         exp += 1
     return ticks
