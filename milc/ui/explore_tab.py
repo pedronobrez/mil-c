@@ -15,6 +15,7 @@ from ..transforms import Biex, decade_ticks
 from . import palette, style, worker
 from .ramp_picker import RampPicker
 from .scatter import Categories, MapView, Values, categories_of
+from .cluster_tools import cluster_categories
 
 
 
@@ -333,7 +334,7 @@ class ExploreTab(QtWidgets.QWidget):
                               dtype=object)[ds.sample_index]
             return categories_of(groups, "Group")
         if kind == "cluster":
-            return categories_of(ds.derived[key], "FlowSOM cluster")
+            return cluster_categories(self.session.clusters(key))
         return None
 
     def _draw(self) -> None:

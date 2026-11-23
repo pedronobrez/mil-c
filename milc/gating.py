@@ -8,6 +8,7 @@ caller's business: `GateNode.apply` takes a `column(name)` function.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
@@ -141,6 +142,37 @@ class BooleanGate:
         return ~np.logical_or.reduce(found)
 
 
+@dataclass
+class ClusterGate:
+    """The events a trained self-organising map puts in one cluster: each
+    event goes to its nearest node, on the channels and scales the map was
+    trained on, and is kept if that node is one of the cluster's. It
+    carries the map, so it means the same on any file and in any project
+    it is saved in. It has no place on a plot."""
+    #: the columns the map was trained on, `Comp-` where compensated
+    channels: list[str]
+    #: per channel, the scale it was given (None: as stored) and what that
+    #: was multiplied by on the way to the map
+    scales: list
+    factors: list[float]
+    #: nodes x channels: the map
+    codes: np.ndarray
+    #: the nodes that belong to the cluster
+    nodes: list[int]
+    dims: list[str] = field(default_factory=list)
+    inside: bool = True
+
+    def contains(self, column: Column) -> np.ndarray:
+        from .flowsom import _nearest
+        # through float32, as the concatenated events are kept: an event
+        # on the border between two nodes must fall here where it fell there
+        X = np.column_stack([
+            _scaled(column(c).astype(np.float32).astype(np.float64), s) * f
+            for c, s, f in zip(self.channels, self.scales, self.factors)])
+        mask = np.isin(_nearest(np.ascontiguousarray(X), self.codes), self.nodes)
+        return mask if self.inside else ~mask
+
+
 def points_in_polygon(x: np.ndarray, y: np.ndarray, poly: np.ndarray) -> np.ndarray:
     """Even-odd rule, one pass per edge."""
     x = np.asarray(x, dtype=np.float64)
@@ -248,6 +280,10 @@ def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
             g = QuadrantGate(list(g.dims), g.x, g.y, g.quadrant, g.group, g.inside)
         elif isinstance(g, BooleanGate):
             g = BooleanGate(g.op, list(g.operands), inside=g.inside)
+        elif isinstance(g, ClusterGate):
+            g = ClusterGate(list(g.channels), list(g.scales), list(g.factors),
+                            np.array(g.codes, dtype=np.float64), list(g.nodes),
+                            inside=g.inside)
         out = GateNode(node.name, g,
                        reference_count=node.reference_count if keep_counts else None)
         for child in node.children:
@@ -287,6 +323,15 @@ def tree_to_dict(tree: GateNode) -> dict:
                        "group": g.group}
     elif isinstance(g, BooleanGate):
         out["gate"] = {"type": "boolean", "op": g.op, "operands": list(g.operands)}
+    elif isinstance(g, ClusterGate):
+        # the map as its bytes: a tenth of the size of its digits, and exact
+        codes = np.ascontiguousarray(g.codes, dtype="<f8")
+        out["gate"] = {"type": "cluster", "channels": list(g.channels),
+                       "scales": [_scale_out(s) for s in g.scales],
+                       "factors": [float(f) for f in g.factors],
+                       "nodes": [int(n) for n in g.nodes], "inside": g.inside,
+                       "codes": {"shape": list(codes.shape),
+                                 "float64": base64.b64encode(codes.tobytes()).decode("ascii")}}
     return out
 
 
@@ -311,6 +356,12 @@ def tree_from_dict(d: dict) -> GateNode:
                             g.get("group", ""), g.get("inside", True))
     elif g and g["type"] == "boolean":
         gate = BooleanGate(g["op"], list(g["operands"]))
+    elif g and g["type"] == "cluster":
+        codes = np.frombuffer(base64.b64decode(g["codes"]["float64"]), dtype="<f8")
+        gate = ClusterGate(list(g["channels"]), [_scale_in(s) for s in g["scales"]],
+                           [float(f) for f in g["factors"]],
+                           codes.reshape(g["codes"]["shape"]).astype(np.float64),
+                           [int(n) for n in g["nodes"]], inside=g.get("inside", True))
     node = GateNode(d.get("name", ""), gate)
     for child in d.get("children", []):
         node.add(tree_from_dict(child))

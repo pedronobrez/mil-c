@@ -85,8 +85,8 @@ class HeatmapView(_Clickable):
                                         for r, n in enumerate(table.rows)]])
         self.setLabel("left", "Cluster")
         self.setLabel("bottom", "")
-        if selected is not None and str(selected) in table.rows:
-            r = table.rows.index(str(selected))
+        r = table.row_of(selected)
+        if r is not None:
             box = pg.QtWidgets.QGraphicsRectItem(0, rows - r - 1, cols, 1)
             pen = pg.mkPen(theme.foreground(), width=2.5)
             pen.setCosmetic(True)
@@ -105,7 +105,7 @@ class HeatmapView(_Clickable):
         rows = len(self.table.rows)
         r = rows - 1 - int(np.floor(y))
         if 0 <= r < rows and 0 <= x <= len(self.table.columns):
-            return int(self.table.rows[r])
+            return self.table.cluster_at(r)
         return None
 
 
@@ -161,8 +161,8 @@ class FrequencyView(pg.GraphicsLayoutWidget):
             theme.style_axes(plot)
             if value is not None:
                 plot.setTitle(str(value) or "—", color=theme.foreground(), size="10pt")
-            if selected is not None and str(selected) in freq.rows:
-                i = freq.rows.index(str(selected))
+            i = freq.row_of(selected)
+            if i is not None:
                 band = pg.LinearRegionItem((i - 0.48, i + 0.48), movable=False,
                                            brush=pg.mkBrush(QtGui.QColor(theme.line())),
                                            pen=pg.mkPen(None))
@@ -248,7 +248,7 @@ class FrequencyView(pg.GraphicsLayoutWidget):
         if self.freq is None:
             return None
         i = int(round(x))
-        return int(self.freq.rows[i]) if 0 <= i < len(self.freq.rows) else None
+        return self.freq.cluster_at(i) if 0 <= i < len(self.freq.rows) else None
 
 
 class TreeView(_Clickable):

@@ -17,12 +17,14 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import cluster_stats, sampling, stats
+from .clusters import (FLOWSOM, MIN_GAP, Clustering, merged_labels, named, suggest_names,
+                       view)
 from .dataset import Dataset, concatenate
 from .compensation import Compensation, strip_prefix
 from .fcs import read_header, write_fcs
-from .gating import GateNode, copy_tree, follow_scale, tree_from_dict, tree_to_dict
+from .gating import ClusterGate, GateNode, copy_tree, follow_scale, tree_from_dict, tree_to_dict
 from .sample import Sample, annotate
-from .transforms import Arcsinh, Biex, from_spec, to_spec
+from .transforms import Arcsinh, Biex, Linear, from_spec, to_spec
 from .wsp import Workspace, WspSample, read_wsp
 
 #: the one column a new folder starts with; every other is the user's
@@ -788,20 +790,113 @@ class Session:
             "n_clusters": n_clusters, "grid": grid}
         self.flowsom = fs
 
+    def clusters(self, key: str = FLOWSOM) -> Clustering | None:
+        """The clusters as the user now has them — merged, named, with the
+        ones drawn by hand — for the clustering `key` of the dataset, or
+        None before there is one. Everything that shows clusters asks here."""
+        return view(self.dataset, key)
+
     def cluster_tables(self, channels: list[str] | None = None,
-                       stat: str = "median"):
-        """(expression, frequency per sample) of the FlowSOM clusters, or
-        None before there are any. The markers are the ones FlowSOM ran
-        on unless others are asked for."""
+                       stat: str = "median", key: str = FLOWSOM):
+        """(expression, frequency per sample) of the clusters, rows by
+        their names, or None before there are any. The markers are the
+        ones the clustering ran on unless others are asked for."""
         ds = self.dataset
-        if ds is None or "FlowSOM" not in ds.derived:
+        now = self.clusters(key)
+        if now is None:
             return None
-        run = ds.runs.get("FlowSOM", {})
+        run = ds.runs.get(key, {})
         channels = channels or run.get("channels") or self.default_channels()
         X = self.features(channels, run.get("transform", "biex"))
-        labels = ds.derived["FlowSOM"]
-        return (cluster_stats.expression(X, labels, [ds.label(c) for c in channels], stat),
-                cluster_stats.frequencies(labels, ds.sample_index, ds.samples))
+        return tuple(named(t, now) for t in (
+            cluster_stats.expression(X, now.labels, [ds.label(c) for c in channels], stat),
+            cluster_stats.frequencies(now.labels, ds.sample_index, ds.samples)))
+
+    def suggest_cluster_names(self, key: str = FLOWSOM) -> dict[int, str]:
+        """cluster → a name from what it expresses (`clusters.suggest_names`),
+        on the markers the clustering ran on. Only the clusters a name was
+        found for; nothing is renamed."""
+        tables = self.cluster_tables(key=key)
+        if tables is None:
+            return {}
+        gap = MIN_GAP[self.dataset.runs.get(key, {}).get("transform", "biex")]
+        names = suggest_names(tables[0], gap)
+        return {c: n for c, n in zip(tables[0].ids, names) if n}
+
+    # --- a cluster as a population ---------------------------------------------
+
+    def cluster_gate(self, cluster: int, key: str = FLOWSOM) -> ClusterGate:
+        """The gate that finds `cluster` in any file: the trained map, the
+        channels and scales it was trained on — as `features` makes them —
+        and the nodes that are the cluster's after the merges."""
+        ds, now = self.dataset, self.clusters(key)
+        if now is None or cluster not in now.ids:
+            raise ValueError("there is no such cluster")
+        if now.is_manual(cluster):
+            raise ValueError(
+                "a cluster drawn by hand exists only in this dataset: the map it was "
+                "outlined on has coordinates for the events drawn here and no others")
+        node = ds.derived.get(key + "_node")
+        if self.flowsom is None or node is None or not np.array_equal(self.flowsom.node, node):
+            raise ValueError(
+                "the trained map of this clustering is not in memory (a dataset opened "
+                "from a file does not carry it): run FlowSOM again")
+        if "normalization" in ds.provenance:
+            raise ValueError(
+                "the map was trained on batch-normalised events, and the files are not "
+                "normalised: its clusters cannot be found in them")
+        run = ds.runs[key]
+        names, scales, factors = [], [], []
+        for c in run["channels"]:
+            names.append(("Comp-" + c) if ds.compensated[ds.channels.index(c)] else c)
+            if run.get("transform", "biex") != "biex":
+                scale = Arcsinh()   # the cofactor `features` uses where none is given
+            else:
+                scale = (self.scale_of(c) if c in self.scales else Biex()) or Linear()
+            scales.append(scale)
+            factors.append(1.0 if isinstance(scale, Arcsinh) else 1023.0)
+        nodes = np.flatnonzero(np.isin(self.flowsom.node_cluster, now.members[cluster]))
+        return ClusterGate(names, scales, factors, self.flowsom.codes.copy(),
+                           [int(n) for n in nodes])
+
+    def make_population(self, cluster: int, key: str = FLOWSOM,
+                        name: str | None = None) -> str:
+        """Turn a cluster into a population of every file — all of its
+        events, not only the ones drawn for the dataset — and return its
+        path. It goes under the population the dataset was built from:
+        the map was trained on those events and says nothing about the
+        others. A population of that name already there is given the new
+        gate; what was gated under it stays."""
+        ds = self.dataset
+        gate = self.cluster_gate(cluster, key)
+        shown = self.clusters(key).name(cluster)
+        # a number alone is not a name for a population: `FlowSOM 3`
+        name = name or (f"{key} {shown}" if shown.replace("+", "").isdigit() else shown)
+        name = name.replace("/", "-").strip()
+        parent_path = ds.provenance.get("population", ALL_EVENTS)
+        changed = []
+        for e in self.usable():
+            try:
+                parent = e.gates.find(parent_path) if parent_path else e.gates
+            except KeyError:
+                continue
+            own = copy_tree(GateNode(name, gate)).gate
+            for child in parent.children:
+                if child.name == name:
+                    child.gate = own
+                    break
+            else:
+                parent.add(GateNode(name, own))
+            changed.append(e)
+        if not changed:
+            raise ValueError(f"no file has the population {parent_path!r} any more")
+        for e in changed:
+            e.edited, e.borrowed = True, False
+            if e.sample is not None:
+                e.sample.gates, e.sample._masks = e.gates, None
+        self._counts.clear()
+        self.save_project()
+        return f"{parent_path}/{name}" if parent_path else name
 
     def sample_groups(self) -> list[str]:
         """The group of each sample of the dataset, in its order."""
@@ -818,7 +913,7 @@ class Session:
         run = ds.runs.get("FlowSOM", {})
         channels = run.get("channels") or self.default_channels()
         X = self.features(channels, run.get("transform", "biex"))
-        node, labels = ds.derived["FlowSOM_node"], ds.derived["FlowSOM"]
+        node, labels = ds.derived["FlowSOM_node"], merged_labels(ds, FLOWSOM)
         n_nodes = (self.flowsom.codes.shape[0] if self.flowsom is not None
                    else int(node.max()) + 1)
         sizes = np.bincount(node, minlength=n_nodes)
@@ -833,5 +928,7 @@ class Session:
         codes = (self.flowsom.codes if self.flowsom is not None
                  else np.nan_to_num(medians))
         pos, edges = flowsom.tree(codes, sizes)
+        now = self.clusters(FLOWSOM)
         return {"pos": pos, "edges": edges, "sizes": sizes, "cluster": cluster,
-                "medians": medians, "markers": [ds.label(c) for c in channels]}
+                "medians": medians, "markers": [ds.label(c) for c in channels],
+                "names": {c: n for c, n in zip(now.ids, now.names) if not now.is_manual(c)}}

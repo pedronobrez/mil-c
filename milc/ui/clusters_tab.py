@@ -8,25 +8,34 @@ cluster in any of them marks it in all four; a lasso on the map
 
 from __future__ import annotations
 
+import html
+
 import numpy as np
 from PyQt6 import QtCore, QtWidgets
 
-from .. import cluster_stats, compare
+from .. import cluster_stats, clusters, compare
 from ..session import Session
 from . import palette, style, theme
 from .ramp_picker import RampPicker
+from .cluster_tools import ClusterTools, cluster_categories
 from .cluster_views import FrequencyView, HeatmapView, TreeView
-from .scatter import Categories, MapView, categories_of
+from .scatter import Categories, MapView
 
 METACLUSTER = "Metacluster"
 
 
 class ClustersTab(QtWidgets.QWidget):
     sigStatus = QtCore.pyqtSignal(str)
+    #: clusters were renamed, merged or drawn: whatever shows them is out of date
+    sigClustersChanged = QtCore.pyqtSignal()
+    #: a cluster became a population of the files: the gating trees changed
+    sigGatesChanged = QtCore.pyqtSignal()
 
     def __init__(self, session: Session, parent=None):
         super().__init__(parent)
         self.session = session
+        #: the clustering shown, a key of the dataset's results
+        self.key = clusters.FLOWSOM
         self.selected: int | None = None
         self._lasso: np.ndarray | None = None
         self._filling = False
@@ -120,6 +129,8 @@ class ClustersTab(QtWidgets.QWidget):
         inner.addLayout(bar)
         inner.addWidget(grid, 1)
         inner.addWidget(self.summary)
+        self.tools = ClusterTools(self)
+        inner.addWidget(self.tools)
         self.stack = QtWidgets.QStackedWidget()
         self.stack.addWidget(self.empty)
         self.stack.addWidget(body)
@@ -177,13 +188,13 @@ class ClustersTab(QtWidgets.QWidget):
     def refresh(self) -> None:
         """After a run, or a new dataset."""
         ds = self.session.dataset
-        if ds is None or "FlowSOM" not in ds.derived:
+        now = self.session.clusters(self.key)
+        if now is None:
             self.stack.setCurrentIndex(0)
             self.selected, self._lasso, self._tree = None, None, None
             return
         self.stack.setCurrentIndex(1)
-        if self.selected is not None and self.selected not in set(
-                int(c) for c in np.unique(ds.derived["FlowSOM"])):
+        if self.selected not in now.ids:
             self.selected = None
         if self._lasso is not None and self._lasso.size != len(ds):
             self._lasso = None
@@ -209,7 +220,7 @@ class ClustersTab(QtWidgets.QWidget):
         for name in ("UMAP", "tSNE"):
             if name + "1" in ds.derived:
                 self.embedding.addItem(name, name)
-        run = ds.runs.get("FlowSOM", {})
+        run = ds.runs.get(self.key, {})
         pair = (run.get("channels") or self.session.default_channels())[:2]
         self.embedding.addItem(" × ".join(ds.label(c).split()[0] for c in pair),
                                "channels")
@@ -250,7 +261,7 @@ class ClustersTab(QtWidgets.QWidget):
     def _other_markers(self) -> list[str]:
         """Stained markers FlowSOM was not run on."""
         ds = self.session.dataset
-        used = set(ds.runs.get("FlowSOM", {}).get("channels") or [])
+        used = set(ds.runs.get(self.key, {}).get("channels") or [])
         return [c for c, m, comp in zip(ds.channels, ds.markers, ds.compensated)
                 if comp and m and c not in used]
 
@@ -298,8 +309,15 @@ class ClustersTab(QtWidgets.QWidget):
         if self._lasso is not None:
             return self._lasso
         if self.selected is not None:
-            return self.session.dataset.derived["FlowSOM"] == self.selected
+            return self.session.clusters(self.key).labels == self.selected
         return None
+
+    def clusters_changed(self, select: int | None = None) -> None:
+        """The clusters were edited: show them as they now are, here and
+        wherever else they are shown."""
+        self.selected, self._lasso = select, None
+        self.refresh()
+        self.sigClustersChanged.emit()
 
     # --- drawing -------------------------------------------------------------------
 
@@ -310,27 +328,29 @@ class ClustersTab(QtWidgets.QWidget):
         self._draw_tables()
         self._draw_tree()
         self._summarise()
+        self.tools.sync()
 
     def _draw_map(self) -> None:
         ds = self.session.dataset
-        if self._filling or ds is None or "FlowSOM" not in ds.derived:
+        now = self.session.clusters(self.key)
+        if self._filling or now is None:
             return
         which = self.embedding.currentData()
         if which in ("UMAP", "tSNE"):
             x, y = ds.derived[which + "1"], ds.derived[which + "2"]
             xl, yl = which + "1", which + "2"
         else:
-            run = ds.runs.get("FlowSOM", {})
+            run = ds.runs.get(self.key, {})
             a, b = (run.get("channels") or self.session.default_channels())[:2]
             X = self.session.features([a, b], run.get("transform", "biex"))
             x, y, xl, yl = X[:, 0], X[:, 1], ds.label(a), ds.label(b)
-        cats = categories_of(ds.derived["FlowSOM"], "FlowSOM cluster")
+        cats = cluster_categories(now)
         if self.selected is not None:
             # the others stay where they are, greyed: the cluster is read
             # against the whole map
             cats = Categories(cats.codes, cats.names,
-                              [c if n == str(self.selected) else theme.faint_axis()
-                               for c, n in zip(cats.colors, cats.names)], cats.title)
+                              [c if i == self.selected else theme.faint_axis()
+                               for c, i in zip(cats.colors, now.ids)], cats.title)
         self.map.selected = self._lasso
         self.map.show_points(x, y, xl, yl, cats)
 
@@ -338,10 +358,10 @@ class ClustersTab(QtWidgets.QWidget):
         if self._filling or self.session.dataset is None:
             return
         ds = self.session.dataset
-        used = ds.runs.get("FlowSOM", {}).get("channels") or self.session.default_channels()
+        used = ds.runs.get(self.key, {}).get("channels") or self.session.default_channels()
         show_others = self.all_markers.isChecked() and self.all_markers.isEnabled()
         channels = list(used) + self._other_markers() if show_others else None
-        tables = self.session.cluster_tables(channels, self.stat.currentData())
+        tables = self.session.cluster_tables(channels, self.stat.currentData(), self.key)
         if tables is None:
             return
         expression, freq = tables
@@ -439,15 +459,20 @@ class ClustersTab(QtWidgets.QWidget):
             return
         info = cluster_stats.selection(mask, ds.sample_index, ds.samples,
                                        self._summary_groups())
-        what = (f"Cluster {self.selected}" if self._lasso is None else "Selection")
+        now = self.session.clusters(self.key)
+        what = (f"Cluster {html.escape(now.name(self.selected))}" if self._lasso is None
+                else "Selection")
         parts = [f"<b>{what}</b>: {info['n']:,d} events, {info['share']:.1%} of all"]
+        if self._lasso is None and now.note(self.selected):
+            parts.append(f"<i>{html.escape(now.note(self.selected))}</i>")
         for g, (mean, sd, n) in info["by_group"].items():
             spread = f" ± {sd:.1f}" if n > 1 else ""
             parts.append(f"{g or '—'} {mean:.1f}{spread}% (n={n})")
         if self._lasso is not None:
-            labels = ds.derived["FlowSOM"][mask]
+            labels = now.labels[mask]
             ids, counts = np.unique(labels, return_counts=True)
             top = np.argsort(-counts)[:3]
             parts.append("clusters " + ", ".join(
-                f"{int(ids[i])} ({counts[i] / labels.size:.0%})" for i in top))
+                f"{html.escape(now.name(int(ids[i])))} ({counts[i] / labels.size:.0%})"
+                for i in top))
         self.summary.setText(" &nbsp;·&nbsp; ".join(parts))
