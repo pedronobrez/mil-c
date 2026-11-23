@@ -537,3 +537,52 @@ def test_statistics_table(tmp_path):
     assert head.endswith("CD8 · Median,CD8 · Robust CV,FSC-A · Median,FSC-A · Robust CV")
     assert main(["stats", str(tmp_path), "--channels", "nope"]) == 2
     assert main(["stats", str(tmp_path), "--stats", "mode"]) == 2
+
+
+# --- density: histograms and contours ---------------------------------------------
+
+def test_histogram_and_contours():
+    from milc import density
+    from milc.gating import points_in_polygon
+    rng = np.random.default_rng(0)
+    x, y = rng.normal(0.5, 0.08, 20000), rng.normal(0.4, 0.05, 20000)
+    centres, heights = density.histogram(x, 0, 1)
+    assert heights.max() == pytest.approx(100) and abs(centres[np.argmax(heights)] - 0.5) < 0.03
+    _, counts = density.histogram(x, 0, 1, smooth=0, normalise=density.COUNT)
+    assert counts.sum() == 20000
+    # events beyond the axis pile up at its end; they are not lost
+    _, edge = density.histogram(np.array([5.0, 6.0, 0.5]), 0, 1, bins=10, smooth=0,
+                                normalise=density.COUNT)
+    assert edge[-1] == 2 and edge.sum() == 3
+    # a contour line encloses the share of the events it is named for
+    levels = density.contours(x, y, (0, 1), (0, 1))
+    assert [share for share, _ in levels] == list(density.LEVELS)
+    for share, lines in levels:
+        inside = sum(points_in_polygon(x, y, line).sum() for line in lines) / x.size
+        assert inside == pytest.approx(share, abs=0.04)
+    far = density.outside(x, y, (0, 1), (0, 1))
+    assert far.mean() == pytest.approx(0.10, abs=0.03)
+    assert density.contours(x[:5], y[:5], (0, 1), (0, 1)) == []   # too few to have a shape
+
+
+def test_overlay_figures(tmp_path):
+    from milc import density, figures
+    rng = np.random.default_rng(1)
+    hist, lines = [], []
+    for k, (name, group) in enumerate((("a", "Ctrl"), ("b", "Case"), ("c", "Case"))):
+        x, y = rng.normal(0.4 + 0.1 * k, 0.05, 3000), rng.normal(0.5, 0.06, 3000)
+        hist.append(figures.Series(name, group, *density.histogram(x, 0, 1)))
+        lines.append(figures.Series(name, group, levels=density.contours(x, y, (0, 1), (0, 1))))
+    overlay = figures.OverlayContent(hist, "CD4", "% of the tallest bin", xrange=(0, 1))
+    assert overlay.is_histogram and overlay.groups() == ["Ctrl", "Case"]
+    assert [n for n, _ in figures.category_names(overlay)] == ["Ctrl", "Case"]
+    style = figures.FigureStyle(font="DejaVu Sans", colors={"Case": "#c0392b"})
+    figures.save(overlay, style, str(tmp_path / "h.svg"))
+    svg = (tmp_path / "h.svg").read_text(encoding="utf-8")
+    assert "#c0392b" in svg.lower() and "CD4" in svg and "Ctrl" in svg
+    overlay.offset = True
+    figures.save(overlay, style, str(tmp_path / "o.svg"))
+    assert ">a<" in (tmp_path / "o.svg").read_text(encoding="utf-8").replace("\n", "")
+    contour = figures.OverlayContent(lines, "CD4", "CD8", xrange=(0, 1), yrange=(0, 1))
+    assert not contour.is_histogram
+    assert figures.preview_png(contour, style, dpi=40)[:4] == b"\x89PNG"

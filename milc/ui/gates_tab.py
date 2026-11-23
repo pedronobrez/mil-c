@@ -19,14 +19,16 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .. import figures
+from .. import density, figures
 from ..compensation import PREFIXES
 from ..gating import GateNode, PolygonGate, RectangleGate
 from ..session import Session
 from ..transforms import Biex, decade_ticks
-from . import style, theme
+from . import palette, style, theme
 
 HISTOGRAM = "#histogram"
+PSEUDOCOLOUR, CONTOUR = "pseudocolour", "contour"
+BY_SAMPLE = "#sample"
 MAX_POINTS = 40_000
 
 
@@ -104,6 +106,11 @@ class GatesTab(QtWidgets.QWidget):
 
         # --- left: the samples and the tree
         self.samples = QtWidgets.QListWidget()
+        self.samples.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.samples.setToolTip(
+            "Click a sample to look at it. Select several — Shift or Cmd/Ctrl-click — "
+            "to overlay them: histograms on a histogram, contours on two parameters.")
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setHeaderLabels(["Population", "Events", "% parent"])
         self.tree.setRootIsDecorated(True)
@@ -150,14 +157,30 @@ class GatesTab(QtWidgets.QWidget):
         self.y_axis = QtWidgets.QComboBox()
         self.caption = QtWidgets.QLabel("")
         self.caption.setProperty("role", "caption")
+        self.caption.setWordWrap(True)
+        self.kind = QtWidgets.QComboBox()
+        self.kind.addItem("Pseudocolour", PSEUDOCOLOUR)
+        self.kind.addItem("Contour", CONTOUR)
+        self.kind.setToolTip("Contour lines enclose 90, 75, 50, 25 and 10% of the events; "
+                             "the events outside the outermost are drawn as dots")
+        self.colour_by = QtWidgets.QComboBox()
+        self.colour_by.setToolTip("With several samples overlaid: a colour for each "
+                                  "sample, or for each value of one of your columns")
+        self.offset = QtWidgets.QCheckBox("Staggered")
+        self.offset.setToolTip("Overlaid histograms one above the other "
+                               "instead of on one baseline")
+        self.figure_button = QtWidgets.QPushButton("Figure…")
         bar = QtWidgets.QHBoxLayout()
-        for text, w in (("X", self.x_axis), ("Y", self.y_axis)):
+        for text, w in (("X", self.x_axis), ("Y", self.y_axis), ("Plot", self.kind),
+                        ("Colour by", self.colour_by)):
             cap = QtWidgets.QLabel(text)
             cap.setProperty("role", "caption")
             bar.addWidget(cap)
             bar.addWidget(w)
             bar.addSpacing(10)
-        bar.addWidget(self.caption, 1)
+        bar.addWidget(self.offset)
+        bar.addStretch(1)
+        bar.addWidget(self.figure_button)
         self.box = _DrawBox()
         self.plot = pg.PlotWidget(viewBox=self.box)
         self.plot.setBackground(theme.background())
@@ -171,6 +194,7 @@ class GatesTab(QtWidgets.QWidget):
         self.stack.addWidget(self.plot)
         right = QtWidgets.QVBoxLayout()
         right.addLayout(bar)
+        right.addWidget(self.caption)
         right.addWidget(self.stack, 1)
 
         layout = QtWidgets.QHBoxLayout(self)
@@ -179,6 +203,11 @@ class GatesTab(QtWidgets.QWidget):
         layout.addLayout(right, 1)
 
         self.samples.currentRowChanged.connect(self._sample_chosen)
+        self.samples.itemSelectionChanged.connect(self._selection_changed)
+        self.kind.currentIndexChanged.connect(self._axes_changed)
+        self.colour_by.currentIndexChanged.connect(self._axes_changed)
+        self.offset.toggled.connect(self._axes_changed)
+        self.figure_button.clicked.connect(self.make_figure)
         self.tree.currentItemChanged.connect(self._node_chosen)
         self.x_axis.currentIndexChanged.connect(self._axes_changed)
         self.y_axis.currentIndexChanged.connect(self._axes_changed)
@@ -210,7 +239,14 @@ class GatesTab(QtWidgets.QWidget):
         self.entries = self.session.usable()
         for e in self.entries:
             self.samples.addItem(f"{e.name}    {e.events:,d}")
+        keep = self.colour_by.currentData()
+        self.colour_by.clear()
+        self.colour_by.addItem("Sample", BY_SAMPLE)
+        for column in self.session.columns:
+            self.colour_by.addItem(column, column)
+        self.colour_by.setCurrentIndex(max(self.colour_by.findData(keep), 0))
         self._filling = False
+        self._content = None
         self.entry = self.sample = self.node = None
         self.tree.clear()
         self.stack.setCurrentIndex(0)
@@ -246,10 +282,125 @@ class GatesTab(QtWidgets.QWidget):
     def _scale(dim: str):
         return Biex() if dim.startswith(PREFIXES) else None
 
-    def _display(self, dim: str) -> np.ndarray:
-        x = self.sample.column(dim).astype(np.float64)
+    def _display(self, dim: str, sample=None) -> np.ndarray:
+        x = (sample or self.sample).column(dim).astype(np.float64)
         scale = self._scale(dim)
         return scale(x) if scale is not None else x
+
+    # --- several samples at once ------------------------------------------------
+
+    def overlaid(self) -> list:
+        """The samples selected together, in the list's order; just the
+        one being looked at when nothing else is selected."""
+        rows = sorted({i.row() for i in self.samples.selectedIndexes()})
+        chosen = [self.entries[r] for r in rows if r < len(self.entries)]
+        return chosen if len(chosen) > 1 else ([self.entry] if self.entry else [])
+
+    def select_samples(self, names: list[str]) -> None:
+        """Overlay these; the first becomes the one whose gates are shown."""
+        rows = [i for i, e in enumerate(self.entries) if e.name in names]
+        if not rows:
+            return
+        self._filling = True
+        self.samples.clearSelection()
+        for r in rows:
+            self.samples.item(r).setSelected(True)
+        self._filling = False
+        if self.entry is None or self.entry.name not in names:
+            self.samples.setCurrentRow(rows[0], QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
+        self._draw()
+
+    def _selection_changed(self) -> None:
+        if not self._filling and self.sample is not None:
+            self._draw()
+
+    def _series(self, entries, xdim, ydim, xr, yr) -> list:
+        """Each sample's histogram or contours of the population shown."""
+        by = self.colour_by.currentData()
+        path = self.node.path
+        out = []
+        for e in entries:
+            sample = self.session.load(e)
+            masks = sample.masks()
+            if path not in masks:
+                continue   # gated its own way: this population is not in it
+            rows = masks[path]
+            group = e.name if by == BY_SAMPLE else (e.meta.get(by, "") or "—")
+            x = self._display(xdim, sample)[rows]
+            if ydim == HISTOGRAM:
+                cx, h = density.histogram(x, *xr)
+                out.append(figures.Series(e.name, group, cx, h))
+            else:
+                y = self._display(ydim, sample)[rows]
+                far = density.outside(x, y, xr, yr)
+                pts = np.column_stack([x[far], y[far]])
+                if len(pts) > 4000:
+                    pts = pts[np.random.default_rng(0).choice(len(pts), 4000, replace=False)]
+                out.append(figures.Series(e.name, group, outliers=pts,
+                                          levels=density.contours(x, y, xr, yr)))
+        return out
+
+    def _draw_series(self, series, ydim, yr) -> tuple[float, float]:
+        """Draw them, and say what range of Y they need."""
+        names = list(dict.fromkeys(s.group for s in series))
+        colour = dict(zip(names, palette.categorical(len(names))))
+        legend = self.plot.plotItem.legend or self.plot.plotItem.addLegend(offset=(-8, 8))
+        legend.clear()
+        legend.setBrush(theme.legend_brush())
+        legend.setPen(theme.legend_pen())
+        legend.setLabelTextColor(theme.foreground())
+        legend.setVisible(1 < len(names) <= 14)
+        shown = set()
+        if ydim == HISTOGRAM:
+            top = max((float(s.y.max()) for s in series), default=1.0) or 1.0
+            step = figures.STAGGER * top if self.offset.isChecked() else 0.0
+            for k, s in enumerate(series):
+                fill = QtGui.QColor(colour[s.group])
+                fill.setAlpha(95 if step else 45)
+                curve = pg.PlotCurveItem(s.x, s.y + k * step, fillLevel=k * step,
+                                         brush=pg.mkBrush(fill),
+                                         pen=pg.mkPen(colour[s.group], width=1.4))
+                curve.setZValue(len(series) - k)
+                self.plot.addItem(curve)
+                if s.group not in shown:
+                    shown.add(s.group)
+                    legend.addItem(curve, s.group)
+            if step:
+                self.plot.getAxis("left").setTicks(
+                    [[(k * step, s.label) for k, s in enumerate(series)]])
+                self.plot.setLabel("left", "")
+            else:
+                self.plot.getAxis("left").setTicks(None)
+                self.plot.setLabel("left", "% of the tallest bin")
+            return (0.0, (len(series) - 1) * step + top * 1.06)
+        widths = {0.90: 0.8, 0.75: 1.0, 0.50: 1.3, 0.25: 1.6, 0.10: 1.9}
+        for s in series:
+            first = None
+            for share, lines in s.levels or []:
+                pen = pg.mkPen(colour[s.group], width=widths.get(round(share, 2), 1.0))
+                for line in lines:
+                    item = pg.PlotCurveItem(line[:, 0], line[:, 1], pen=pen)
+                    self.plot.addItem(item)
+                    first = first or item
+            if s.outliers is not None and len(s.outliers):
+                dots = QtGui.QColor(colour[s.group])
+                dots.setAlpha(150)
+                self.plot.addItem(pg.ScatterPlotItem(s.outliers[:, 0], s.outliers[:, 1],
+                                                     size=2.2, pen=None, pxMode=True,
+                                                     brush=pg.mkBrush(dots)))
+            if first is not None and s.group not in shown:
+                shown.add(s.group)
+                legend.addItem(first, s.group)
+        return yr
+
+    def content(self):
+        """What is on the plot, for a figure."""
+        return self._content
+
+    def make_figure(self) -> None:
+        from .figure_dialog import open_for
+        if open_for(self, self, "gates") is None:
+            self.sigStatus.emit("Nothing on the plot yet")
 
     def _fill_axes(self) -> None:
         keep = (self.x_axis.currentData(), self.y_axis.currentData())
@@ -358,7 +509,30 @@ class GatesTab(QtWidgets.QWidget):
         xr = self._range(xdim)
         self.plot.setLabel("bottom", self.x_axis.currentText())
         self._ticks("bottom", xdim)
-        if ydim == HISTOGRAM:
+        if self.plot.plotItem.legend is not None:
+            self.plot.plotItem.legend.setVisible(False)
+        overlay = self.overlaid()
+        as_lines = len(overlay) > 1 or (ydim != HISTOGRAM
+                                        and self.kind.currentData() == CONTOUR)
+        self.kind.setEnabled(ydim != HISTOGRAM and len(overlay) <= 1)
+        self.colour_by.setEnabled(len(overlay) > 1)
+        self.offset.setEnabled(len(overlay) > 1 and ydim == HISTOGRAM)
+        self._content = None
+        if as_lines:
+            yr = (0.0, 1.0) if ydim == HISTOGRAM else self._range(ydim)
+            if ydim != HISTOGRAM:
+                self.plot.setLabel("left", self.y_axis.currentText())
+                self._ticks("left", ydim)
+            series = self._series(overlay, xdim, ydim, xr, yr)
+            yr = self._draw_series(series, ydim, yr)
+            hist = ydim == HISTOGRAM
+            self._content = figures.OverlayContent(
+                series, self.x_axis.currentText(),
+                "% of the tallest bin" if hist else self.y_axis.currentText(),
+                decade_ticks(self._scale(xdim)) if self._scale(xdim) else None,
+                None if hist or not self._scale(ydim) else decade_ticks(self._scale(ydim)),
+                xr, None if hist else yr, offset=hist and self.offset.isChecked())
+        elif ydim == HISTOGRAM:
             counts, edges = np.histogram(x[rows], bins=256, range=xr)
             fill = QtGui.QColor(theme.accent())
             fill.setAlpha(90)
@@ -368,6 +542,11 @@ class GatesTab(QtWidgets.QWidget):
             self.plot.setLabel("left", "Events")
             self.plot.getAxis("left").setTicks(None)
             yr = (0.0, float(counts.max()) * 1.08 + 1)
+            self._content = figures.OverlayContent(
+                [figures.Series(self.entry.name, self.entry.name,
+                                (edges[:-1] + edges[1:]) / 2, counts.astype(float))],
+                self.x_axis.currentText(), "Events",
+                decade_ticks(self._scale(xdim)) if self._scale(xdim) else None, xrange=xr)
         else:
             y = self._display(ydim)
             yr = self._range(ydim)
@@ -387,6 +566,12 @@ class GatesTab(QtWidgets.QWidget):
                 self.plot.addItem(pg.ScatterPlotItem(
                     x[shown][order], y[shown][order], size=2.5, pen=None, pxMode=True,
                     brush=[brushes[i] for i in level[order]]))
+                self._content = figures.MapContent(
+                    x[shown][order], y[shown][order], self.x_axis.currentText(),
+                    self.y_axis.currentText(),
+                    color=figures.Values(d[order], "Density (log)", float(d.min()), float(d.max())),
+                    xticks=decade_ticks(self._scale(xdim)) if self._scale(xdim) else None,
+                    yticks=decade_ticks(self._scale(ydim)) if self._scale(ydim) else None)
         self.plot.setXRange(*xr, padding=0.01)
         self.plot.setYRange(*yr, padding=0.01)
         self._draw_gates(xdim, ydim, xr, yr)
@@ -394,9 +579,12 @@ class GatesTab(QtWidgets.QWidget):
         of = (f", {100 * rows.size / max(int(self.sample.mask(parent.path).sum()), 1):.1f}% "
               f"of {parent.name if parent.gate is not None else 'all events'}"
               if parent is not None else "")
-        more = f" — {shown.size:,d} drawn" if shown.size < rows.size else ""
+        more = f" — {shown.size:,d} drawn" if shown.size < rows.size and not as_lines else ""
         name = self.node.name if self.node.gate is not None else "All events"
-        self.caption.setText(f"{self.entry.name} · {name}: {rows.size:,d} events{of}{more}")
+        together = (f" · {len(overlay)} samples overlaid; gates are {self.entry.name}'s"
+                    if len(overlay) > 1 else "")
+        self.caption.setText(
+            f"{self.entry.name} · {name}: {rows.size:,d} events{of}{more}{together}")
 
     def _range(self, dim: str) -> tuple[float, float]:
         if self._scale(dim) is not None:

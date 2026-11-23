@@ -425,3 +425,68 @@ def test_statistics_tab(app, folder, tmp_path):
     st.copy()
     assert QtWidgets.QApplication.clipboard().text().splitlines()[0].startswith("Sample\tGroup\tDay")
     w.close()
+
+
+def test_overlays_in_gates(app, folder):
+    """Several samples selected are several samples on the plot: their
+    histograms, staggered or not, or their contours — and a figure of it."""
+    from milc import figures
+    from milc.ui import worker
+    from milc.ui.gates_tab import CONTOUR, HISTOGRAM
+    from milc.ui.shell import MainShell
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    for _ in range(3):
+        worker.wait_all()
+        app.processEvents()
+
+    # one sample: a contour plot instead of the dots
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    assert isinstance(g.content(), figures.MapContent) and g.kind.isEnabled()
+    g.kind.setCurrentIndex(g.kind.findData(CONTOUR))
+    c = g.content()
+    assert isinstance(c, figures.OverlayContent) and len(c.series) == 1 and c.series[0].levels
+    assert not g.colour_by.isEnabled() and not g.offset.isEnabled()
+
+    # several: histograms, one colour per sample
+    g.set_axes("Comp-PE-A", HISTOGRAM)
+    g.select_samples(["3Case1", "3Case2", "3Ctrl1", "3Ctrl2"])
+    c = g.content()
+    assert [s.label for s in c.series] == ["3Case1", "3Case2", "3Ctrl1", "3Ctrl2"]
+    assert c.is_histogram and c.groups() == [s.label for s in c.series] and not c.offset
+    assert all(s.y.max() == pytest.approx(100) for s in c.series)   # each to its own mode
+    assert "4 samples overlaid" in g.caption.text() and g.offset.isEnabled()
+    # a colour per group, and staggered
+    g.colour_by.setCurrentIndex(g.colour_by.findData("Group"))
+    g.offset.setChecked(True)
+    c = g.content()
+    assert c.groups() == ["Case", "Ctrl"] and c.offset
+    assert figures.preview_png(c, figures.FigureStyle(font="DejaVu Sans"), dpi=40)[:4] == b"\x89PNG"
+
+    # on two parameters the same samples are contours
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    c = g.content()
+    assert not c.is_histogram and len(c.series) == 4 and c.yrange == (0.0, 1.0)
+    assert not g.kind.isEnabled()
+
+    # only within a population every one of them has
+    g.everyone.setChecked(False)
+    g.add_rectangle(0.3, 0.3, 0.9, 0.9, "Mine")
+    g.select("Mine")
+    assert [s.label for s in g.content().series] == [g.entry.name]
+    g.everyone.setChecked(True)
+
+    # back to one sample: back to its own plot
+    g.select("")
+    g.select_samples([g.entry.name])
+    g.kind.setCurrentIndex(0)
+    assert isinstance(g.content(), figures.MapContent)
+    from milc.ui.figure_dialog import FigureDialog
+    d = FigureDialog(g.content(), w, "gates")
+    assert d.colormap.isVisibleTo(d)
+    d.close()
+    w.close()

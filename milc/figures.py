@@ -168,9 +168,53 @@ class TreeContent:
     color_by: str | None = None
 
 
+@dataclass
+class Series:
+    """One sample (or one group of them) on an overlay."""
+    label: str
+    #: what its colour stands for: its own name, or the value of a column
+    group: str
+    #: a histogram: centres and heights
+    x: np.ndarray | None = None
+    y: np.ndarray | None = None
+    #: contours: [(share of events inside, [n x 2 lines])], outermost first
+    levels: list | None = None
+    #: events outside the outermost contour, n x 2
+    outliers: np.ndarray | None = None
+
+
+@dataclass
+class OverlayContent:
+    """Several samples on one plot: histograms of one parameter, or the
+    contours of two."""
+    series: list[Series]
+    xlabel: str = ""
+    ylabel: str = ""
+    xticks: list | None = None
+    yticks: list | None = None
+    xrange: tuple | None = None
+    yrange: tuple | None = None
+    #: histograms one above the other instead of on one baseline
+    offset: bool = False
+
+    @property
+    def is_histogram(self) -> bool:
+        return bool(self.series) and self.series[0].x is not None
+
+    def groups(self) -> list[str]:
+        return list(dict.fromkeys(s.group for s in self.series))
+
+
+#: how far up each staggered histogram starts, as a share of the tallest
+STAGGER = 0.62
+
+
 def category_names(content) -> list[tuple[str, str]]:
     """(name, default colour) of what the content colours by category —
     what a person may want to rename or recolour."""
+    if isinstance(content, OverlayContent):
+        names = content.groups()
+        return list(zip(names, categorical(len(names))))
     if isinstance(content, MapContent) and isinstance(content.color, Categories):
         return list(zip(content.color.names, content.color.colors))
     if isinstance(content, FrequencyContent):
@@ -529,7 +573,59 @@ def _draw_tree(fig, c: TreeContent, style: FigureStyle) -> None:
         ax.patch.set_alpha(0.0)
 
 
-_DRAW = {MapContent: _draw_map, HeatmapContent: _draw_heatmap,
+def _draw_overlay(fig, c: OverlayContent, style: FigureStyle) -> None:
+    from matplotlib.lines import Line2D
+    ax = fig.subplots()
+    colors = dict(category_names(c))
+    colour = {g: style.color(g, default) for g, default in colors.items()}
+    if c.is_histogram:
+        top = max((float(s.y.max()) for s in c.series if s.y.size), default=1.0) or 1.0
+        step = STAGGER * top if c.offset else 0.0
+        for k, s in enumerate(c.series):
+            base = k * step
+            ax.fill_between(s.x, base, s.y + base, color=colour[s.group],
+                            alpha=0.18 if not c.offset else 0.35, linewidth=0,
+                            zorder=2 * (len(c.series) - k))
+            ax.plot(s.x, s.y + base, color=colour[s.group], linewidth=0.9,
+                    zorder=2 * (len(c.series) - k) + 1)
+        if c.offset:
+            ax.set_yticks([k * step for k in range(len(c.series))],
+                          [style.label(s.label) for s in c.series])
+            ax.tick_params(axis="y", length=0)
+            ax.set_ylim(0, (len(c.series) - 1) * step + top * 1.05)
+        else:
+            ax.set_ylim(0, top * 1.05)
+            ax.set_ylabel(c.ylabel if style.ylabel is None else style.ylabel)
+    else:
+        widths = {0.90: 0.5, 0.75: 0.7, 0.50: 0.9, 0.25: 1.1, 0.10: 1.3}
+        for s in c.series:
+            for share, lines in s.levels or []:
+                for line in lines:
+                    ax.plot(line[:, 0], line[:, 1], color=colour[s.group],
+                            linewidth=widths.get(round(share, 2), 0.8))
+            if s.outliers is not None and len(s.outliers):
+                ax.scatter(s.outliers[:, 0], s.outliers[:, 1], s=(style.point_size * 0.5) ** 2,
+                           color=colour[s.group], linewidths=0, alpha=0.6,
+                           rasterized=style.rasterize)
+        if c.yticks:
+            ax.set_yticks([p for p, _ in c.yticks], [_tick_text(t) for _, t in c.yticks])
+        if c.yrange:
+            ax.set_ylim(*c.yrange)
+        ax.set_ylabel(c.ylabel if style.ylabel is None else style.ylabel)
+    if c.xticks:
+        ax.set_xticks([p for p, _ in c.xticks], [_tick_text(t) for _, t in c.xticks])
+    if c.xrange:
+        ax.set_xlim(*c.xrange)
+    ax.set_xlabel(c.xlabel if style.xlabel is None else style.xlabel)
+    _frame(ax, style)
+    handles = [Line2D([], [], color=colour[g], linewidth=1.6, label=style.label(g))
+               for g in colors]
+    # staggered and one colour per sample: the axis already names every curve
+    if not (c.is_histogram and c.offset and len(colors) == len(c.series)):
+        _legend(fig, [ax], handles, style, "")
+
+
+_DRAW = {OverlayContent: _draw_overlay, MapContent: _draw_map, HeatmapContent: _draw_heatmap,
          FrequencyContent: _draw_frequencies, TreeContent: _draw_tree}
 
 

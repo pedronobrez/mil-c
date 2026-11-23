@@ -74,9 +74,10 @@ material de divulgação.
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Pontos em pseudocor | S | **S** | todos |
-| Contorno, zebra | S | N | FCS Express, Kaluza (contorno) |
+| Contorno | S | **S** | FCS Express, Kaluza |
+| Zebra | S | N | — |
 | Histograma | S | **S** | todos |
-| Sobreposição de amostras (overlay) | S | N | todos |
+| Sobreposição de amostras (overlay) | S | **S** (histogramas, também escalonados; contornos) | todos |
 | Heatmap de populações | S | **S** (clusters) | FCS Express, OMIQ, Cytobank, CellEngine |
 | Barras por grupo com cada amostra como ponto | P (table plots) | **S**, com painéis por segunda coluna | FCS Express, OMIQ, Cytobank |
 | Violino / box | P (plugin) | N | FCS Express, Cytoflow |
@@ -192,14 +193,14 @@ Sem isto, o programa não substitui o FlowJo no dia a dia, só no fim da anális
 1. ~~**Tabela de estatísticas.**~~ **Feito** (aba Statistics e `milc stats`). Por população e por amostra: contagem, % do pai, do avô e do total,
    mediana, média, média geométrica, CV e CV robusto de qualquer marcador. Exportável, com as
    colunas de anotação junto. É o que alimenta todo gráfico de comparação.
-2. **Sobreposição de amostras.** Histogramas e contornos de várias amostras ou grupos num mesmo
+2. ~~**Sobreposição de amostras.**~~ **Feito** (aba Gates, com várias amostras selecionadas). Histogramas e contornos de várias amostras ou grupos num mesmo
    gráfico, com deslocamento. É como se confere um FMO ou um controle.
 3. **Gates que faltam.** Elipse, quadrante e booleanos (E / OU / NÃO).
 4. **Escala por parâmetro.** Ajustar a biexponencial (largura, décadas negativas), e oferecer
    logicle e arcsinh também na visualização.
 5. **Ver e editar a matriz de compensação.**
 6. **Exportar uma população gatada** como FCS ou CSV, por amostra.
-7. **Gráfico de contorno e densidade.**
+7. ~~**Gráfico de contorno e densidade.**~~ **Feito** (contornos de probabilidade; zebra não).
 
 ### Segunda leva: onde vale passar o FlowJo
 

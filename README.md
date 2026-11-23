@@ -42,8 +42,10 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   drag every other down.
 
 **Gates** — open one sample and look at it.
-- Any two parameters as a pseudocolour plot, or one as a histogram; markers on FlowJo's
-  biexponential scale.
+- Any two parameters as a pseudocolour or contour plot, or one as a histogram; markers on
+  FlowJo's biexponential scale.
+- Select several samples to overlay them: histograms, on one baseline or staggered, or contours
+  — a colour for each sample or for each value of one of your columns.
 - The gating tree with events and percent of parent; choose a population to see it.
 - Draw a rectangle, a polygon or a range; drag its handles to move it; rename; delete.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
@@ -162,6 +164,7 @@ milc/
   dataset.py        the concatenated events, and where each came from
   embed.py          UMAP and tSNE; how well a map keeps neighbours
   flowsom.py        the self-organising map, consensus metaclustering, the tree
+  density.py        smoothed histograms and probability contours, for overlays
   cluster_stats.py  expression and frequency tables
   stats.py          the statistics table: counts, percentages, medians, CVs
   figures.py        a plot and a style into SVG, PDF, PNG or TIFF (matplotlib)
