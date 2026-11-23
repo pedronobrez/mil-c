@@ -344,13 +344,6 @@ python -m pytest
 `tests/test_real.py` is asserted against acquisitions that are not in the repository and never
 will be; it skips itself where the `Data/` folder is missing.
 
-## The mark
-
-The suite has one animal — the cow's head, face on. MIL-X is the head alone, MIL-Q the head
-inside a ring, MIL-C the head inside a **gate**: the polygon drawn around the population that
-matters, with a few events left outside. The violet is the 405 nm laser. `packaging/make_icon.py`
-draws it from the suite's shared shapes.
-
 ## Licence
 
 **GPL-3.0-or-later** — see `LICENSE`. Copyright (C) 2026 Pedro Nobre.
@@ -361,9 +354,3 @@ is built on it has to stay open under the same licence. It comes with no warrant
 `milc/ui/style.py` and `milc/ui/theme.py` come from MIL-Q, by the same author, where they are
 under the MIT licence; here they are part of this program and carry its licence. The window is
 built on PyQt6, itself GPL-3.0; the other dependencies are under permissive licences.
-
-## Credit
-
-FlowSOM is by Sofie Van Gassen and colleagues (Cytometry A, 2015); UMAP by Leland McInnes, John
-Healy and James Melville; tSNE by Laurens van der Maaten and Geoffrey Hinton, here through
-openTSNE. If MIL-C is useful to your work, cite their papers — the methods are theirs.
