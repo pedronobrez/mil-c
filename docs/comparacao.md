@@ -175,7 +175,8 @@ das duas maneiras que oferece: com o seu Louvain (o programa em C++ de Blondel e
 dentro dele, que fica com a melhor de muitas partidas aleatórias e não aceita semente) e com
 Leiden (leidenalg). O nosso foi chamado só por `graphcluster.phenograph(X, k=, resolution=,
 seed=)`. **No commit em que isto foi medido o nosso usa Louvain**; o script pode ser rodado de
-novo depois da troca por Leiden sem mudar nada.
+novo depois da troca por Leiden sem mudar nada. A rodada com Leiden, só nas misturas, está no
+fim desta seção.
 
 Medidas: número de clusters; ARI e NMI entre as partições dos dois programas (média sobre 3 × 3
 corridas); ARI entre corridas do mesmo programa, que é a régua; modularidade. Como cada programa
@@ -256,6 +257,33 @@ Nada aqui indica erro no nosso código. A troca de Louvain por Leiden, em curso,
 o nosso da coluna "pacote, Leiden"; rode o script de novo para ver.
 
 ---
+
+### Depois da troca por Leiden
+
+O nosso passou a usar Leiden por padrão no mesmo dia. O script foi rodado de novo, sem mudança,
+**só nas misturas simuladas**; os 20.000 eventos reais não foram repetidos.
+
+| Dados | Programa | Clusters (3 corridas) | Modularidade no grafo do pacote | ARI entre as próprias corridas | ARI com a verdade | Segundos por corrida |
+|---|---|---|---|---|---|---|
+| Mistura, 10 DP, 6 mil | nosso (Leiden) | 6 / 6 / 6 | 0,7616 | 1,00 | 1,00 | 0,8 |
+| | pacote, Louvain | 7 / 7 / 7 | 0,7636 | 0,88 | 0,79 | 30 |
+| | pacote, Leiden | 6 / 6 / 6 | 0,7616 | 1,00 | 1,00 | 25 |
+| Mistura, 6 DP, 6 mil | nosso (Leiden) | 6 / 6 / 6 | 0,7500 | 1,00 | 0,99 | 0,6 |
+| | pacote, Louvain | 7 / 7 / 7 | 0,7534 | 0,83 | 0,78 | 35 |
+| | pacote, Leiden | 6 / 6 / 6 | 0,7500 | 1,00 | 0,99 | 27 |
+| Mistura, 4,5 DP, 6 mil | nosso (Leiden) | 7 / 7 / 6 | 0,7171 | 0,76 | 0,76 | 0,7 |
+| | pacote, Louvain | 7 / 7 / 7 | 0,7146 | 0,74 | 0,68 | 33 |
+| | pacote, Leiden | 7 / 7 / 7 | 0,7205 | 0,77 | 0,66 | 27 |
+| Mistura, 10 DP, 20 mil | nosso (Leiden) | 7 / 7 / 7 | 0,7664 | 0,79 | 0,79 | 4,0 |
+| | pacote, Louvain | 7 / 7 / 7 | 0,7590 | 0,76 | 0,79 | 167 |
+| | pacote, Leiden | 7 / 8 / 6 | 0,7624 | 0,75 | 0,83 | 80 |
+
+O nosso Leiden contra o Leiden do pacote: ARI 1,00 a 10 DP e 0,997 a 6 DP com 6 mil eventos;
+0,75 a 4,5 DP e 0,78 com 20 mil eventos, onde o próprio pacote concorda consigo mesmo em 0,75 a
+0,77. Com 20 mil eventos o nosso passou a dividir a maior população (7 clusters, como o pacote),
+o que o Louvain anterior não fazia: um otimizador melhor acha a partição de maior modularidade,
+que é a dividida. Nos 3.488 eventos reais de teste, medidos à parte, o nosso e o pacote dão 15
+clusters cada, com ARI de 0,82 a 0,89 entre eles.
 
 ## 3. Controle de qualidade da aquisição (`milc/qc.py`), o PeacoQC e o flowAI
 
