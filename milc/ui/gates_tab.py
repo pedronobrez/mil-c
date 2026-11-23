@@ -24,6 +24,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from .. import density, figures
 from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
+from ..gating import TimeGate, time_node
 from ..session import Session
 from ..transforms import Arcsinh, Biex, Log, decade_ticks, display_range, same
 from . import palette, style, theme
@@ -208,6 +209,9 @@ class GatesTab(QtWidgets.QWidget):
             b.clicked.connect(lambda _=False, w=which: self._ask_scale(w))
         self.compensation_button = QtWidgets.QPushButton("Compensation…")
         self.compensation_button.setToolTip("See the spillover matrix in use, and edit it")
+        self.quality_button = QtWidgets.QPushButton("Quality…")
+        self.quality_button.setToolTip("Look for the stretches of the acquisition that went "
+                                       "wrong — a clog, a bubble, a drift — and remove them")
         self.export_button = QtWidgets.QPushButton("Export…")
         self.export_button.setToolTip("The events of the population shown, of the samples "
                                       "selected or of all, as FCS or CSV files")
@@ -223,6 +227,7 @@ class GatesTab(QtWidgets.QWidget):
             bar.addSpacing(10)
         bar.addWidget(self.offset)
         bar.addStretch(1)
+        bar.addWidget(self.quality_button)
         bar.addWidget(self.compensation_button)
         bar.addWidget(self.export_button)
         bar.addWidget(self.figure_button)
@@ -255,6 +260,7 @@ class GatesTab(QtWidgets.QWidget):
         self.figure_button.clicked.connect(self.make_figure)
         self.compensation_button.clicked.connect(self._ask_compensation)
         self.export_button.clicked.connect(self._ask_export)
+        self.quality_button.clicked.connect(self._ask_quality)
         self.tree.currentItemChanged.connect(self._node_chosen)
         self.x_axis.currentIndexChanged.connect(self._axes_changed)
         self.y_axis.currentIndexChanged.connect(self._axes_changed)
@@ -531,6 +537,44 @@ class GatesTab(QtWidgets.QWidget):
             self.export_population(dialog.folder.text(), dialog.format.currentData(),
                                    dialog.compensated.isChecked(), dialog.all_samples.isChecked())
 
+    # --- quality of the acquisition ------------------------------------------------
+
+    def check_quality(self):
+        """What `qc.check` finds in the sample being looked at."""
+        return self.session.quality(self.entry)
+
+    def apply_quality(self, found: list) -> None:
+        """Remove from each sample its own bad stretches of time —
+        (entry, intervals) pairs — as a first population every gate of
+        every sample is then under."""
+        self.session.apply_quality(found)
+        self._quality_changed()
+
+    def remove_quality(self) -> None:
+        """Take that population out of every sample's tree again."""
+        self.session.remove_quality()
+        self._quality_changed()
+
+    def _quality_changed(self) -> None:
+        self._keep_axes = True
+        try:
+            self._fill_tree(select=self.node.path if self.node is not None else "")
+        finally:
+            self._keep_axes = False
+        self.sigGatesChanged.emit()
+
+    def open_quality(self):
+        """The dialog, not yet shown; None before a sample is chosen."""
+        if self.sample is None:
+            return None
+        from .quality_dialog import QualityDialog
+        return QualityDialog(self, self)
+
+    def _ask_quality(self) -> None:
+        dialog = self.open_quality()
+        if dialog is not None:
+            dialog.exec()
+
     def make_figure(self) -> None:
         from .figure_dialog import open_for
         if open_for(self, self, "gates") is None:
@@ -789,6 +833,14 @@ class GatesTab(QtWidgets.QWidget):
                 anchor = (g.center[0] - g.radii[0], g.center[1] + g.radii[1])
             elif isinstance(g, QuadrantGate):
                 continue   # the four corners of a crossing are drawn once, below
+            elif isinstance(g, TimeGate):
+                # what quality control removed, to see and not to drag
+                shade = QtGui.QColor(theme.danger())
+                shade.setAlpha(46)
+                for lo, hi in (g.intervals if xdim == g.dims[0] else []):
+                    self.plot.addItem(pg.LinearRegionItem(
+                        (lo, hi), movable=False, brush=pg.mkBrush(shade), pen=pg.mkPen(None)))
+                continue
             elif isinstance(g, RectangleGate):
                 bounds = dict(zip(g.dims, zip(g.mins, g.maxs)))
                 if xdim in bounds and (ydim in bounds or len(g.dims) == 1):
@@ -1062,6 +1114,10 @@ class GatesTab(QtWidgets.QWidget):
         """The gate being looked at, and everything gated inside it."""
         node = self.node
         if node is None or node.gate is None:
+            return
+        if node is time_node(self.entry.gates):
+            # everything is under it: deleting it would delete every gate
+            self.remove_quality()
             return
         parent = node.parent
         parent.children.remove(node)

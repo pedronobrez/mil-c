@@ -141,6 +141,25 @@ class BooleanGate:
         return ~np.logical_or.reduce(found)
 
 
+@dataclass
+class TimeGate:
+    """The events acquired inside — or, with `inside` off, outside — a list
+    of time intervals, both ends included, in the units the file stores
+    Time in. It is how quality control removes the stretches of an
+    acquisition that went wrong, and it belongs to one sample: another
+    sample's bad stretches are its own (see `keep_times`)."""
+    dims: list[str]
+    intervals: list[list[float]]
+    inside: bool = True
+
+    def contains(self, column: Column) -> np.ndarray:
+        t = column(self.dims[0])
+        mask = np.zeros(t.shape[0], dtype=bool)
+        for lo, hi in self.intervals:
+            mask |= (t >= lo) & (t <= hi)
+        return mask if self.inside else ~mask
+
+
 def points_in_polygon(x: np.ndarray, y: np.ndarray, poly: np.ndarray) -> np.ndarray:
     """Even-odd rule, one pass per edge."""
     x = np.asarray(x, dtype=np.float64)
@@ -248,6 +267,8 @@ def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
             g = QuadrantGate(list(g.dims), g.x, g.y, g.quadrant, g.group, g.inside)
         elif isinstance(g, BooleanGate):
             g = BooleanGate(g.op, list(g.operands), inside=g.inside)
+        elif isinstance(g, TimeGate):
+            g = TimeGate(list(g.dims), [list(i) for i in g.intervals], g.inside)
         out = GateNode(node.name, g,
                        reference_count=node.reference_count if keep_counts else None)
         for child in node.children:
@@ -287,6 +308,9 @@ def tree_to_dict(tree: GateNode) -> dict:
                        "group": g.group}
     elif isinstance(g, BooleanGate):
         out["gate"] = {"type": "boolean", "op": g.op, "operands": list(g.operands)}
+    elif isinstance(g, TimeGate):
+        out["gate"] = {"type": "time", "dims": g.dims, "inside": g.inside,
+                       "intervals": [[float(lo), float(hi)] for lo, hi in g.intervals]}
     return out
 
 
@@ -311,6 +335,9 @@ def tree_from_dict(d: dict) -> GateNode:
                             g.get("group", ""), g.get("inside", True))
     elif g and g["type"] == "boolean":
         gate = BooleanGate(g["op"], list(g["operands"]))
+    elif g and g["type"] == "time":
+        gate = TimeGate(list(g["dims"]), [[float(lo), float(hi)] for lo, hi in g["intervals"]],
+                        g.get("inside", True))
     node = GateNode(d.get("name", ""), gate)
     for child in d.get("children", []):
         node.add(tree_from_dict(child))
@@ -336,3 +363,42 @@ def follow_scale(tree: GateNode, dim: str, scale) -> bool:
             g.scales = scales if any(x is not None for x in scales) else None
             changed = True
     return changed
+
+
+# --- a gate put above every other: the acquisition's quality -----------------
+
+def time_node(tree: GateNode) -> GateNode | None:
+    """The population quality control made at the top of this tree."""
+    return next((c for c in tree.children if isinstance(c.gate, TimeGate)), None)
+
+
+def wrap(tree: GateNode, name: str, gate) -> GateNode:
+    """Put a population at the top of the tree and everything that was
+    there under it, so every later gate starts from its events."""
+    node = GateNode(name, gate)
+    below, tree.children = tree.children, []
+    tree.add(node)
+    for child in below:
+        node.add(child)
+    return node
+
+
+def unwrap(tree: GateNode, node: GateNode) -> None:
+    """Take a population of the root out again; what was under it goes
+    back to where it was."""
+    at = tree.children.index(node)
+    tree.children[at:at + 1] = node.children
+    for child in node.children:
+        child.parent = tree
+    node.children, node.parent = [], None
+
+
+def keep_times(copy: GateNode, own: GateNode) -> None:
+    """`copy` is another sample's tree, given to this one. Its time gates
+    take the intervals this sample's `own` tree had — matched in order,
+    as a gate may have been renamed — or none: the stretches of one
+    acquisition that went wrong say nothing about another's."""
+    had = [n.gate.intervals for n in own.walk() if isinstance(n.gate, TimeGate)]
+    new = [n.gate for n in copy.walk() if isinstance(n.gate, TimeGate)]
+    for k, gate in enumerate(new):
+        gate.intervals = [list(i) for i in had[k]] if k < len(had) else []
