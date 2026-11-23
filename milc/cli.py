@@ -21,7 +21,7 @@ from . import __version__, cluster_stats, sampling
 from .dataset import Dataset, concatenate
 from .fcs import read_header
 from .sample import Sample
-from .transforms import Arcsinh, Biex
+from .transforms import Arcsinh, Biex, Logicle
 
 
 
@@ -179,6 +179,8 @@ def cmd_analyze(a) -> int:
     channels = [ds.resolve(c) for c in a.channels.split(",")]
     if a.transform == "biex":
         transform, scale = Biex(), 1023.0
+    elif a.transform == "logicle":
+        transform, scale = Logicle(), 1023.0
     else:
         transform, scale = Arcsinh(a.cofactor), 1.0
     X = ds.matrix(channels, transform, scale)
@@ -728,8 +730,9 @@ def main(argv=None) -> int:
     s = sub.add_parser("analyze", help="UMAP, tSNE and FlowSOM on a concatenated file")
     s.add_argument("dataset", help="the .npz from concat, or any concatenated .fcs")
     s.add_argument("--channels", help="detectors or stains, comma-separated")
-    s.add_argument("--transform", choices=("biex", "arcsinh"), default="biex",
-                   help="biex is what FlowJo feeds its plugins")
+    s.add_argument("--transform", choices=("biex", "arcsinh", "logicle"), default="biex",
+                   help="biex is what FlowJo feeds its plugins; logicle is the standard "
+                        "one (T 262144, W 0.5, M 4.5)")
     s.add_argument("--cofactor", type=float, default=150.0)
     s.add_argument("--umap", action="store_true")
     s.add_argument("--neighbors", type=int, default=15)

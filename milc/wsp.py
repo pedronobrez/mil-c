@@ -34,7 +34,7 @@ import numpy as np
 from .compensation import Compensation
 from .gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                      PolygonGate, QuadrantGate, RectangleGate, tree_to_dict)
-from .transforms import Biex, Linear
+from .transforms import Biex, Linear, Logicle
 
 
 def _tag(e) -> str:
@@ -267,8 +267,16 @@ def _read_transforms(el) -> dict[str, object]:
                              float(a.get("maxRange", 262144)),
                              float(a.get("neg", 0)), float(a.get("width", -100)),
                              float(a.get("pos", 4.5)))
-        # log, logicle, hyperlog, fasinh: not met yet, left out rather
-        # than guessed
+        elif kind == "logicle":
+            # T, W, M and A under their own names, as FlowKit reads them
+            # (wsp_utils.py, _parse_wsp_transforms); a scale that cannot
+            # be is left out like one that is not known
+            try:
+                out[name] = Logicle(float(a.get("T", 262144)), float(a.get("W", 0.5)),
+                                    float(a.get("M", 4.5)), float(a.get("A", 0)))
+            except ValueError:
+                pass
+        # log, hyperlog, fasinh: not met yet, left out rather than guessed
     return out
 
 
@@ -299,7 +307,7 @@ def _read_gate(el, transforms=None):
     if kind == "PolygonGate":
         # FlowJo stores the vertices in the file's units and tests the
         # events where the polygon was drawn: on the axis' own scale
-        scales = [t if isinstance(t, Biex) else None
+        scales = [t if isinstance(t, (Biex, Logicle)) else None
                   for t in ((transforms or {}).get(d) for d in dims)]
         return PolygonGate(dims, _vertices(shape), inside,
                            scales if any(s is not None for s in scales) else None)

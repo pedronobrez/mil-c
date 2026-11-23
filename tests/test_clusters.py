@@ -16,7 +16,7 @@ from milc.fcs import write_fcs
 from milc.gating import (ClusterGate, GateNode, RectangleGate, copy_tree, tree_from_dict,
                          tree_to_dict)
 from milc.session import Session
-from milc.transforms import Arcsinh, Biex, Linear
+from milc.transforms import Arcsinh, Biex, Linear, Logicle
 
 
 def dataset(labels, samples=2) -> Dataset:
@@ -271,7 +271,7 @@ def agreement(s: Session, path: str, cluster: int) -> int:
     return total
 
 
-@pytest.mark.parametrize("transform", ["biex", "arcsinh"])
+@pytest.mark.parametrize("transform", ["biex", "arcsinh", "logicle"])
 def test_population_agrees_with_the_dataset_on_its_events(folder, transform):
     s = gated_session(folder, transform)
     ds = s.dataset
@@ -290,7 +290,9 @@ def test_population_agrees_with_the_dataset_on_its_events(folder, transform):
     sample = s.load(entry)
     cols = [sample.fcs.index(c) for c in ds.runs["FlowSOM"]["channels"]]
     values = sample.compensated[:, cols].astype(np.float32).astype(np.float64)
-    X = Biex()(values) * 1023.0 if transform == "biex" else np.arcsinh(values / 150.0)
+    X = (Biex()(values) * 1023.0 if transform == "biex"
+         else Logicle()(values) * 1023.0 if transform == "logicle"
+         else np.arcsinh(values / 150.0))
     mine = s.flowsom.node_cluster[nearest(X, s.flowsom.codes)] == 2
     assert np.array_equal(sample.mask(paths[2]), mine & sample.mask("Cells"))
 

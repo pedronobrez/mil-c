@@ -638,17 +638,17 @@ def test_scale_compensation_and_export_from_gates(app, folder, tmp_path):
 
     # compensation: see it, change a cell, every sample is compensated again
     matrix, source = w.session.current_matrix()
-    d = CompensationDialog(matrix, source, {}, g)
+    d = CompensationDialog(w.session, g.entries, g.entry, g.overlaid(), {}, g.set_compensation, g)
     assert d.table.rowCount() == 3 and d.table.item(0, 1).text() == "5"
     assert not (d.table.item(1, 1).flags() & QtCore.Qt.ItemFlag.ItemIsEditable)
     assert np.array_equal(d.matrix().matrix, matrix.matrix)   # opened and untouched: unchanged
     d.set_value("FITC-A", "PE-A", 25)
     assert d.matrix().matrix[0, 1] == 0.25
     d.table.item(0, 1).setText("abc")
-    d._accept()
-    assert "number" in d.state.text() and d.result() == 0
-    d.set_value("FITC-A", "PE-A", 25)
     before = g.sample.compensated.copy()
+    assert not d.apply_to(None) and "number" in d.state.text()
+    assert w.session.current_matrix()[1] == "file"
+    d.set_value("FITC-A", "PE-A", 25)
     g.set_compensation(d.matrix())
     d.close()
     assert w.session.current_matrix()[1] == "edited" and not np.allclose(g.sample.compensated, before)
@@ -882,3 +882,124 @@ def test_prism_from_the_window(app, folder, tmp_path):
     assert main(["stats", folder, "--out", str(tmp_path / "s.csv"), "--prism", out,
                  "--prism-value", "nope"]) == 2
     w.close()
+
+
+def test_a_sample_can_have_its_own_compensation(app, folder):
+    """The dialog lists every sample with where its matrix comes from; an
+    edited matrix goes to the samples selected, or to all, and back."""
+    from milc.ui import worker
+    from milc.ui.gates_tab import CompensationDialog
+    from milc.ui.shell import MainShell
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    g, s = w.gates, w.session
+    w.tabs.setCurrentWidget(g)
+    for _ in range(3):
+        worker.wait_all()
+        app.processEvents()
+    names = [e.name for e in g.entries]
+    assert g.entry.name == names[0] and g.matrix_source() == "file"
+    assert "compensated with its file's matrix" in g.caption.text()
+    usual = {e.name: s.load(e).compensated.copy() for e in g.entries}
+
+    d = CompensationDialog(s, g.entries, g.entry, g.overlaid(), {}, g.set_compensation, g)
+    assert [d.source(n) for n in names] == ["file"] * 4 and "same matrix" in d.summary.text()
+    assert "its own FCS file" in d.using.text() and not d.back.isEnabled()
+    assert d.apply_selected.text() == f"Apply to {names[0]}" and not d.discard.isEnabled()
+
+    # one sample alone: the one being looked at is compensated again, the others are not
+    d.set_value("FITC-A", "PE-A", 25)
+    assert d.changed() and "not applied" in d.using.text() and d.discard.isEnabled()
+    assert d.apply_to(d.selected())
+    assert [d.source(n) for n in names] == ["edited", "file", "file", "file"]
+    assert "2 different matrices" in d.summary.text() and not d.changed()
+    assert "edited here for this sample" in d.using.text() and d.back.isEnabled()
+    assert g.matrix_source() == "edited"
+    assert "compensated with a matrix edited for this sample" in g.caption.text()
+    assert not np.allclose(g.sample.compensated, usual[names[0]])
+    assert np.allclose(s.load(g.entries[1]).compensated, usual[names[1]])
+
+    # what was typed stays while other samples are selected, and goes to them
+    d.set_value("APC-A", "PE-A", 10)
+    d.select(names[2:])
+    assert d.changed() and d.shown.name == names[0]
+    assert d.apply_selected.text() == "Apply to the 2 selected samples"
+    assert d.apply_to(d.selected())
+    assert [d.source(n) for n in names] == ["edited", "file", "edited", "edited"]
+    assert d.shown.name == names[2] and d.table.item(2, 1).text() == "10"
+    assert s.matrix_of(g.entries[2]).matrix[0, 1] == 0.25           # the first edit came along
+    assert s.matrix_of(g.entries[0]).matrix[2, 1] == 0              # and the first sample kept its own
+
+    # every sample: one matrix shared, in place of the edited ones
+    d.select([names[1]])
+    d.set_value("FITC-A", "PE-A", 40)
+    assert d.apply_to(None)
+    assert [d.source(n) for n in names] == ["shared"] * 4 and "same matrix" in d.summary.text()
+    assert "compensated with the edited matrix every sample shares" in g.caption.text()
+    # one of them back on its file's while the others share
+    d.select([names[3]])
+    d.reset(d.selected())
+    assert [d.source(n) for n in names] == ["shared", "shared", "shared", "file"]
+    assert np.allclose(s.load(g.entries[3]).compensated, usual[names[3]])
+    d.discard.click()                                             # nothing typed: nothing happens
+    # and all of them
+    d.samples.selectAll()
+    d.reset(d.selected())
+    assert [d.source(n) for n in names] == ["file"] * 4 and s.matrix is None
+    assert s.own_matrices == {} and "its file's matrix" in g.caption.text()
+    for e in g.entries:
+        assert np.allclose(s.load(e).compensated, usual[e.name])
+    d.close()
+    w.close()
+
+
+def test_the_scale_dialog_offers_logicle(app, folder):
+    from milc.transforms import Logicle, same
+    from milc.ui import worker
+    from milc.ui.gates_tab import ScaleDialog
+    from milc.ui.shell import MainShell
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    for _ in range(3):
+        worker.wait_all()
+        app.processEvents()
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    usual = g.plot.getAxis("bottom")._tickLevels
+
+    d = ScaleDialog("CD4", g._scale("Comp-PE-A"), g)
+    d.kind.setCurrentIndex(d.kind.findData("logicle"))
+    assert same(d.scale(), Logicle()) and d.logicle_w.isVisibleTo(d) and not d.width.isVisibleTo(d)
+    # the settings stay within what a Logicle can be: W up to M / 2, A up to M − 2W
+    d.logicle_m.setValue(4)
+    d.logicle_w.setValue(9)
+    d.logicle_a.setValue(9)
+    assert d.logicle_w.value() == 2 and d.logicle_a.value() == 0
+    d.logicle_w.setValue(1)
+    d.logicle_a.setValue(0.5)
+    assert same(d.scale(), Logicle(262144, 1, 4, 0.5))
+    d.close()
+
+    g.set_scale("Comp-PE-A", Logicle(262144, 1, 4.5, 0))
+    assert same(g._scale("Comp-PE-A"), Logicle(W=1)) and g._range("Comp-PE-A") == (0.0, 1.0)
+    ticks = g.plot.getAxis("bottom")._tickLevels
+    assert ticks != usual and [t for _, t in ticks[0]][0] == "0"
+    assert ticks[0][0][0] == pytest.approx(1 / 4.5)                 # zero is at W / M
+    assert g.content().xticks[-1][1] == "10⁵"                       # and the figure with it
+    # the dialog opens on what the axis has, and it is all there next time
+    d = ScaleDialog("CD4", g._scale("Comp-PE-A"), g)
+    assert d.kind.currentData() == "logicle" and d.logicle_w.value() == 1
+    d.close()
+    w.close()
+    again = MainShell()
+    again.open_folder(folder)
+    assert same(again.session.scale_of("PE-A"), Logicle(W=1))
+    # the analysis can be fed Logicle too
+    e = again.explore
+    assert e.transform.findData("logicle") >= 0
+    again.close()

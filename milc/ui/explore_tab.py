@@ -51,6 +51,7 @@ class ExploreTab(QtWidgets.QWidget):
         self.transform.addItem("Biexponential", "biex")
         self.transform.setToolTip("Biexponential is what FlowJo feeds its plugins")
         self.transform.addItem("Arcsinh, cofactor 150", "arcsinh")
+        self.transform.addItem("Logicle, W 0.5, M 4.5", "logicle")
         self.seed = QtWidgets.QSpinBox()
         self.seed.setRange(0, 999_999)
 

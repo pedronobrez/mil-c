@@ -7,6 +7,10 @@ translated from it. It has NOT been checked here against values out of
 FlowJo itself — only its shape (monotonic, zero where expected, full range
 at the top). Gates read from a workspace do not depend on it unless a
 polygon is drawn on a biexponential axis.
+
+`Logicle` is the published transform (Parks, Roederer & Moore 2006, in
+the T, W, M, A of Moore & Parks 2012), checked against FlowUtils' C
+translation of the authors' own code: see `test_logicle_reference`.
 """
 
 from __future__ import annotations
@@ -106,6 +110,89 @@ class Biex:
                 f"neg={self.neg:g}, width={self.width:g}, pos={self.pos:g})")
 
 
+class Logicle:
+    """The Logicle scale of Parks, Roederer & Moore (Cytometry A 2006), in
+    the parameters of Moore & Parks (Cytometry A 2012): `T`, the value at
+    the top of the scale; `M`, the decades the scale would span if it were
+    a plain logarithm; `W`, the decades given to the nearly linear part
+    around zero; `A`, extra negative decades. 0 to 1, like Gating-ML's.
+
+    The inverse is the closed form `B(y) = a·e^(by) − c·e^(−dy) + f`
+    above the centre of the linear part, mirrored below it. The forward
+    has no closed form: a table gives a first guess and Newton's method
+    finishes it, to 1e-12 of the scale or better."""
+
+    def __init__(self, T: float = 262144.0, W: float = 0.5, M: float = 4.5,
+                 A: float = 0.0):
+        self.T, self.W, self.M, self.A = float(T), float(W), float(M), float(A)
+        if not (self.T > 0 and self.M > 0):
+            raise ValueError("a Logicle scale needs T and M above zero")
+        if not 0 <= self.W <= self.M / 2:
+            raise ValueError("the W of a Logicle scale is between 0 and M / 2")
+        if not -self.W <= self.A <= self.M - 2 * self.W:
+            raise ValueError("the A of a Logicle scale is between −W and M − 2W")
+        w = self.W / (self.M + self.A)
+        x2 = self.A / (self.M + self.A)
+        self._x1 = x2 + w            # where the data is zero
+        x0 = x2 + 2 * w
+        self._b = b = (self.M + self.A) * np.log(10.0)
+        self._d = d = _log_root(b, w)
+        c_a = np.exp(x0 * (b + d))
+        mf_a = np.exp(b * self._x1) - c_a / np.exp(d * self._x1)
+        self._a = self.T / ((np.exp(b) - mf_a) - c_a / np.exp(d))
+        self._c = c_a * self._a
+        self._f = -mf_a * self._a
+        # A first guess for the forward, to start Newton from. Against
+        # u = ln(1 + x / k) the curve is close to a straight line of slope
+        # 1 / b at both ends, so a small table read by index (no search)
+        # is already good to about 1e-8
+        a, c = self._a, self._c
+        self._k = (a * b * np.exp(b * self._x1) + c * d * np.exp(-d * self._x1)) / b
+        ys = np.linspace(self._x1, max(1.0, self._x1) + 0.25, 32769)
+        xs = self._upper(ys)
+        n = 4097
+        self._per_u = (n - 1) / np.log1p(xs[-1] / self._k)
+        at = self._k * np.expm1(np.arange(n) / self._per_u)
+        self._table = self._newton(np.interp(at, xs, ys), at)
+        self._rise = np.diff(self._table)
+
+    def _upper(self, y):
+        return self._a * np.exp(self._b * y) - self._c * np.exp(-self._d * y) + self._f
+
+    def _newton(self, y, size):
+        a, b, c, d = self._a, self._b, self._c, self._d
+        target = size - self._f
+        for _ in range(40):
+            up, down = a * np.exp(b * y), c * np.exp(-d * y)
+            step = (up - down - target) / (b * up + d * down)
+            y -= step
+            # Newton squares the error: after a step this small the next
+            # would be under 1e-13
+            if not np.any(np.abs(step) > 1e-7):
+                break
+        return y
+
+    def inverse(self, y):
+        y = np.asarray(y, dtype=np.float64)
+        below = y < self._x1
+        value = self._upper(np.where(below, 2 * self._x1 - y, y))
+        return np.where(below, -value, value)
+
+    def __call__(self, x):
+        x = np.asarray(x, dtype=np.float64)
+        size = np.atleast_1d(np.abs(x))
+        u = np.log1p(size / self._k) * self._per_u
+        # past the table, its last step carried on: the curve is a plain
+        # exponential there
+        i = np.minimum(np.nan_to_num(u, nan=0.0, posinf=0.0), len(self._rise) - 1).astype(np.intp)
+        with np.errstate(invalid="ignore", over="ignore"):   # an infinite value: not a number
+            y = self._newton(self._table[i] + (u - i) * self._rise[i], size)
+        return np.where(x < 0, 2 * self._x1 - y.reshape(x.shape), y.reshape(x.shape))
+
+    def __repr__(self):
+        return f"Logicle(T={self.T:g}, W={self.W:g}, M={self.M:g}, A={self.A:g})"
+
+
 _SUPER = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
 
 
@@ -128,7 +215,7 @@ class Log:
 def display_range(transform, max_value: float = 262144.0) -> tuple[float, float]:
     """The ends of an axis under `transform`, in the transform's own
     coordinates."""
-    if isinstance(transform, (Biex, Log)):
+    if isinstance(transform, (Biex, Log, Logicle)):
         return (0.0, 1.0)
     if isinstance(transform, Arcsinh):
         # room below zero for the spread a compensated negative has
@@ -143,6 +230,8 @@ def to_spec(transform):
     if isinstance(transform, Biex):
         return {"biex": [transform.length, transform.max_range, transform.neg,
                          transform.width, transform.pos]}
+    if isinstance(transform, Logicle):
+        return {"logicle": [transform.T, transform.W, transform.M, transform.A]}
     if isinstance(transform, Arcsinh):
         return {"arcsinh": transform.cofactor}
     if isinstance(transform, Log):
@@ -157,6 +246,8 @@ def from_spec(spec):
         return None
     if "biex" in spec:
         return Biex(*spec["biex"])
+    if "logicle" in spec:
+        return Logicle(*[float(v) for v in spec["logicle"]])
     if "arcsinh" in spec:
         return Arcsinh(float(spec["arcsinh"]))
     if "log" in spec:

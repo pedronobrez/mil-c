@@ -34,7 +34,7 @@ MANUAL = "_manual"
 #: table is in: a tenth of the 0-1023 the biexponential scale is fed as
 #: (about half a decade where that scale is logarithmic), and 1 on an
 #: arcsinh scale (a factor of e, 0.43 of a decade, above the cofactor)
-MIN_GAP = {"biex": 100.0, "arcsinh": 1.0}
+MIN_GAP = {"biex": 100.0, "logicle": 100.0, "arcsinh": 1.0}
 
 
 @dataclass
