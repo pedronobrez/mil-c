@@ -241,6 +241,55 @@ São as lacunas do FlowJo que mais de um concorrente já cobre, e todas servem a
   programa de mesa, gratuito e que roda sem internet.
 - **CITRUS, SPADE, X-Shift.** Métodos que a área vem trocando por FlowSOM e Leiden.
 
+## Onde estamos (23 de novembro de 2026)
+
+Feito desde o levantamento: os itens 1 a 9 e o 12 — tabela de estatísticas, sobreposição de
+amostras, gates de elipse, quadrante e booleanos, escala por parâmetro, edição da compensação,
+exportação de população, contorno, testes entre grupos, saída para o Prism e normalização de
+lote.
+
+### A conferir, antes de qualquer item novo
+
+Coisas feitas que ainda dependem de um olhar de fora:
+
+- **Abrir um `.pzfx` no Prism.** É o único jeito de saber se o Prism aceita o arquivo.
+- **Instalar o `.msi` num Windows de verdade.** O executável foi testado; o instalador, não.
+- **Usar a janela com mouse e teclado.** Desenho de gates, laço, seleção múltipla e os diálogos
+  foram testados por código e por capturas, não à mão.
+- **Uma estatística lado a lado com o FlowJo.** As definições são as dele; os números não foram
+  comparados.
+
+### Próximas implementações, na ordem em que eu faria
+
+1. **Trabalhar os clusters** (item 10). Renomear, juntar e anotar clusters; transformar um
+   cluster ou um laço em população, com gate e estatísticas; sugerir nome pelo perfil de
+   marcadores. Hoje um cluster é um número, e é isso que mais atrapalha levar um resultado para
+   uma figura.
+2. **Prancha de vários painéis e relatório** (item 15). Montar numa página o mapa, o heatmap, as
+   frequências e os gates, com os estilos que já existem, e refazer tudo num clique quando a
+   análise muda.
+3. **Limpeza automática e gráfico no tempo** (item 13). PeacoQC ou flowAI, e o sinal ao longo da
+   aquisição: dá para ver uma amostra ruim antes que ela entre na análise — a `3Case1` é
+   candidata.
+4. **PhenoGraph / Leiden e PCA** (item 11). Um método que não pede o número de clusters, e a
+   redução mais simples de todas.
+5. **Abundância diferencial** (item 14). diffcyt ou edgeR sobre as contagens por cluster, com
+   volcano. Os testes de hoje comparam porcentagens; estes modelam contagens e lidam melhor com
+   poucos animais.
+6. **Desenhos pareados e de medidas repetidas** nos testes entre grupos, e ANOVA de Welch.
+7. **Normalização: o que falta.** Aplicá-la também a Gates e Statistics (hoje só o concatenado é
+   normalizado); escolher um lote como alvo; comparar com o pacote CytoNorm inteiro.
+8. **Ler mais do workspace do FlowJo.** Elipses, quadrantes e booleanos; hoje só retângulos e
+   polígonos.
+9. **Logicle**, e matriz de compensação por amostra.
+10. **Violino e box por marcador; matriz N×N; backgating.**
+11. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
+12. **Distribuição.** Publicar a versão 0.1.0; instalador para Linux; assinatura dos instaladores
+    (hoje o macOS e o Windows avisam na primeira abertura).
+
+Mais adiante, sem mudança: proliferação, ciclo celular e cinética; autocompensação e AutoSpill;
+GatingML; autogating; unmixing espectral; trilha de auditoria.
+
 ## Fontes
 
 Documentação e páginas dos fabricantes, consultadas em 22 de novembro de 2026:

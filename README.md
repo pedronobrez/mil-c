@@ -40,7 +40,8 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - Batch normalisation in the manner of CytoNorm: name the column that says which batch a
   sample was acquired in and the samples that should look alike in every batch; each batch is
   brought onto the others before the samples are concatenated, marker by marker or within
-  FlowSOM clusters.
+  FlowSOM clusters. Afterwards, look at every batch's references over one another, marker by
+  marker, before and after.
 - Three ways to balance: the same number from every sample, the same total from every group, or
   a ceiling per sample; and a minimum below which a sample is left out rather than allowed to
   drag every other down.
@@ -217,9 +218,12 @@ window before it is wrapped.
 
 ## What has not been checked against the original
 
-- **Batch normalisation** follows CytoNorm's steps and was not compared with the R package's
-  output. It differs knowingly: beyond the outermost quantiles the correction continues as a
-  shift, and the map is this program's own FlowSOM.
+- **Batch normalisation** follows CytoNorm's steps. Its curves were set beside the same
+  calculation written out in base R (`tests/test_normalize_r.py`): inside the range the
+  references cover they are the same curve, apart by a thousandth of the correction on the
+  real data. Beyond the outermost quantiles they differ on purpose — R continues the spline's
+  end slope, this continues as a shift. The CytoNorm package itself, with its clustering, was
+  not run: the map here is this program's own FlowSOM.
 - **Prism files** follow the layout of the R package `pzfx`, round-trip through this program's
   own reader, and have not been opened in Prism by the author.
 - **Statistics** follow FlowJo's definitions and were not set beside FlowJo's numbers.

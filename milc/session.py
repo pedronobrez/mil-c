@@ -134,6 +134,9 @@ class Session:
         #: batch normalisation, or None: {"batch": column, "reference":
         #: [column, value], "clusters": n}
         self.normalization: dict | None = None
+        #: the last normalisation, to look at: the held-out reference events
+        #: of each batch before and after, on each marker's scale
+        self.normalization_check: dict | None = None
         self._counts: dict[tuple[str, str], int] = {}
         #: the last FlowSOM, kept for its map and tree
         self.flowsom = None
@@ -533,6 +536,7 @@ class Session:
                 s.meta = {c: e.meta.get(c, "") for c in self.columns}
                 samples.append(s)
         self.dataset = concatenate(samples, p, self.population, self.seed)
+        self.normalization_check = None
         if self.normalization:
             self._normalise(self.dataset, {s.name: s for s in samples})
         self.flowsom = None
@@ -706,6 +710,9 @@ class Session:
             held[b], rest[b] = x[order[: len(x) // 2]], x[order[len(x) // 2:]]
         judge = normalize.fit(rest, n_clusters=cfg.get("clusters", 1), seed=self.seed)
         after = {b: normalize.apply(judge, x, b) for b, x in held.items()}
+        self.normalization_check = {
+            "markers": [ds.label(c) for c in markers], "scales": scales,
+            "before": held, "after": after}
         ds.provenance["normalization"] = {
             **cfg, "markers": [ds.label(c) for c in markers], "batches": model.batches,
             "reference_samples": {b: [e.name for e in es] for b, es in refs.items()},

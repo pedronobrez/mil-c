@@ -140,6 +140,10 @@ class SamplesTab(QtWidgets.QWidget):
         self.norm_result = QtWidgets.QLabel("")
         self.norm_result.setWordWrap(True)
         self.norm_result.setProperty("role", "caption")
+        self.norm_look = QtWidgets.QPushButton("Before and after…")
+        self.norm_look.setToolTip("The reference samples of every batch drawn over one "
+                                  "another, marker by marker, before and after")
+        self.norm_look.setVisible(False)
         self.summary = QtWidgets.QLabel("")
         self.summary.setWordWrap(True)
         self.notes = QtWidgets.QLabel("")
@@ -172,6 +176,7 @@ class SamplesTab(QtWidgets.QWidget):
         side.addWidget(self.summary)
         side.addWidget(self.notes)
         side.addWidget(self.norm_result)
+        side.addWidget(self.norm_look)
         side.addStretch(1)
         side.addWidget(self.build_button)
         panel = QtWidgets.QWidget()
@@ -198,6 +203,7 @@ class SamplesTab(QtWidgets.QWidget):
         self.norm_column.currentIndexChanged.connect(self._reference_column_changed)
         self.norm_value.currentIndexChanged.connect(self._normalisation_changed)
         self.norm_clusters.valueChanged.connect(self._normalisation_changed)
+        self.norm_look.clicked.connect(self._look_at_normalisation)
         self.build_button.clicked.connect(self.concatenate)
         self.refresh()
 
@@ -430,10 +436,16 @@ class SamplesTab(QtWidgets.QWidget):
         self.session.set_normalization(batch, (column, value), clusters)
         self._fill_normalisation()
 
+    def _look_at_normalisation(self) -> None:
+        if self.session.normalization_check:
+            from .normalization_dialog import NormalizationDialog
+            NormalizationDialog(self.session.normalization_check, self).exec()
+
     def _show_normalisation(self) -> None:
         """What will be done, before; what was done, after."""
         s = self.session
         on = bool(s.normalization)
+        self.norm_look.setVisible(False)
         for w in (self.norm_column, self.norm_value, self.norm_clusters):
             w.setEnabled(bool(self.norm_batch.currentData()))
         if not on:
@@ -465,6 +477,7 @@ class SamplesTab(QtWidgets.QWidget):
                 text += (" Not normalised, their batch having no reference: "
                          + ", ".join(done["not_normalised"]) + ".")
             self.norm_result.setText(text)
+            self.norm_look.setVisible(s.normalization_check is not None)
             return
         self.norm_result.setText(
             "At the next Concatenate: " + "; ".join(

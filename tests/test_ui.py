@@ -790,6 +790,17 @@ def test_batch_normalisation_from_the_window(app, batches):
     assert done["batches"] == ["3", "7"] and done["reference_events"] == {"3": 3000, "7": 3000}
     assert np.mean(done["distance_after"]) < np.mean(done["distance_before"]) / 5
     assert "Normalised" in t.norm_result.text() and np.isfinite(ds.X).all()
+    # and it can be looked at: every batch's references, before and after
+    from milc.ui.normalization_dialog import NormalizationDialog
+    assert t.norm_look.isVisibleTo(t) and w.session.normalization_check["markers"] == ["CD8", "CD4"]
+    d = NormalizationDialog(w.session.normalization_check, t)
+    before, after = d.content("before"), d.content("after")
+    assert [s.label for s in before.series] == ["3", "7"] and before.is_histogram
+    peak = lambda c, i: c.series[i].x[np.argmax(c.series[i].y)]
+    assert abs(peak(before, 1) - peak(before, 0)) > 3 * abs(peak(after, 1) - peak(after, 0))
+    d.marker.setCurrentIndex(1)
+    assert d.content("after").xlabel == "CD4"
+    d.close()
     # the days agree now, in the reference and in the other group alike…
     fixed = medians(ds, "FITC-A")
     assert abs(fixed[("7", "Ctrl")] - fixed[("3", "Ctrl")]) < 0.02
