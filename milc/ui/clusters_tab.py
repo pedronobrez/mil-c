@@ -96,6 +96,10 @@ class ClustersTab(QtWidgets.QWidget):
             "The share of each cluster in each sample as a GraphPad Prism file: a grouped "
             "table, clusters down, groups across, a subcolumn for each sample — one table "
             "for each panel of the chart")
+        self.abundance_button = QtWidgets.QPushButton("Differential abundance…")
+        self.abundance_button.setToolTip(
+            "Two of the groups compared on the clusters' cell counts, by a negative-binomial "
+            "model in the manner of diffcyt and edgeR, with a volcano")
         self.clear_button = QtWidgets.QPushButton("Clear selection")
 
         bar = QtWidgets.QHBoxLayout()
@@ -113,6 +117,7 @@ class ClustersTab(QtWidgets.QWidget):
             bar.addSpacing(10)
         bar.addWidget(self.results_button)
         bar.addWidget(self.prism_button)
+        bar.addWidget(self.abundance_button)
         bar.addStretch(1)
         bar.addWidget(self.clear_button)
 
@@ -173,6 +178,7 @@ class ClustersTab(QtWidgets.QWidget):
         self.paired_by.currentIndexChanged.connect(self._draw_tables)
         self.results_button.clicked.connect(self.show_results)
         self.prism_button.clicked.connect(self._ask_prism)
+        self.abundance_button.clicked.connect(lambda: self.abundance_dialog().exec())
         palette.notifier.changed.connect(self._recolour)
         self.refresh()
 
@@ -499,6 +505,12 @@ class ClustersTab(QtWidgets.QWidget):
                       "The share of each sample's events in each cluster, compared between "
                       f"{self.group_by.currentText().lower()}s. " + note, self,
                       "cluster_comparison").exec()
+
+    def abundance_dialog(self):
+        """Differential abundance of what the tab compares now: the
+        dialog, not yet shown."""
+        from .abundance_dialog import AbundanceDialog
+        return AbundanceDialog.for_tab(self)
 
     def _draw_tree(self) -> None:
         if self._filling:
