@@ -983,16 +983,17 @@ class Session:
         self.flowsom = fs
 
     def run_phenograph(self, channels, transform="biex", cofactor=150.0,
-                       k=30, resolution=1.0, seed=0) -> None:
+                       k=30, resolution=1.0, seed=0, method="leiden",
+                       min_cluster_size=10) -> None:
         from . import graphcluster
         X = self.features(channels, transform, cofactor)
-        found = graphcluster.phenograph(X, k, resolution, seed)
+        found = graphcluster.phenograph(X, k, resolution, seed, method=method,
+                                        min_cluster_size=min_cluster_size)
         ds = self.dataset
         ds.derived["PhenoGraph"] = found.labels.astype(np.int32)
         ds.runs["PhenoGraph"] = {
             "channels": list(channels), "transform": transform, "seed": seed,
-            "k": found.k, "resolution": resolution,
-            "n_clusters": found.n_clusters, "modularity": found.modularity}
+            **found.settings()}
 
     def run_pca(self, channels, transform="biex", cofactor=150.0) -> None:
         from . import embed

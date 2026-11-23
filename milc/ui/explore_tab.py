@@ -19,6 +19,14 @@ from .cluster_tools import cluster_categories
 
 
 
+#: measured, in graphcluster's notes: modularity has no way of saying
+#: "one population"
+PHENOGRAPH_HINT = ("At resolution 1 a large population comes out in several "
+                   "pieces, whether or not it has parts. For fewer clusters "
+                   "lower Resolution (try 0.5) or raise Neighbours; a rare "
+                   "population may then be lost in a neighbour.")
+
+
 def _spec(kind: str, key: str = "") -> str:
     """What a choice in a combo stands for, as the string Qt can keep and
     find again: a tuple comes back as a list and `findData` misses it."""
@@ -84,6 +92,23 @@ class ExploreTab(QtWidgets.QWidget):
                                    "fewer and larger — lower it when one "
                                    "population comes out in pieces")
 
+        self.method = QtWidgets.QComboBox()
+        self.method.addItem("Leiden", "leiden")
+        self.method.addItem("Louvain", "louvain")
+        self.method.setToolTip("How the graph is cut into clusters. Leiden finds "
+                               "a slightly better cut and never leaves a cluster "
+                               "in disconnected pieces; Louvain is what the "
+                               "original PhenoGraph used")
+        self.min_cluster = QtWidgets.QSpinBox()
+        self.min_cluster.setRange(1, 100000)
+        self.min_cluster.setValue(10)
+        self.min_cluster.setToolTip("A cluster of fewer events is merged into the "
+                                    "cluster it is most strongly joined to; "
+                                    "1 keeps every cluster")
+        self.pheno_hint = QtWidgets.QLabel(PHENOGRAPH_HINT)
+        self.pheno_hint.setWordWrap(True)
+        self.pheno_hint.setProperty("role", "caption")
+
         self.run_buttons = {
             "UMAP": QtWidgets.QPushButton("Run UMAP"),
             "tSNE": QtWidgets.QPushButton("Run tSNE"),
@@ -117,6 +142,9 @@ class ExploreTab(QtWidgets.QWidget):
         form.addRow(self._eyebrow("PhenoGraph"))
         form.addRow("Neighbours", self.k)
         form.addRow("Resolution", self.resolution)
+        form.addRow("Method", self.method)
+        form.addRow("Min. cluster size", self.min_cluster)
+        form.addRow(self.pheno_hint)
         form.addRow(self.run_buttons["PhenoGraph"])
         form.addRow(self._eyebrow("PCA"))
         form.addRow(self.run_buttons["PCA"])
@@ -336,8 +364,10 @@ class ExploreTab(QtWidgets.QWidget):
                              "event's 15 nearest neighbours")
         run = ds.runs.get("PhenoGraph")
         if run:
+            from .. import graphcluster
             lines.append(f"PhenoGraph: {run['n_clusters']} clusters, "
-                         f"modularity {run['modularity']:.2f}")
+                         f"modularity {run['modularity']:.2f} "
+                         f"({graphcluster.describe(run)})")
         lines += self._components()
         self.result.setText("\n".join(lines))
 
@@ -471,6 +501,8 @@ class ExploreTab(QtWidgets.QWidget):
                                              grid=self.grid.value(), **common),
             "PhenoGraph": lambda: s.run_phenograph(k=self.k.value(),
                                                    resolution=self.resolution.value(),
+                                                   method=self.method.currentData(),
+                                                   min_cluster_size=self.min_cluster.value(),
                                                    **common),
             "PCA": lambda: s.run_pca(channels, common["transform"]),
         }
