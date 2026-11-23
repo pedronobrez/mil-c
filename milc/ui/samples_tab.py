@@ -117,6 +117,29 @@ class SamplesTab(QtWidgets.QWidget):
             "pulling every other sample down to its size")
         self.seed = QtWidgets.QSpinBox()
         self.seed.setRange(0, 999_999)
+        self.norm_batch = QtWidgets.QComboBox()
+        self.norm_batch.setToolTip(
+            "The column that says which batch a sample was acquired in — a day, a run. "
+            "Batches are brought onto one another before the samples are concatenated.")
+        self.norm_column = QtWidgets.QComboBox()
+        self.norm_value = QtWidgets.QComboBox()
+        for w in (self.norm_column, self.norm_value):
+            w.setToolTip(
+                "The reference: samples that should look alike in every batch. Whatever "
+                "separates them between batches is taken to be technical and is removed "
+                "from every sample of the batch — including any real difference between "
+                "them. Aliquots of one control are the safe choice; a control group is an "
+                "assumption that it does not change between batches.")
+        self.norm_clusters = QtWidgets.QSpinBox()
+        self.norm_clusters.setRange(1, 30)
+        self.norm_clusters.setSpecialValueText("each marker whole")
+        self.norm_clusters.setToolTip(
+            "Above 1, the correction is learnt within that many FlowSOM clusters of the "
+            "reference, as CytoNorm does: for a shift that differs between cell types. "
+            "It needs many reference events — at least 50 per batch in each cluster.")
+        self.norm_result = QtWidgets.QLabel("")
+        self.norm_result.setWordWrap(True)
+        self.norm_result.setProperty("role", "caption")
         self.summary = QtWidgets.QLabel("")
         self.summary.setWordWrap(True)
         self.notes = QtWidgets.QLabel("")
@@ -136,11 +159,19 @@ class SamplesTab(QtWidgets.QWidget):
         form.addRow("N", self.n)
         form.addRow("Minimum", self.min_events)
         form.addRow("Seed", self.seed)
+        form.addRow(self._eyebrow("Batch normalisation"))
+        form.addRow("Batches", self.norm_batch)
+        ref = QtWidgets.QHBoxLayout()
+        ref.addWidget(self.norm_column, 1)
+        ref.addWidget(self.norm_value, 1)
+        form.addRow("Reference", ref)
+        form.addRow("Within", self.norm_clusters)
         side = QtWidgets.QVBoxLayout()
         side.addLayout(form)
         side.addSpacing(8)
         side.addWidget(self.summary)
         side.addWidget(self.notes)
+        side.addWidget(self.norm_result)
         side.addStretch(1)
         side.addWidget(self.build_button)
         panel = QtWidgets.QWidget()
@@ -163,6 +194,10 @@ class SamplesTab(QtWidgets.QWidget):
         self.n.valueChanged.connect(self._settings_changed)
         self.min_events.valueChanged.connect(self._settings_changed)
         self.seed.valueChanged.connect(self._settings_changed)
+        self.norm_batch.currentIndexChanged.connect(self._normalisation_changed)
+        self.norm_column.currentIndexChanged.connect(self._reference_column_changed)
+        self.norm_value.currentIndexChanged.connect(self._normalisation_changed)
+        self.norm_clusters.valueChanged.connect(self._normalisation_changed)
         self.build_button.clicked.connect(self.concatenate)
         self.refresh()
 
@@ -200,6 +235,7 @@ class SamplesTab(QtWidgets.QWidget):
                                and any(e.wsp is None and not e.problem for e in s.entries))
         self.extend.setChecked(s.extend_gates)
         self._fill_group_menu()
+        self._fill_normalisation()
         for b in (self.add_column_button, self.fill_button):
             b.setEnabled(bool(s.entries))
         self._filling = False
@@ -339,6 +375,102 @@ class SamplesTab(QtWidgets.QWidget):
             return
         s.save_project()
         self._update_plan()
+        if item.column() != 0:
+            self._fill_normalisation()   # the values a reference can take may have changed
+        else:
+            self._show_normalisation()
+
+    # --- batch normalisation ----------------------------------------------------------
+
+    def _fill_normalisation(self) -> None:
+        s = self.session
+        cfg = s.normalization or {}
+        filling, self._filling = self._filling, True
+        self.norm_batch.clear()
+        self.norm_batch.addItem("None", "")
+        self.norm_column.clear()
+        for c in s.columns:
+            self.norm_batch.addItem(c, c)
+            self.norm_column.addItem(c, c)
+        self.norm_batch.setCurrentIndex(max(self.norm_batch.findData(cfg.get("batch", "")), 0))
+        column, value = cfg.get("reference", ["", ""])
+        self.norm_column.setCurrentIndex(max(self.norm_column.findData(column), 0))
+        self._fill_reference_values(value)
+        self.norm_clusters.setValue(int(cfg.get("clusters", 1)))
+        self._filling = filling
+        self._show_normalisation()
+
+    def _fill_reference_values(self, keep: str = "") -> None:
+        column = self.norm_column.currentData()
+        values = sorted({e.meta.get(column, "") for e in self.session.usable()} - {""})
+        self.norm_value.clear()
+        for v in values:
+            self.norm_value.addItem(v, v)
+        self.norm_value.setCurrentIndex(max(self.norm_value.findData(keep), 0))
+
+    def _reference_column_changed(self) -> None:
+        if self._filling:
+            return
+        self._filling = True
+        self._fill_reference_values()
+        self._filling = False
+        self._normalisation_changed()
+
+    def _normalisation_changed(self) -> None:
+        if self._filling:
+            return
+        self.session.set_normalization(
+            self.norm_batch.currentData() or None,
+            (self.norm_column.currentData() or "", self.norm_value.currentData() or ""),
+            self.norm_clusters.value())
+        self._show_normalisation()
+
+    def set_normalisation(self, batch: str | None, column: str = "", value: str = "",
+                          clusters: int = 1) -> None:
+        self.session.set_normalization(batch, (column, value), clusters)
+        self._fill_normalisation()
+
+    def _show_normalisation(self) -> None:
+        """What will be done, before; what was done, after."""
+        s = self.session
+        on = bool(s.normalization)
+        for w in (self.norm_column, self.norm_value, self.norm_clusters):
+            w.setEnabled(bool(self.norm_batch.currentData()))
+        if not on:
+            self.norm_result.setText("")
+            return
+        refs = s.reference_batches()
+        column, value = s.normalization["reference"]
+        # what stands in the way comes before what was done last time: the
+        # table may have been edited since
+        if len(refs) < 2:
+            self.norm_result.setText(
+                f"Needs samples with {column} = {value} in at least two batches; "
+                f"there are such samples in {len(refs)}.")
+            return
+        done = (s.dataset.provenance.get("normalization") if s.dataset is not None else None)
+        if done and all(done.get(k) == s.normalization[k] for k in s.normalization) \
+                and done.get("reference_samples") == {b: [e.name for e in es]
+                                                      for b, es in refs.items()}:
+            before, after = done["distance_before"], done["distance_after"]
+            worst = max(range(len(before)), key=before.__getitem__)
+            text = (f"Normalised. References apart by {sum(before) / len(before):.4f} before "
+                    f"and {sum(after) / len(after):.4f} after, on average over the markers "
+                    f"(share of the axis, on reference events held out). Most moved: "
+                    f"{done['markers'][worst]}, {before[worst]:.4f} → {after[worst]:.4f}.")
+            if done["fallbacks"]:
+                text += (f" {len(done['fallbacks'])} batch-and-cluster pair(s) had too few "
+                         "reference events and were left as they were.")
+            if done["not_normalised"]:
+                text += (" Not normalised, their batch having no reference: "
+                         + ", ".join(done["not_normalised"]) + ".")
+            self.norm_result.setText(text)
+            return
+        self.norm_result.setText(
+            "At the next Concatenate: " + "; ".join(
+                f"{b or '—'}: {len(es)} reference sample(s)" for b, es in sorted(refs.items()))
+            + f". Whatever separates the {value} samples between batches will be removed "
+            "from every sample — assuming they should not differ.")
 
     # --- columns --------------------------------------------------------------------
 
@@ -365,6 +497,7 @@ class SamplesTab(QtWidgets.QWidget):
     def _columns_changed(self) -> None:
         self.session.save_project()
         self._fill_group_menu()
+        self._fill_normalisation()
         self._fill_table()
         self.sigColumnsChanged.emit()
 
@@ -477,8 +610,11 @@ class SamplesTab(QtWidgets.QWidget):
             self._busy = False
             self._update_plan()
             ds = self.session.dataset
+            self._show_normalisation()
             self.sigStatus.emit(f"Concatenated {len(ds):,d} events from "
-                                f"{len(ds.samples)} samples")
+                                f"{len(ds.samples)} samples"
+                                + (", normalised by batch" if "normalization" in ds.provenance
+                                   else ""))
             self.sigConcatenated.emit()
 
         def failed(message):

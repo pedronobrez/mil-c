@@ -130,7 +130,7 @@ material de divulgação.
 | Renomear, juntar e anotar clusters | S | N | OMIQ, FCS Express |
 | Nome automático de clusters | P (plugins) | N | FlowLogic |
 | Abundância diferencial (diffcyt, edgeR, SAM) | P (plugin) | N | OMIQ; Cytobank (CITRUS) |
-| Normalização de lote (CytoNorm, cyCombine) | P (plugins) | N | OMIQ |
+| Normalização de lote (CytoNorm, cyCombine) | P (plugins) | **S** (no estilo do CytoNorm) | OMIQ |
 | Semente e parâmetros gravados com o resultado | P | **S** | OMIQ (registro de passos) |
 
 ### Comparação entre grupos
@@ -141,7 +141,7 @@ material de divulgação.
 | Teste t (Welch), Mann-Whitney, ANOVA, Kruskal-Wallis | N | **S** | Cytobank, FCS Express (ANOVA), FlowLogic? |
 | Correção para múltiplos testes | N | **S** (Benjamini-Hochberg, Holm, Bonferroni) | Cytobank, OMIQ |
 | Desenhos pareados ou de medidas repetidas | N | N | — |
-| Exportar para o Prism | N | N (CSV genérico) | FCS Express, OMIQ |
+| Exportar para o Prism | N | **S** (.pzfx, tabela agrupada com réplicas) | FCS Express, OMIQ |
 
 ### Figuras, relatórios e exportação
 
@@ -212,12 +212,13 @@ São as lacunas do FlowJo que mais de um concorrente já cobre, e todas servem a
 8. ~~**Testes entre grupos.**~~ **Feito** (aba Clusters e aba Statistics). t, Mann-Whitney, ANOVA e Kruskal-Wallis sobre a frequência dos
    clusters e sobre as estatísticas da tabela, com correção para múltiplos testes e o valor de p
    no gráfico. O FlowJo não tem.
-9. **Saída para o Prism.** Tabela já no formato de colunas agrupadas.
+9. ~~**Saída para o Prism.**~~ **Feito** (arquivo `.pzfx`; falta conferir a abertura no Prism). Tabela já no formato de colunas agrupadas.
 10. **Trabalhar os clusters.** Renomear, juntar, anotar; transformar um cluster ou um laço em
     população; sugerir nome pelo perfil de marcadores.
 11. **Mais um método de cluster e um de redução.** PhenoGraph / Leiden, que não pede o número de
     clusters, e PCA.
-12. **Normalização de lote.** Este experimento foi adquirido em três dias (9, 13 e 19 de novembro),
+12. ~~**Normalização de lote.**~~ **Feito**, no estilo do CytoNorm, sem comparação com o pacote R.
+    Este experimento foi adquirido em três dias (9, 13 e 19 de novembro),
     e parte da diferença entre dias pode ser do aparelho. CytoNorm é o método usual.
 13. **Limpeza automática.** PeacoQC ou flowAI, e o gráfico de sinal no tempo.
 14. **Abundância diferencial.** diffcyt / edgeR, com volcano.

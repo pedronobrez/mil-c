@@ -37,6 +37,10 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - The table is yours to type in. It starts with one column, Group, guessed from the file names;
   add your own — day, tissue, donor — type a value into several rows at once, or fill columns
   from the names with a pattern. Any column, or several together, makes the groups.
+- Batch normalisation in the manner of CytoNorm: name the column that says which batch a
+  sample was acquired in and the samples that should look alike in every batch; each batch is
+  brought onto the others before the samples are concatenated, marker by marker or within
+  FlowSOM clusters.
 - Three ways to balance: the same number from every sample, the same total from every group, or
   a ceiling per sample; and a minimum below which a sample is left out rather than allowed to
   drag every other down.
@@ -66,6 +70,8 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - The samples' own columns sit beside the name; sort by any header; export as CSV or copy
   into Excel or Prism.
 - Compare groups on any column of the table, with the same tests and corrections.
+- Send any column to GraphPad Prism as a `.pzfx` file: populations down, groups across, a
+  subcolumn for each sample. The cluster frequencies go the same way from the Clusters tab.
 
 **Explore** — UMAP, tSNE and FlowSOM, run in the background with FlowJo's defaults.
 - Any two axes: an embedding, or two markers on a biexponential scale ticked in decades.
@@ -182,6 +188,8 @@ milc/
   cluster_stats.py  expression and frequency tables
   stats.py          the statistics table: counts, percentages, medians, CVs
   compare.py        tests between groups, and adjustment for many of them
+  prism.py          tables in the shape GraphPad Prism takes, as .pzfx
+  normalize.py      batch normalisation: quantile curves per batch, marker and cluster
   figures.py        a plot and a style into SVG, PDF, PNG or TIFF (matplotlib)
   session.py        the open analysis; what the window reads and writes
   cli.py            the command line
@@ -206,6 +214,15 @@ extension for the machine that built it. `.github/workflows/ci.yml` builds both 
 machines — on a tag `v*`, which also creates the release, or on request from the Actions tab.
 Every build is asked to run the whole route on invented data (`MIL-C selftest`) and to open its
 window before it is wrapped.
+
+## What has not been checked against the original
+
+- **Batch normalisation** follows CytoNorm's steps and was not compared with the R package's
+  output. It differs knowingly: beyond the outermost quantiles the correction continues as a
+  shift, and the map is this program's own FlowSOM.
+- **Prism files** follow the layout of the R package `pzfx`, round-trip through this program's
+  own reader, and have not been opened in Prism by the author.
+- **Statistics** follow FlowJo's definitions and were not set beside FlowJo's numbers.
 
 ## Tests
 

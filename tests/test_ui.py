@@ -731,3 +731,143 @@ def test_tests_between_groups_in_the_window(app, folder, tmp_path):
     assert len(found) == 1 and found[0].key == ("All events",) and found[0].test == "Welch t"
     assert table.columns[0] == "Population"
     w.close()
+
+
+@pytest.fixture
+def batches(tmp_path):
+    """Two days, Ctrl and Case on each; the second day reads 1.6 times as
+    bright for no reason of biology; Case has more CD4+ cells on both."""
+    rng = np.random.default_rng(5)
+    for day, gain in (("3", 1.0), ("7", 1.6)):
+        for group, share in (("Ctrl", 0.3), ("Case", 0.7)):
+            for animal in (1, 2):
+                n = 1500
+                high = rng.random(n) < share
+                cd4 = np.where(high, rng.lognormal(8.0, 0.25, n), rng.lognormal(5.5, 0.3, n)) * gain
+                cd8 = rng.lognormal(6.5, 0.3, n) * gain
+                ev = np.column_stack([rng.normal(90000, 9000, n), cd8, cd4]).astype(np.float32)
+                write_fcs(str(tmp_path / f"{day}{group}{animal}.fcs"), ev,
+                          ["FSC-A", "FITC-A", "PE-A"], markers=["", "CD8", "CD4"],
+                          keywords={"SPILL": "2,FITC-A,PE-A,1,0,0,1"})
+    return str(tmp_path)
+
+
+def test_batch_normalisation_from_the_window(app, batches):
+    from milc.session import Session
+    from milc.ui import worker
+    from milc.ui.shell import MainShell
+
+    def settle():
+        for _ in range(3):
+            worker.wait_all()
+            app.processEvents()
+
+    def medians(ds, channel):
+        day = ds.obs("Day")
+        group = ds.obs("Group")
+        x = np.log10(ds.column(channel))
+        return {(d, g): float(np.median(x[(day == d) & (group == g)]))
+                for d in ("3", "7") for g in ("Ctrl", "Case")}
+
+    w = MainShell()
+    w.open_folder(batches)
+    t = w.samples
+    t.fill_from_names(r"(?P<Day>\d+)(?P<Group>[A-Za-z]+)(?P<Animal>\d+)")
+    assert t.norm_batch.currentData() == "" and not t.norm_column.isEnabled()
+    t.concatenate()
+    settle()
+    raw = medians(w.session.dataset, "FITC-A")
+    assert raw[("7", "Ctrl")] - raw[("3", "Ctrl")] == pytest.approx(np.log10(1.6), abs=0.03)
+
+    # choose the batches and the reference; it says what it will do
+    t.set_normalisation("Day", "Group", "Ctrl")
+    assert t.norm_value.currentData() == "Ctrl" and t.norm_column.isEnabled()
+    assert "3: 2 reference sample(s)" in t.norm_result.text() and "assuming" in t.norm_result.text()
+    t.concatenate()
+    settle()
+    ds = w.session.dataset
+    done = ds.provenance["normalization"]
+    assert done["batches"] == ["3", "7"] and done["reference_events"] == {"3": 3000, "7": 3000}
+    assert np.mean(done["distance_after"]) < np.mean(done["distance_before"]) / 5
+    assert "Normalised" in t.norm_result.text() and np.isfinite(ds.X).all()
+    # the days agree now, in the reference and in the other group alike…
+    fixed = medians(ds, "FITC-A")
+    assert abs(fixed[("7", "Ctrl")] - fixed[("3", "Ctrl")]) < 0.02
+    assert abs(fixed[("7", "Case")] - fixed[("3", "Case")]) < 0.03
+    # …and what separates the groups is still there: Case has more CD4-high cells
+    day, group = ds.obs("Day"), ds.obs("Group")
+    cd4 = np.log10(ds.column("PE-A"))
+    cut = (np.median(cd4[group == "Ctrl"]) + np.median(cd4[group == "Case"])) / 2
+    for d in ("3", "7"):
+        control = (cd4[(day == d) & (group == "Ctrl")] > cut).mean()
+        trt = (cd4[(day == d) & (group == "Case")] > cut).mean()
+        assert trt - control > 0.25
+    assert np.array_equal(ds.column("FSC-A"), ds.column("FSC-A")) and ds.compensated[0] is False
+
+    # a reference found in one batch only is refused, not guessed at
+    w.session.entries[0].meta["Group"] = "Other"      # 3Case1, irrelevant
+    for e in w.session.entries:
+        if e.meta["Day"] == "7" and e.meta["Group"] == "Ctrl":
+            e.meta["Group"] = "Control"
+    t._show_normalisation()
+    assert "at least two batches" in t.norm_result.text()
+    with pytest.raises(ValueError):
+        w.session.build()
+    w.close()
+
+    again = Session()
+    again.open_folder(batches)
+    assert again.normalization == {"batch": "Day", "reference": ["Group", "Ctrl"], "clusters": 1}
+
+
+def test_prism_from_the_window(app, folder, tmp_path):
+    from milc import prism
+    from milc.cli import main
+    from milc.ui import worker
+    from milc.ui.statistics_tab import CompareDialog
+    from milc.ui.shell import MainShell
+
+    def settle():
+        for _ in range(3):
+            worker.wait_all()
+            app.processEvents()
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.samples.concatenate()
+    settle()
+    e = w.explore
+    e.clusters.setValue(3)
+    e.grid.setValue(5)
+    e.run(["FlowSOM"])
+    settle()
+    c = w.clusters
+    path = str(tmp_path / "freq.pzfx")
+    assert c.save_prism(path) == 1
+    table = prism.read_pzfx(path)[0]
+    assert table.kind == prism.GROUPED and table.rows == ["1", "2", "3"]
+    assert table.columns == ["Case", "Ctrl"] and len(table.values[0][0]) == 2
+    # the numbers are the chart's: each sample's shares add up to 100
+    trt = np.array([row[0] for row in table.values])
+    assert np.allclose(trt.sum(axis=0), 100)
+
+    st = w.statistics
+    st.tick(parameters=["CD4"], statistics=["Median"])
+    st.compute()
+    settle()
+    d = CompareDialog(st.value_columns(), w.session.columns, w.session.group_by, st, for_prism=True)
+    assert not d.test.isVisibleTo(d) and d.windowTitle() == "A table for Prism"
+    d.close()
+    path = str(tmp_path / "stats.pzfx")
+    assert st.save_prism(path, "CD4 · Median", ["Group"]) == 1
+    table = prism.read_pzfx(path)[0]
+    assert table.kind == prism.COLUMN and table.columns == ["Case", "Ctrl"]   # one population
+    assert len(table.values[0]) == 2 and "CD4 · Median" in table.title
+
+    out = str(tmp_path / "cli.pzfx")
+    assert main(["stats", folder, "--channels", "CD4", "--out", str(tmp_path / "s.csv"),
+                 "--prism", out, "--prism-value", "CD4 · Median"]) == 0
+    assert prism.read_pzfx(out)[0].columns == ["Case", "Ctrl"]
+    assert main(["stats", folder, "--out", str(tmp_path / "s.csv"), "--prism", out,
+                 "--prism-value", "nope"]) == 2
+    w.close()

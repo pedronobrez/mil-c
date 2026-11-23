@@ -98,6 +98,12 @@ def cmd_concat(a) -> int:
     groups = {s.name: "/".join(s.meta.get(k, "") for k in a.group_by.split(","))
               for s in samples}
     p = sampling.plan(available, groups, a.mode, a.n, a.min_events)
+    if a.normalize_by:
+        column, _, value = (a.reference or "").partition("=")
+        if not value:
+            print("--normalize-by needs --reference COLUMN=VALUE: the samples that "
+                  "should look alike in every batch", file=sys.stderr)
+            return 2
 
     print(f"population: {a.population}\nmode: {p.mode}"
           + (f", limited by {p.limited_by}" if p.limited_by else ""))
@@ -114,6 +120,26 @@ def cmd_concat(a) -> int:
     if a.dry_run:
         return 0
     ds = concatenate(samples, p, a.population, a.seed)
+    if a.normalize_by:
+        from .session import Session
+        s = Session()
+        s.open_folder(a.data)
+        s.set_workspace(a.wsp)
+        s.set_extend_gates(not a.listed_only)
+        if a.pattern:
+            s.annotate(a.pattern)
+        s.population, s.seed = a.population, a.seed
+        s.normalization = {"batch": a.normalize_by, "reference": [column, value],
+                           "clusters": a.normalize_clusters}
+        try:
+            s._normalise(ds, {})
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        done = ds.provenance["normalization"]
+        print(f"normalised by {a.normalize_by} on {column}={value}; references apart by "
+              f"{np.mean(done['distance_before']):.4f} before and "
+              f"{np.mean(done['distance_after']):.4f} after (mean over markers, scale units)")
     ds.save(a.out + ".npz")
     ds.to_fcs(a.out + ".fcs")
     print(f"wrote {a.out}.npz and {a.out}.fcs")
@@ -318,6 +344,16 @@ def cmd_stats(a) -> int:
                                channels, chosen)
     table.to_csv(a.out)
     print(f"{len(table.rows):,d} rows, {len(table.columns)} columns -> {a.out}")
+    if a.prism:
+        from . import prism
+        value = a.prism_value
+        if value not in table.columns:
+            print(f"{value!r}: choose --prism-value among "
+                  + ", ".join(table.columns[table.columns.index("Count"):]), file=sys.stderr)
+            return 2
+        tables = prism.from_stats_table(table, value, a.group_by.split(","), a.within)
+        prism.write_pzfx(a.prism, tables)
+        print(f"{len(tables)} Prism table(s) of {value} -> {a.prism}")
     return 0
 
 
@@ -384,6 +420,12 @@ def main(argv=None) -> int:
     s.add_argument("--group-by", default="Group",
                    help="column(s) that define a group, comma-separated")
     s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--normalize-by", metavar="COLUMN",
+                   help="batch normalisation: the column that says which batch a sample is in")
+    s.add_argument("--reference", metavar="COLUMN=VALUE",
+                   help="the samples that should look alike in every batch, e.g. Group=Ctrl")
+    s.add_argument("--normalize-clusters", type=int, default=1,
+                   help="fit within this many FlowSOM clusters; 1 aligns each marker whole")
     s.add_argument("--dry-run", action="store_true", help="the plan only")
     s.add_argument("--out", default="concat")
     s.set_defaults(run=cmd_concat)
@@ -421,6 +463,11 @@ def main(argv=None) -> int:
                        ["Median", "Mean", "Geometric mean", "SD", "CV", "Robust SD",
                         "Robust CV", "MAD"]))
     s.add_argument("--out", default="statistics.csv")
+    s.add_argument("--prism", metavar="FILE.pzfx",
+                   help="also a GraphPad Prism file: one value per sample, by group")
+    s.add_argument("--prism-value", default="% of parent", help="the column to put in it")
+    s.add_argument("--group-by", default="Group", help="column(s) that make the groups")
+    s.add_argument("--within", help="a table for each value of this column")
     s.set_defaults(run=cmd_stats)
 
     s = sub.add_parser("export", help="the events of one population, a file per sample")

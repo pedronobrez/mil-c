@@ -66,6 +66,11 @@ class ClustersTab(QtWidgets.QWidget):
         self.results_button = QtWidgets.QPushButton("Results…")
         self.results_button.setToolTip("Every comparison as a table, pair by pair where "
                                        "there are more than two groups")
+        self.prism_button = QtWidgets.QPushButton("Prism…")
+        self.prism_button.setToolTip(
+            "The share of each cluster in each sample as a GraphPad Prism file: a grouped "
+            "table, clusters down, groups across, a subcolumn for each sample — one table "
+            "for each panel of the chart")
         self.clear_button = QtWidgets.QPushButton("Clear selection")
 
         bar = QtWidgets.QHBoxLayout()
@@ -82,6 +87,7 @@ class ClustersTab(QtWidgets.QWidget):
             bar.addWidget(widget)
             bar.addSpacing(10)
         bar.addWidget(self.results_button)
+        bar.addWidget(self.prism_button)
         bar.addStretch(1)
         bar.addWidget(self.clear_button)
 
@@ -137,6 +143,7 @@ class ClustersTab(QtWidgets.QWidget):
         self.test.currentIndexChanged.connect(self._draw_tables)
         self.correction.currentIndexChanged.connect(self._draw_tables)
         self.results_button.clicked.connect(self.show_results)
+        self.prism_button.clicked.connect(self._ask_prism)
         palette.notifier.changed.connect(self._recolour)
         self.refresh()
 
@@ -368,6 +375,28 @@ class ClustersTab(QtWidgets.QWidget):
         if not kind or getattr(self, "_frequency", None) is None:
             return []
         return compare.compare(self._values(), kind, self.correction.currentData(), pairwise)
+
+    def prism_tables(self) -> list:
+        from .. import prism
+        return prism.from_frequencies(self._frequency, self._groups(), self._facets(),
+                                      "Cluster frequency (% of sample)")
+
+    def save_prism(self, path: str) -> int:
+        from .. import prism
+        tables = self.prism_tables()
+        prism.write_pzfx(path, tables)
+        self.sigStatus.emit(f"Wrote {len(tables)} Prism table(s) to {path}")
+        return len(tables)
+
+    def _ask_prism(self) -> None:
+        if getattr(self, "_frequency", None) is None:
+            return
+        import os
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save for GraphPad Prism",
+            os.path.join(self.session.folder, "cluster_frequency.pzfx"), "GraphPad Prism (*.pzfx)")
+        if path:
+            self.save_prism(path if path.endswith(".pzfx") else path + ".pzfx")
 
     def results_table(self):
         found = self.comparisons(pairwise=True)

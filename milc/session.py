@@ -131,6 +131,9 @@ class Session:
         self.scales: dict[str, object] = {}
         #: a compensation matrix edited here, in place of every other
         self.matrix: object = None
+        #: batch normalisation, or None: {"batch": column, "reference":
+        #: [column, value], "clusters": n}
+        self.normalization: dict | None = None
         self._counts: dict[tuple[str, str], int] = {}
         #: the last FlowSOM, kept for its map and tree
         self.flowsom = None
@@ -161,7 +164,7 @@ class Session:
                 if e.channels and tuple(e.channels) != common:
                     e.problem, e.include = "different channels from the others", False
         self.columns, self.group_by = [GROUP], [GROUP]
-        self.scales, self.matrix = {}, None
+        self.scales, self.matrix, self.normalization = {}, None, None
         usable = [e for e in self.entries if not e.problem]
         for e, group in zip(usable, guess_groups([e.name for e in usable])):
             e.meta = {GROUP: group}
@@ -322,6 +325,7 @@ class Session:
     def _restore_annotations(self) -> None:
         data = self._project
         self.scales = {c: from_spec(spec) for c, spec in data.get("scales", {}).items()}
+        self.normalization = data.get("normalization") or None
         saved = data.get("compensation")
         if saved:
             try:
@@ -354,6 +358,7 @@ class Session:
             "gates": {os.path.basename(e.path): tree_to_dict(e.gates)
                       for e in usable if e.edited},
             "scales": {c: to_spec(t) for c, t in self.scales.items()},
+            "normalization": self.normalization,
             "compensation": ({"channels": self.matrix.channels,
                               "matrix": np.asarray(self.matrix.matrix).tolist()}
                              if self.matrix is not None else None),
@@ -528,6 +533,8 @@ class Session:
                 s.meta = {c: e.meta.get(c, "") for c in self.columns}
                 samples.append(s)
         self.dataset = concatenate(samples, p, self.population, self.seed)
+        if self.normalization:
+            self._normalise(self.dataset, {s.name: s for s in samples})
         self.flowsom = None
         # the events are in the dataset now; the files need not stay in memory
         for e in self.entries:
@@ -618,6 +625,96 @@ class Session:
             if progress:
                 progress(i + 1, len(chosen), e.name)
         return table
+
+    # --- batch normalisation -----------------------------------------------------
+
+    def set_normalization(self, batch: str | None, reference: tuple[str, str] | None = None,
+                          clusters: int = 1) -> None:
+        """Normalise at the next concatenation: `batch` is the column that
+        says which batch a sample was acquired in, `reference` the
+        (column, value) of the samples that should look alike in every
+        batch. None for `batch` turns it off."""
+        self.normalization = ({"batch": batch, "reference": list(reference),
+                               "clusters": int(clusters)}
+                              if batch and reference and reference[0] else None)
+        self.save_project()
+
+    def reference_batches(self) -> dict[str, list[Entry]]:
+        """Batch → its reference samples, as the settings stand: included,
+        with the population, and carrying the reference value."""
+        cfg = self.normalization
+        if not cfg:
+            return {}
+        column, value = cfg["reference"]
+        out: dict[str, list[Entry]] = {}
+        for e in self.entries:
+            if e.include and self.available(e) and e.meta.get(column, "") == value:
+                out.setdefault(e.meta.get(cfg["batch"], ""), []).append(e)
+        return out
+
+    def _normalise(self, ds: Dataset, samples: dict) -> None:
+        """Bring every batch of `ds` onto the mean of the batches, as
+        learnt from the reference samples — from all the events of their
+        population, not only the ones drawn — on each marker's own scale.
+        What was done, and how far apart the batches' references were
+        before and after, is written into the dataset."""
+        from . import normalize
+        cfg = self.normalization
+        refs = self.reference_batches()
+        if len(refs) < 2:
+            raise ValueError(
+                "batch normalisation needs reference samples in at least two batches; "
+                f"found them in {len(refs)}")
+        markers = [c for c, comp in zip(ds.channels, ds.compensated) if comp]
+        cols = [ds.channels.index(c) for c in markers]
+        scales = [self.scale_of(c) if c in self.scales else Biex() for c in markers]
+
+        def forward(values):
+            return np.column_stack([s(values[:, k]) if s is not None else values[:, k]
+                                    for k, s in enumerate(scales)])
+
+        def back(values):
+            return np.column_stack([s.inverse(values[:, k]) if s is not None else values[:, k]
+                                    for k, s in enumerate(scales)])
+
+        reference = {}
+        for batch, entries in refs.items():
+            parts = []
+            for e in entries:
+                sample = samples.get(e.name) or self.load(e)
+                parts.append(sample.compensated[sample.mask(self.population)][:, cols])
+            reference[batch] = forward(np.vstack(parts).astype(np.float64))
+        model = normalize.fit(reference, n_clusters=cfg.get("clusters", 1), seed=self.seed)
+        batch_of = [m.get(cfg["batch"], "") for m in ds.meta]
+        skipped = []
+        for i, batch in enumerate(batch_of):
+            rows = ds.sample_index == i
+            if batch not in model.batches:
+                skipped.append(ds.samples[i])   # a batch with no reference stays as it is
+                continue
+            fixed = normalize.apply(model, forward(ds.X[rows][:, cols].astype(np.float64)), batch)
+            ds.X[np.ix_(np.flatnonzero(rows), cols)] = back(fixed).astype(ds.X.dtype)
+        # How far apart the references are afterwards is measured on events
+        # the curves were not fitted on: half of each batch's is set aside,
+        # a second model is fitted on the other half and judged on these.
+        # Measured on the events it was fitted on, the answer is zero by
+        # construction and says nothing.
+        rng = np.random.default_rng(self.seed)
+        held, rest = {}, {}
+        for b, x in reference.items():
+            order = rng.permutation(len(x))
+            held[b], rest[b] = x[order[: len(x) // 2]], x[order[len(x) // 2:]]
+        judge = normalize.fit(rest, n_clusters=cfg.get("clusters", 1), seed=self.seed)
+        after = {b: normalize.apply(judge, x, b) for b, x in held.items()}
+        ds.provenance["normalization"] = {
+            **cfg, "markers": [ds.label(c) for c in markers], "batches": model.batches,
+            "reference_samples": {b: [e.name for e in es] for b, es in refs.items()},
+            "reference_events": {b: int(len(x)) for b, x in reference.items()},
+            "clusters_used": model.n_clusters,
+            "distance_before": normalize.distance(held).tolist(),
+            "distance_after": normalize.distance(after).tolist(),
+            "fallbacks": [list(f) for f in model.fallbacks], "not_normalised": skipped,
+        }
 
     # --- analysis --------------------------------------------------------
 

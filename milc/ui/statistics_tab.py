@@ -110,6 +110,11 @@ class StatisticsTab(QtWidgets.QWidget):
         row.addWidget(self.copy_button)
         left.addLayout(row)
         left.addWidget(self.compare_button)
+        self.prism_button = QtWidgets.QPushButton("Prism…")
+        self.prism_button.setToolTip(
+            "One column of the table as a GraphPad Prism file: populations down, groups "
+            "across, a subcolumn for each sample")
+        left.addWidget(self.prism_button)
         panel = QtWidgets.QWidget()
         panel.setLayout(left)
         panel.setFixedWidth(330)
@@ -147,6 +152,7 @@ class StatisticsTab(QtWidgets.QWidget):
         self.export_button.clicked.connect(self.export)
         self.copy_button.clicked.connect(self.copy)
         self.compare_button.clicked.connect(self._ask_comparison)
+        self.prism_button.clicked.connect(self._ask_prism)
         self.refresh()
 
     @staticmethod
@@ -172,7 +178,7 @@ class StatisticsTab(QtWidgets.QWidget):
         entries = s.usable()
         has = bool(entries)
         for w in (self.compute_button, self.export_button, self.copy_button,
-                  self.compare_button):
+                  self.compare_button, self.prism_button):
             w.setEnabled(has and (w is self.compute_button or self.result is not None))
         if not has:
             self.result = None
@@ -318,6 +324,7 @@ class StatisticsTab(QtWidgets.QWidget):
         self.export_button.setEnabled(True)
         self.copy_button.setEnabled(True)
         self.compare_button.setEnabled(True)
+        self.prism_button.setEnabled(True)
 
     # --- taking it elsewhere -----------------------------------------------------------
 
@@ -349,6 +356,29 @@ class StatisticsTab(QtWidgets.QWidget):
         found = compare.compare(values, kind, correction, pairwise)
         return compare.to_table(found, names, correction), found
 
+    def save_prism(self, path: str, value: str, group: list[str],
+                   within: str | None = None) -> int:
+        from .. import prism
+        tables = prism.from_stats_table(self.result, value, group, within)
+        prism.write_pzfx(path, tables)
+        self.sigStatus.emit(f"Wrote {len(tables)} Prism table(s) of {value} to {path}")
+        return len(tables)
+
+    def _ask_prism(self) -> None:
+        if self.result is None:
+            return
+        dialog = CompareDialog(self.value_columns(), self.session.columns,
+                               self.session.group_by, self, for_prism=True)
+        if not dialog.exec() or not dialog.groups():
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save for GraphPad Prism",
+            os.path.join(self.session.folder, "statistics.pzfx"), "GraphPad Prism (*.pzfx)")
+        if path:
+            self.save_prism(path if path.endswith(".pzfx") else path + ".pzfx",
+                            dialog.value.currentData(), dialog.groups(),
+                            dialog.within.currentData() or None)
+
     def _ask_comparison(self) -> None:
         if self.result is None:
             return
@@ -377,9 +407,10 @@ class StatisticsTab(QtWidgets.QWidget):
 class CompareDialog(QtWidgets.QDialog):
     """What to compare, between which groups, and how."""
 
-    def __init__(self, values: list[str], columns: list[str], chosen: list[str], parent=None):
+    def __init__(self, values: list[str], columns: list[str], chosen: list[str], parent=None,
+                 for_prism: bool = False):
         super().__init__(parent)
-        self.setWindowTitle("Compare groups")
+        self.setWindowTitle("A table for Prism" if for_prism else "Compare groups")
         self.value = QtWidgets.QComboBox()
         for v in values:
             self.value.addItem(v, v)
@@ -417,9 +448,15 @@ class CompareDialog(QtWidgets.QDialog):
         form.addRow("Compare", self.value)
         form.addRow("Between", self.group_list)
         form.addRow("Within each", self.within)
-        form.addRow("Test", self.test)
-        form.addRow("Adjust p by", self.correction)
-        form.addRow(self.pairwise)
+        if for_prism:   # Prism does the testing itself
+            box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Save…")
+            form.labelForField(self.value).setText("Values")
+            form.labelForField(self.group_list).setText("Columns")
+            form.labelForField(self.within).setText("A table for each")
+        else:
+            form.addRow("Test", self.test)
+            form.addRow("Adjust p by", self.correction)
+            form.addRow(self.pairwise)
         form.addRow(box)
 
     def groups(self) -> list[str]:
