@@ -349,12 +349,26 @@ class StatisticsTab(QtWidgets.QWidget):
 
     def comparison(self, value: str, group: list[str], within: str | None = None,
                    kind: str = compare.PARAMETRIC, correction: str = compare.BH,
-                   pairwise: bool = False):
+                   pairwise: bool = False, paired_by: str | None = None):
         """(table of results, the comparisons): `value` between the groups
-        `group` makes, for every population of the table."""
+        `group` makes, for every population of the table. With `paired_by`,
+        a column that says which animal or donor each sample is of, the
+        groups are compared within each of them — and a ValueError says
+        why where the column does not pair the samples."""
+        if paired_by:
+            return self._paired_comparison(value, group, within, kind, correction, pairwise,
+                                           paired_by)
         values, names = compare.from_table(self.result, value, group, within)
         found = compare.compare(values, kind, correction, pairwise)
         return compare.to_table(found, names, correction), found
+
+    def _paired_comparison(self, value, group, within, kind, correction, pairwise, paired_by):
+        values, names, subjects = compare.from_table(self.result, value, group, within, paired_by)
+        problem = compare.pairing_problem(values, subjects)
+        if problem:
+            raise ValueError(f"The samples cannot be paired by {paired_by}: {problem}.")
+        found = compare.compare(values, kind, correction, pairwise, subjects)
+        return compare.to_table(found, names, correction, paired_by), found
 
     def save_prism(self, path: str, value: str, group: list[str],
                    within: str | None = None) -> int:
@@ -387,10 +401,14 @@ class StatisticsTab(QtWidgets.QWidget):
                                self.session.group_by, self)
         if not dialog.exec() or not dialog.groups():
             return
-        table, found = self.comparison(dialog.value.currentData(), dialog.groups(),
-                                       dialog.within.currentData() or None,
-                                       dialog.test.currentData(), dialog.correction.currentData(),
-                                       dialog.pairwise.isChecked())
+        try:
+            table, found = self.comparison(
+                dialog.value.currentData(), dialog.groups(), dialog.within.currentData() or None,
+                dialog.test.currentData(), dialog.correction.currentData(),
+                dialog.pairwise.isChecked(), dialog.paired_by.currentData() or None)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Compare groups", str(exc))
+            return
         note = NOTE.format(tests=sum(1 for c in found if c.p == c.p),
                            correction=dialog.correction.currentData())
         ResultsDialog(table, f"{dialog.value.currentData()} between groups",
@@ -434,6 +452,15 @@ class CompareDialog(QtWidgets.QDialog):
         self.test = QtWidgets.QComboBox()
         for key, text in compare.KINDS.items():
             self.test.addItem(text, key)
+        self.paired_by = QtWidgets.QComboBox()
+        self.paired_by.addItem("—", "")
+        for c in columns:
+            self.paired_by.addItem(c, c)
+        self.paired_by.setToolTip(
+            "The column that says which animal or donor a sample is of, where the same ones "
+            "were measured in every group. The test is then of each one's change: paired t "
+            "or Wilcoxon for two groups, repeated-measures ANOVA or Friedman for more. "
+            "Those not found in every group are left out.")
         self.correction = QtWidgets.QComboBox()
         for name in compare.CORRECTIONS:
             self.correction.addItem(name, name)
@@ -454,6 +481,7 @@ class CompareDialog(QtWidgets.QDialog):
             form.labelForField(self.group_list).setText("Columns")
             form.labelForField(self.within).setText("A table for each")
         else:
+            form.addRow("Paired by", self.paired_by)
             form.addRow("Test", self.test)
             form.addRow("Adjust p by", self.correction)
             form.addRow(self.pairwise)
