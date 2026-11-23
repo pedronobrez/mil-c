@@ -161,6 +161,17 @@ inside a ring, MIL-C the head inside a **gate**: the polygon drawn around the po
 matters, with a few events left outside. The violet is the 405 nm laser. `packaging/make_icon.py`
 draws it from the suite's shared shapes.
 
+## Licence
+
+**GPL-3.0-or-later** — see `LICENSE`. Copyright (C) 2026 Pedro Nobre.
+
+MIL-C is free software: you may use, change and redistribute it, and anything distributed that
+is built on it has to stay open under the same licence. It comes with no warranty.
+
+`milc/ui/style.py` and `milc/ui/theme.py` come from MIL-Q, by the same author, where they are
+under the MIT licence; here they are part of this program and carry its licence. The window is
+built on PyQt6, itself GPL-3.0; the other dependencies are under permissive licences.
+
 ## Credit
 
 FlowSOM is by Sofie Van Gassen and colleagues (Cytometry A, 2015); UMAP by Leland McInnes, John
