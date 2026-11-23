@@ -303,7 +303,9 @@ o PeacoQC pega (na `7Ctrl5` ele tira 19% e o MIL-C 1%).
 Feito desde a lista anterior: a janela cabe numa tela de 1.280 pontos (as barras de controles
 passam para a linha de baixo; o mínimo caiu de 1.684 para 1.052); mudar a compensação, ou
 normalizar as amostras, avisa que o concatenado ficou velho e que os gates precisam ser
-revistos, e refaz o ajuste da normalização; instalador para Linux (`.deb` e `.tar.gz`).
+revistos, e refaz o ajuste da normalização; instalador para Linux (`.deb` e `.tar.gz`); ordem
+dos grupos (contagem natural por padrão — 3, 7, 14 — e a ordem escolhida por coluna em
+"Order…", gravada no projeto; os arquivos também são listados em ordem de contagem).
 
 Prioritárias:
 

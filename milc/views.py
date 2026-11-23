@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import density, figures
+from . import density, figures, order
 from .gating import (BooleanGate, EllipseGate, GateNode, PolygonGate, QuadrantGate,
                      RectangleGate)
 from .transforms import decade_ticks, same
@@ -127,7 +127,7 @@ class DistributionContent:
     xrange: tuple | None = None
 
     def groups(self) -> list[str]:
-        return list(dict.fromkeys(s.group for s in self.series))
+        return order.ordered(s.group for s in self.series)
 
     def category_names(self) -> list[tuple[str, str]]:
         names = self.groups()

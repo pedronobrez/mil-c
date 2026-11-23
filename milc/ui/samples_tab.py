@@ -11,7 +11,7 @@ import re
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .. import sampling
+from .. import order, sampling
 from ..session import ALL_EVENTS, Session, suggest_pattern
 from . import style, worker
 from .flow import ElidedLabel
@@ -32,6 +32,8 @@ class SamplesTab(QtWidgets.QWidget):
     sigStatus = QtCore.pyqtSignal(str)
     #: a column was added, removed, renamed or chosen to group by
     sigColumnsChanged = QtCore.pyqtSignal()
+    #: the order of a column's values was changed
+    sigOrderChanged = QtCore.pyqtSignal()
     #: the workspace's gates were extended to the other files, or taken back
     sigGatesChanged = QtCore.pyqtSignal()
     #: the values the other tabs read may have changed under them
@@ -52,6 +54,10 @@ class SamplesTab(QtWidgets.QWidget):
             "A column of your own — day, tissue, donor, treatment — to balance, "
             "colour and split by. Type in its cells; with several rows selected, "
             "what you type goes into all of them.")
+        self.order_button = QtWidgets.QPushButton("Order…")
+        self.order_button.setToolTip("Which group comes first — Ctrl before Case, day 3 "
+                                     "before day 14 — on every chart, legend and table")
+        self.order_button.clicked.connect(self.ask_order)
         self.fill_button = QtWidgets.QPushButton("Fill from file names…")
         self.fill_button.setToolTip("Read columns out of the file names with a pattern")
         self.open_button = QtWidgets.QPushButton("Open folder…")
@@ -65,6 +71,7 @@ class SamplesTab(QtWidgets.QWidget):
         names.addWidget(self.wsp_label)
         top.addLayout(names, 1)
         top.addWidget(self.add_column_button)
+        top.addWidget(self.order_button)
         top.addWidget(self.fill_button)
         top.addWidget(self.wsp_button)
         top.addWidget(self.open_button)
@@ -429,7 +436,7 @@ class SamplesTab(QtWidgets.QWidget):
 
     def _fill_reference_values(self, keep: str = "") -> None:
         column = self.norm_column.currentData()
-        values = sorted({e.meta.get(column, "") for e in self.session.usable()} - {""})
+        values = order.ordered({e.meta.get(column, "") for e in self.session.usable()} - {""})
         self.norm_value.clear()
         for v in values:
             self.norm_value.addItem(v, v)
@@ -437,7 +444,7 @@ class SamplesTab(QtWidgets.QWidget):
 
     def _fill_goals(self, keep: str = "mean") -> None:
         batch = self.norm_batch.currentData()
-        values = sorted({e.meta.get(batch, "") for e in self.session.usable()} - {""}) \
+        values = order.ordered({e.meta.get(batch, "") for e in self.session.usable()} - {""}) \
             if batch else []
         self.norm_goal.clear()
         self.norm_goal.addItem("The mean of the batches", "mean")
@@ -556,6 +563,16 @@ class SamplesTab(QtWidgets.QWidget):
         s.save_project()
         self._update_plan()
         self.sigColumnsChanged.emit()
+
+    def ask_order(self, column: str = "") -> None:
+        from .order_dialog import ask
+        if ask(self.session, self, column if isinstance(column, str) else ""):
+            self.order_changed()
+
+    def order_changed(self) -> None:
+        self._fill_normalisation()
+        self._update_plan()
+        self.sigOrderChanged.emit()
 
     def _columns_changed(self) -> None:
         self.session.save_project()

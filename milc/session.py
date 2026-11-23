@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import cluster_stats, sampling, stats
+from . import cluster_stats, order, sampling, stats
 from .clusters import (FLOWSOM, MIN_GAP, Clustering, merged_labels, named, suggest_names,
                        view)
 from .dataset import Dataset, concatenate
@@ -156,6 +156,9 @@ class Session:
         self.normalization_check: dict | None = None
         #: the curves in use, with what they were fitted for: see `_fitted`
         self._fit: tuple | None = None
+        #: column → its values, first to last, where the user said so: the
+        #: order of groups on every chart, legend and table (`order.py`)
+        self.orders: dict[str, list[str]] = {}
         #: why the concatenated events no longer match the samples ("" if
         #: they do): the values under them changed after they were taken
         self.dataset_stale = ""
@@ -180,7 +183,11 @@ class Session:
         self.folder = folder
         self.entries, self._counts, self.dataset = [], {}, None
         self.dataset_stale = self.review = ""
-        for path in sorted(glob.glob(os.path.join(folder, "*.fcs"))):
+        self.orders = {}
+        order.set_order(self.orders)
+        # as a person counts: 3Ctrl1 before 14Ctrl1
+        for path in sorted(glob.glob(os.path.join(folder, "*.fcs")),
+                           key=lambda p: order.natural(os.path.basename(p))):
             try:
                 kv = read_header(path)
             except Exception as exc:  # a broken file is listed, not fatal
@@ -451,6 +458,11 @@ class Session:
         self.normalization = data.get("normalization") or None
         self.quality_settings = data.get("quality") or None
         self.review = str(data.get("review") or "")
+        saved = data.get("orders")
+        self.orders = ({str(c): [str(v) for v in values] for c, values in saved.items()
+                        if isinstance(values, list)}
+                       if isinstance(saved, dict) else {})
+        order.set_order(self.orders)
         saved = data.get("compensation")
         if saved:
             try:
@@ -513,6 +525,7 @@ class Session:
             "normalization": self.normalization,
             "quality": self.quality_settings,
             "review": self.review,
+            "orders": self.orders,
             "compensation": ({"channels": self.matrix.channels,
                               "matrix": np.asarray(self.matrix.matrix).tolist()}
                              if self.matrix is not None else None),
@@ -704,6 +717,8 @@ class Session:
     def remove_column(self, name: str) -> None:
         self.columns.remove(name)
         self.group_by = [c for c in self.group_by if c != name]
+        if self.orders.pop(name, None) is not None:
+            order.set_order(self.orders)
         for e in self.entries:
             e.meta.pop(name, None)
 
@@ -713,9 +728,28 @@ class Session:
             raise ValueError(f"there is already a column {new!r}" if new
                              else "a column needs a name")
         self.columns[self.columns.index(old)] = new
+        if old in self.orders:
+            self.orders[new] = self.orders.pop(old)
         self.group_by = [new if c == old else c for c in self.group_by]
         for e in self.entries:
             e.meta[new] = e.meta.pop(old, "")
+
+    def values_of(self, column: str) -> list[str]:
+        """The values the samples have in `column`, in the order they are
+        shown in: as given with `set_order`, the rest as counted."""
+        return order.ordered(e.meta.get(column, "") for e in self.usable()
+                             if e.meta.get(column, ""))
+
+    def set_order(self, column: str, values: list[str] | None) -> None:
+        """The order of a column's values on every chart, legend and
+        table: `values` first to last. None, or nothing, goes back to
+        counting order — 3, 7, 14; A, B, C."""
+        if values:
+            self.orders[column] = [str(v) for v in values]
+        else:
+            self.orders.pop(column, None)
+        order.set_order(self.orders)
+        self.save_project()
 
     def set_value(self, entries: list[Entry], column: str, value: str) -> None:
         for e in entries:

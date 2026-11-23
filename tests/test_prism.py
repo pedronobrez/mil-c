@@ -194,8 +194,8 @@ def test_from_stats_table():
 
 def test_from_stats_table_combined_groups_and_within():
     tables = prism.from_stats_table(stats_table(), "CD8 · Median", ["Group", "Day"])
-    assert tables[0].columns == ["KO · 14", "KO · 7", "WT · 7"]
-    assert same(tables[0].values[0], [[210.0], [200.0, 220.0], [100.0, 110.0]])
+    assert tables[0].columns == ["KO · 7", "KO · 14", "WT · 7"]      # day 7 before day 14
+    assert same(tables[0].values[0], [[200.0, 220.0], [210.0], [100.0, 110.0]])
 
     tables = prism.from_stats_table(stats_table(), "CD8 · Median", ["Group"], within="Day",
                                     title="MFI")

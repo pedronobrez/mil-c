@@ -124,6 +124,9 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   second column: the groups compared within each day.
 - Click a cluster in any of the four and it is marked in the other three.
 - The colour ramp is yours to choose: a named one, or two or three colours of your own.
+- **Order…** (here and in Samples) says which group comes first — Ctrl before Case, or the
+  other way — on every chart, legend, panel and table and in the Prism file; it is kept with
+  the project. Left alone, values come as a person counts: day 3, 7, 14.
 - Test the groups in each cluster: Welch's t or Mann-Whitney for two, ANOVA or Kruskal-Wallis
   for more, with p adjusted for the number of clusters and written on the chart.
 - Shift+drag on the map outlines any set of events and reports the same numbers for it.
@@ -260,6 +263,7 @@ milc/
   sample.py         one file with its matrix and its gates
   sampling.py       the plan: how many events each sample gives, and why
   dataset.py        the concatenated events, and where each came from
+  order.py          which group comes first: counting order, or the user's
   embed.py          UMAP, tSNE and PCA; how well a map keeps neighbours
   graphcluster.py   PhenoGraph-style clustering: neighbours, Jaccard, Leiden / Louvain
   clusters.py       clusters as the user has them: names, notes, merges

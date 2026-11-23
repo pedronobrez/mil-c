@@ -76,6 +76,8 @@ class MainShell(QtWidgets.QMainWindow):
         for tab in (self.samples, self.gates, self.statistics):
             self.clusters.sigGatesChanged.connect(tab.refresh)
         self.samples.sigConcatenated.connect(self._concatenated)
+        self.samples.sigOrderChanged.connect(self.order_changed)
+        self.clusters.sigOrderAsked.connect(self.samples.ask_order)
         for changed in (self.gates.sigGatesChanged, self.samples.sigNormalisationChanged,
                         self.samples.sigConcatenated):
             changed.connect(self.show_stale)
@@ -261,6 +263,17 @@ class MainShell(QtWidgets.QMainWindow):
         expression.to_csv(os.path.join(folder, "cluster_expression.csv"), "cluster")
         freq.to_csv(os.path.join(folder, "cluster_frequency.csv"), "cluster")
         self.status(f"Wrote cluster_expression.csv and cluster_frequency.csv to {folder}")
+
+    def order_changed(self) -> None:
+        """The groups come in another order: everything that shows them is
+        drawn again. Nothing is computed again — the order is of what is
+        shown, not of what was measured."""
+        self.gates._draw()
+        self.statistics.refresh()
+        if self.session.dataset is not None:
+            self.explore._draw()
+            self.clusters.refresh()
+        self.status("The order of the groups changed")
 
     def show_stale(self) -> None:
         """Above the tabs, for as long as the concatenated events are older

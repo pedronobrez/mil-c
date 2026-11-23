@@ -89,8 +89,8 @@ def test_distributions_as_figures(tmp_path):
     series[-1] = views.distribution(np.array([]), 0.0, 1.0, "nobody", "Case")
     for kind in (views.VIOLIN, views.BOX):
         c = views.DistributionContent(series, kind, "CD4 PE", decade_ticks(b), (0.0, 1.0))
-        assert figures.category_names(c) == [("Ctrl", figures.CATEGORICAL[0]),
-                                             ("Case", figures.CATEGORICAL[1])]
+        assert figures.category_names(c) == [("Case", figures.CATEGORICAL[0]),
+                                             ("Ctrl", figures.CATEGORICAL[1])]
         assert not figures.uses_colormap(c)
         assert figures.preview_png(c, STYLE, dpi=40)[:4] == b"\x89PNG"
         look = figures.FigureStyle(font="DejaVu Sans", labels={"Case": "Treated"},

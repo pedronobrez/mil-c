@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, field, fields
 import numpy as np
 
 from . import cluster_stats
+from . import order as _order
 
 #: Paul Tol's qualitative colours: distinguishable with the common
 #: colour-vision deficiencies
@@ -97,15 +98,14 @@ class Values:
 
 
 def categories_of(labels, title: str = "", order: list[str] | None = None) -> Categories:
-    """From per-event labels of any kind; numbers sort as numbers."""
+    """From per-event labels of any kind, in the order of `order.py`:
+    as counted, or as the user gave it."""
     labels = np.asarray(labels)
     names, codes = np.unique(labels, return_inverse=True)
     names = [str(n) for n in names]
     if order is None:
-        try:
-            rank = np.argsort([float(n) for n in names], kind="stable")
-        except ValueError:
-            rank = np.arange(len(names))
+        rank = np.array(sorted(range(len(names)), key=lambda i: _order.key(names[i])),
+                        dtype=np.int64)
     else:
         rank = np.array([names.index(n) for n in order if n in names]
                         + [i for i, n in enumerate(names) if n not in order])

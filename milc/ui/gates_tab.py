@@ -21,7 +21,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .. import density, figures, views
+from .. import density, figures, order, views
 from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
 from ..gating import TimeGate, time_node
@@ -424,7 +424,7 @@ class GatesTab(QtWidgets.QWidget):
 
     def _draw_series(self, series, ydim, yr) -> tuple[float, float]:
         """Draw them, and say what range of Y they need."""
-        names = list(dict.fromkeys(s.group for s in series))
+        names = order.ordered(s.group for s in series)
         colour = dict(zip(names, palette.categorical(len(names))))
         legend = self.plot.plotItem.legend or self.plot.plotItem.addLegend(offset=(-8, 8))
         legend.clear()
@@ -499,7 +499,8 @@ class GatesTab(QtWidgets.QWidget):
             parts.setdefault(label, (group, []))[1].append(
                 self._display(xdim, sample)[masks[path]])
         series = [views.distribution(np.concatenate(values), *xr, label, group)
-                  for label, (group, values) in parts.items()]
+                  for label, (group, values) in sorted(
+                      parts.items(), key=lambda part: order.key(part[1][0]))]
         return views.DistributionContent(
             series, kind, self.x_axis.currentText(),
             decade_ticks(self._scale(xdim)) if self._scale(xdim) else None, xr)

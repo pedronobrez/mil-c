@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import order
+
 
 #: UTF-8 with a byte-order mark. Without the mark, Excel on Windows reads a
 #: CSV in the system's own code page and "CD8 · Median" arrives as
@@ -46,14 +48,9 @@ def _q(text: str) -> str:
     return '"' + text.replace('"', '""') + '"' if any(c in text for c in ',"\n') else text
 
 
-def ordered(names) -> list[str]:
-    """Distinct names in the order a person expects: day 3, 7, 14 — not
-    14, 3, 7."""
-    names = list(dict.fromkeys(names))
-    try:
-        return sorted(names, key=float)
-    except (TypeError, ValueError):
-        return sorted(names)
+#: distinct names in the order a person expects — day 3, 7, 14, not 14, 3,
+#: 7 — or in the order the user gave them
+ordered = order.ordered
 
 
 def clusters_of(labels: np.ndarray) -> list[int]:

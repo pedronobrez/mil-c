@@ -30,6 +30,7 @@ from math import comb
 
 import numpy as np
 
+from . import order
 from .stats import StatsTable
 
 PARAMETRIC = "parametric"     # Welch t / ANOVA
@@ -272,12 +273,7 @@ def adjust(p, method: str = BH) -> np.ndarray:
     return out
 
 
-def ordered(names) -> list[str]:
-    names = list(dict.fromkeys(names))
-    try:
-        return sorted(names, key=float)
-    except (TypeError, ValueError):
-        return sorted(names)
+ordered = order.ordered
 
 
 def compare(values: dict[tuple, dict[str, list[float]]], kind: str = PARAMETRIC,

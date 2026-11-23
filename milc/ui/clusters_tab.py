@@ -31,6 +31,8 @@ CLUSTERINGS = ("FlowSOM", "PhenoGraph")
 
 class ClustersTab(QtWidgets.QWidget):
     sigStatus = QtCore.pyqtSignal(str)
+    #: the order of this column's values is to be chosen ("" for the first)
+    sigOrderAsked = QtCore.pyqtSignal(str)
     #: clusters were renamed, merged or drawn: whatever shows them is out of date
     sigClustersChanged = QtCore.pyqtSignal()
     #: a cluster became a population of the files: the gating trees changed
@@ -90,6 +92,12 @@ class ClustersTab(QtWidgets.QWidget):
             "more — and those not found in every group are left out.")
         self.pairing = QtWidgets.QLabel("")
         self.pairing.setProperty("role", "warning")
+        self.order_button = QtWidgets.QPushButton("Order…")
+        self.order_button.setToolTip("Which group comes first — Ctrl before Case, day 3 "
+                                     "before day 14 — here and on every other chart")
+        self.order_button.clicked.connect(lambda: self.sigOrderAsked.emit(
+            self.group_by.currentData() if self.group_by.currentData() not in ("", "*")
+            else ""))
         self.results_button = QtWidgets.QPushButton("Results…")
         self.results_button.setToolTip("Every comparison as a table, pair by pair where "
                                        "there are more than two groups")
@@ -116,7 +124,7 @@ class ClustersTab(QtWidgets.QWidget):
                    captioned("Colours", self.ramp), self.per_marker, self.all_markers,
                    captioned("Tree", self.tree_color), self.clear_button)
         pairing_row = flow(captioned("Compare", self.group_by),
-                           captioned("within each", self.facet_by),
+                           captioned("within each", self.facet_by), self.order_button,
                            captioned("Test", self.test, self.correction),
                            captioned("Paired by", self.paired_by),
                            together(self.results_button, self.prism_button),
