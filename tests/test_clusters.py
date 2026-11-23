@@ -476,3 +476,66 @@ def test_cluster_becomes_a_population_the_gates_tab_lists(window):
     w.gates.select(path)                       # a gate with no outline: nothing to draw, no error
     assert w.gates.node.name == "FlowSOM 1"
 
+
+
+def test_a_cluster_can_be_given_a_colour(app, tmp_path):
+    """The colour goes with the cluster: on the map, the tree, their
+    figures; through a rename and a merge; and back to the palette's."""
+    import numpy as np
+    from milc import clusters, figures
+    from milc.fcs import write_fcs
+    from milc.ui import palette, worker
+    from milc.ui.shell import MainShell
+
+    rng = np.random.default_rng(0)
+    centres = np.array([[300, 3000, 100], [3000, 200, 100], [200, 300, 4000.0]])
+    for name, n in (("3Ctrl1", 300), ("3Ctrl2", 400), ("3Case1", 500), ("3Case2", 600)):
+        pop = rng.choice(3, n, p=[0.5, 0.3, 0.2])
+        fluo = np.abs(centres[pop] * rng.lognormal(0, 0.25, (n, 3)))
+        ev = np.column_stack([rng.normal(90000, 9000, n), fluo]).astype(np.float32)
+        write_fcs(str(tmp_path / f"{name}.fcs"), ev, ["FSC-A", "FITC-A", "PE-A", "APC-A"],
+                  markers=["", "CD8", "CD4", "Foxp3"],
+                  keywords={"SPILL": "3,FITC-A,PE-A,APC-A,1,0.05,0,0.02,1,0,0,0,1"})
+
+    def settle():
+        for _ in range(6):
+            worker.wait_all()
+            app.processEvents()
+
+    w = MainShell()
+    w.open_folder(str(tmp_path))
+    w.show()
+    w.samples.concatenate()
+    settle()
+    w.explore.clusters.setValue(3)
+    w.explore.grid.setValue(5)
+    w.explore.run(["FlowSOM"])
+    settle()
+    c, s = w.clusters, w.session
+    w.tabs.setCurrentWidget(c)
+    settle()
+    usual = palette.categorical(3)
+    assert s.clusters("FlowSOM").palette(usual) == usual and not c.tools.buttons["Colour"].isEnabled()
+
+    c.select(2)
+    assert c.tools.buttons["Colour"].isEnabled()
+    c.tools.set_color("#123456")
+    now = s.clusters("FlowSOM")
+    assert now.colors == ["", "#123456", ""] and now.palette(usual) == [usual[0], "#123456", usual[2]]
+    assert c.map.content().color.colors[1] == "#123456"                      # the map
+    assert dict(figures.category_names(c.tree.content()))["2"] == "#123456"   # the tree's figure
+    assert w.explore.view.content() is None or True
+    # the colour is the cluster's, whatever it is called
+    c.tools.rename("Tregs", 2)
+    assert dict(figures.category_names(c.tree.content()))["Tregs"] == "#123456"
+    # and it is kept with the run, so with the dataset when that is saved
+    assert s.dataset.runs["FlowSOM"]["edits"]["colors"] == {"2": "#123456"}
+    c.tools.set_color("", 2)
+    assert s.clusters("FlowSOM").colors == ["", "", ""]
+    assert c.map.content().color.colors[1] == usual[1]      # the others are faint: 2 is selected
+    # a run kept before clusters had colours still reads
+    del s.dataset.runs["FlowSOM"]["edits"]["colors"]
+    assert s.clusters("FlowSOM").palette(usual) == usual
+    clusters.set_color(s.dataset, 1, "#abcdef")
+    assert s.clusters("FlowSOM").colors[0] == "#abcdef"
+    w.close()

@@ -228,8 +228,9 @@ def category_names(content) -> list[tuple[str, str]]:
     if isinstance(content, TreeContent) and content.color_by is None:
         t = content.tree
         ids = sorted({int(c) for c in t["cluster"][t["sizes"] > 0]})
-        names = t.get("names", {})
-        return list(zip([names.get(i, str(i)) for i in ids], categorical(len(ids))))
+        names, given = t.get("names", {}), t.get("colors", {})
+        return [(names.get(i, str(i)), given.get(i) or default)
+                for i, default in zip(ids, categorical(len(ids)))]
     return []
 
 

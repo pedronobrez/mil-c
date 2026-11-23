@@ -120,6 +120,13 @@ def _back(values: np.ndarray, scales: list) -> np.ndarray:
                             for k, s in enumerate(scales)])
 
 
+def _deepest(paths: list[str]) -> str:
+    """The population to concatenate when nobody chose one: the end of the
+    longest chain of gates — Cells/Singlets/Live/CD45/Tcrb, not a gate
+    drawn beside it."""
+    return max(paths, key=lambda p: p.count("/")) if paths else ALL_EVENTS
+
+
 class Session:
     def __init__(self):
         self.folder = ""
@@ -219,6 +226,10 @@ class Session:
         self._restore_annotations()
         found = sorted(glob.glob(os.path.join(folder, "*.wsp")))
         self.set_workspace(found[0] if found else None)
+        # the population chosen last time, if the gates still have it
+        wanted = self._project.get("population")
+        if wanted == ALL_EVENTS or wanted in self.populations():
+            self.population = wanted
 
     def set_workspace(self, path: str | None) -> None:
         self.workspace = read_wsp(path) if path else None
@@ -231,7 +242,7 @@ class Session:
         self._borrow()
         paths = self.populations()
         # the deepest gate every gated sample has is what was meant
-        self.population = paths[-1] if paths else ALL_EVENTS
+        self.population = _deepest(paths)
 
     def workspace_report(self) -> str:
         """What a reader should know about the workspace just read: what
@@ -283,7 +294,7 @@ class Session:
     def _keep_population(self) -> None:
         paths = self.populations()
         if self.population != ALL_EVENTS and self.population not in paths:
-            self.population = paths[-1] if paths else ALL_EVENTS
+            self.population = _deepest(paths)
 
     def gates_of(self, e: Entry) -> GateNode:
         return e.gates
@@ -525,6 +536,7 @@ class Session:
             "normalization": self.normalization,
             "quality": self.quality_settings,
             "review": self.review,
+            "population": self.population,
             "orders": self.orders,
             "compensation": ({"channels": self.matrix.channels,
                               "matrix": np.asarray(self.matrix.matrix).tolist()}
@@ -1388,4 +1400,6 @@ class Session:
         now = self.clusters(FLOWSOM)
         return {"pos": pos, "edges": edges, "sizes": sizes, "cluster": cluster,
                 "medians": medians, "markers": [ds.label(c) for c in channels],
-                "names": {c: n for c, n in zip(now.ids, now.names) if not now.is_manual(c)}}
+                "names": {c: n for c, n in zip(now.ids, now.names) if not now.is_manual(c)},
+                "colors": {c: v for c, v in zip(now.ids, now.colors or [])
+                           if v and not now.is_manual(c)}}

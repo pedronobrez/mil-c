@@ -290,6 +290,7 @@ class TreeView(_Clickable):
         else:
             ids = sorted(set(int(c) for c in cluster[used]))
             colors = dict(zip(ids, palette.categorical(len(ids))))
+            colors.update({int(c): v for c, v in tree.get("colors", {}).items() if v})
             brushes = [pg.mkBrush(colors[int(c)]) for c in cluster[used]]
         radius = 7 + 22 * np.sqrt(sizes[used] / sizes[used].max())
         pens = [pg.mkPen(theme.foreground(), width=2.4) if selected is not None

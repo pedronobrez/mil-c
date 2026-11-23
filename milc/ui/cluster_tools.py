@@ -26,8 +26,8 @@ ONLY_HERE = ("It exists in this dataset only. It cannot become a population of t
 
 def cluster_categories(now: clusters.Clustering) -> Categories:
     """The clusters as the user has them, for a plot to colour by."""
-    return Categories(now.codes(), list(now.names), palette.categorical(len(now.ids)),
-                      f"{now.key} cluster")
+    return Categories(now.codes(), list(now.names),
+                      now.palette(palette.categorical(len(now.ids))), f"{now.key} cluster")
 
 
 class ClusterTools(QtWidgets.QWidget):
@@ -45,6 +45,9 @@ class ClusterTools(QtWidgets.QWidget):
                  "Call the selected cluster something: the name is shown wherever "
                  "its number was"),
                 ("Note…", self._ask_note, "A note kept with the selected cluster"),
+                ("Colour…", self._ask_color,
+                 "The colour of the selected cluster on the map, the tree and their "
+                 "figures — one of your choosing, or the palette's own again"),
                 ("Merge with…", self._ask_merge,
                  "Make one cluster of the selected one and others. The algorithm's "
                  "clusters are kept underneath: Undo merges brings them back"),
@@ -82,6 +85,7 @@ class ClusterTools(QtWidgets.QWidget):
         manual = chosen is not None and now is not None and now.is_manual(chosen)
         algorithm = chosen is not None and not manual
         live = {"Rename": chosen is not None, "Note": chosen is not None,
+                "Colour": chosen is not None,
                 "Merge with": algorithm and sum(not now.is_manual(c) for c in now.ids) > 1,
                 "Undo merges": now is not None and now.merged(),
                 "Suggest names": now is not None,
@@ -152,6 +156,32 @@ class ClusterTools(QtWidgets.QWidget):
             text=now.name(self.tab.selected))
         if ok:
             self.rename(name)
+
+    def set_color(self, color: str, cluster: int | None = None) -> None:
+        """`#rrggbb`, or nothing for the palette's own."""
+        cluster = self.tab.selected if cluster is None else cluster
+        clusters.set_color(self.ds, cluster, color, self.tab.key)
+        self.tab.clusters_changed(cluster)
+
+    def _ask_color(self) -> None:
+        from PyQt6 import QtGui
+        now = self.now()
+        chosen = self.tab.selected
+        given = bool(now.colors and now.colors[now.ids.index(chosen)])
+        menu = QtWidgets.QMenu(self)
+        choose = menu.addAction("Choose a colour…")
+        own = menu.addAction("The palette's own")
+        own.setEnabled(given)
+        button = self.buttons["Colour"]
+        picked = menu.exec(button.mapToGlobal(QtCore.QPoint(0, button.height())))
+        if picked is own:
+            self.set_color("")
+        elif picked is choose:
+            current = now.color_of(palette.categorical(len(now.ids)))[chosen]
+            color = QtWidgets.QColorDialog.getColor(
+                QtGui.QColor(current), self, f"Colour of cluster {now.name(chosen)}")
+            if color.isValid():
+                self.set_color(color.name())
 
     def _ask_note(self) -> None:
         now = self.now()

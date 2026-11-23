@@ -19,7 +19,7 @@ A cluster drawn by hand is per event and so sits in `ds.derived`, under
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -51,6 +51,18 @@ class Clustering:
     labels: np.ndarray
     #: cluster → the algorithm's clusters it is made of; none for a manual one
     members: dict[int, list[int]]
+    #: the colour the user gave each, in the same order; "" where none was
+    #: given and the palette's is used
+    colors: list[str] = field(default_factory=list)
+
+    def palette(self, defaults: list[str]) -> list[str]:
+        """A colour for each cluster: the user's where one was given, else
+        the one of `defaults` in its place."""
+        given = self.colors or [""] * len(self.ids)
+        return [c or d for c, d in zip(given, defaults)]
+
+    def color_of(self, defaults: list[str]) -> dict[int, str]:
+        return dict(zip(self.ids, self.palette(defaults)))
 
     def name(self, cluster: int) -> str:
         return self.names[self.ids.index(cluster)]
@@ -73,9 +85,11 @@ def _edits(ds, key: str, write: bool = False) -> dict:
     if not write:
         found = ds.runs.get(key, {}).get("edits", {})
         return {k: found.get(k, {} if k != "manual" else [])
-                for k in ("names", "notes", "merged", "manual")}
-    return ds.runs.setdefault(key, {}).setdefault(
+                for k in ("names", "notes", "merged", "manual", "colors")}
+    edits = ds.runs.setdefault(key, {}).setdefault(
         "edits", {"names": {}, "notes": {}, "merged": {}, "manual": []})
+    edits.setdefault("colors", {})        # runs kept before clusters had colours
+    return edits
 
 
 def merged_labels(ds, key: str = FLOWSOM) -> np.ndarray:
@@ -110,7 +124,7 @@ def view(ds, key: str = FLOWSOM) -> Clustering | None:
     names = [e["names"].get(str(c)) or "+".join(str(m) for m in members[c]) or str(c)
              for c in ids]
     return Clustering(key, ids, names, [e["notes"].get(str(c), "") for c in ids],
-                      labels, members)
+                      labels, members, [e["colors"].get(str(c), "") for c in ids])
 
 
 def named(table: Table, clustering: Clustering) -> Table:
@@ -140,6 +154,16 @@ def rename(ds, names: dict[int, str], key: str = FLOWSOM) -> None:
             kept[str(cluster)] = name.strip()
         else:
             kept.pop(str(cluster), None)
+
+
+def set_color(ds, cluster: int, color: str, key: str = FLOWSOM) -> None:
+    """Draw this cluster in this colour (`#rrggbb`) wherever clusters are
+    coloured. An empty colour gives it back the palette's."""
+    colors = _edits(ds, key, write=True)["colors"]
+    if color:
+        colors[str(int(cluster))] = str(color)
+    else:
+        colors.pop(str(int(cluster)), None)
 
 
 def set_note(ds, cluster: int, note: str, key: str = FLOWSOM) -> None:

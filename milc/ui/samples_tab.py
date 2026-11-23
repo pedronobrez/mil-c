@@ -100,6 +100,15 @@ class SamplesTab(QtWidgets.QWidget):
         self.population.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.population.setMinimumContentsLength(24)
+        self.population.setToolTip(
+            "Which events of each sample are concatenated: every event, or those of one "
+            "gate — the Tcrb population, say. It has to exist in every sample that takes part.")
+        self.include = QtWidgets.QPushButton()
+        self.include.setMenu(QtWidgets.QMenu(self.include))
+        self.include.setToolTip(
+            "Which samples take part: tick or untick every sample of a group, a day, an "
+            "animal at once — to concatenate two groups only, untick the others. The same "
+            "as the boxes in the first column of the table.")
         self.extend = QtWidgets.QCheckBox("Gate the files the workspace does not list")
         self.extend.setToolTip(
             "Every sample of the workspace has the same gates and the same "
@@ -178,6 +187,7 @@ class SamplesTab(QtWidgets.QWidget):
         form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
         form.addRow(self._eyebrow("Samples"))
         form.addRow("Population", self.population)
+        form.addRow("Include", self.include)
         form.addRow(self.extend)
         form.addRow("Group by", self.group_by)
         form.addRow(self._eyebrow("Downsampling"))
@@ -321,6 +331,7 @@ class SamplesTab(QtWidgets.QWidget):
     def _update_plan(self) -> None:
         """The In gate, Takes and Note columns, and the summary."""
         s = self.session
+        self._fill_include_menu()
         cols = self._columns()
         c_gate, c_take, c_note = (cols.index(x) for x in ("In gate", "Takes", "Note"))
         plan = s.plan()
@@ -564,6 +575,41 @@ class SamplesTab(QtWidgets.QWidget):
         self._update_plan()
         self.sigColumnsChanged.emit()
 
+    def _fill_include_menu(self) -> None:
+        """All, none, and each value of each column: ticked where every
+        sample that has it takes part, unticked where none does."""
+        s = self.session
+        usable = s.usable()
+        menu = self.include.menu()
+        menu.clear()
+        menu.addAction("Every sample", lambda: self.include_where(None, None, True))
+        menu.addAction("None", lambda: self.include_where(None, None, False))
+        for column in s.columns:
+            values = s.values_of(column)
+            if not 1 < len(values) <= 40:
+                continue
+            sub = menu.addMenu(column)
+            for value in values:
+                with_it = [e for e in usable if e.meta.get(column, "") == value]
+                action = sub.addAction(f"{value}    ({len(with_it)})")
+                action.setCheckable(True)
+                action.setChecked(all(e.include for e in with_it))
+                action.triggered.connect(
+                    lambda on, c=column, v=value: self.include_where(c, v, on))
+        n = sum(e.include for e in usable)
+        self.include.setText(f"{n} of {len(usable)} samples" if usable else "No samples")
+
+    def include_where(self, column: str | None, value: str | None, on: bool) -> None:
+        """Tick or untick every sample whose `column` is `value` — or, with
+        no column, every sample."""
+        s = self.session
+        for e in s.usable():
+            if column is None or e.meta.get(column, "") == value:
+                e.include = bool(on)
+        s.save_project()
+        self._fill_table()
+        self._update_plan()
+
     def ask_order(self, column: str = "") -> None:
         from .order_dialog import ask
         if ask(self.session, self, column if isinstance(column, str) else ""):
@@ -643,6 +689,7 @@ class SamplesTab(QtWidgets.QWidget):
         if self._filling:
             return
         self.session.population = self.population.currentData() or ALL_EVENTS
+        self.session.save_project()
         self._update_plan()
         self._count()
 

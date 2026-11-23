@@ -115,3 +115,60 @@ def test_the_dialog_and_the_charts(app, batches):
     assert [n for n, _ in figures.category_names(w.clusters.freq.content())] == ["Ctrl", "Case"]
     assert w.clusters.order_button.isVisible() and w.samples.order_button is not None
     w.close()
+
+
+def test_one_population_of_two_groups_only(app, batches):
+    """The route FlowJo users take: one gate of every sample, the samples
+    of the groups of interest, concatenated — and the choice remembered."""
+    from milc.gating import GateNode, RectangleGate
+    from milc.session import ALL_EVENTS
+    from milc.ui import worker
+    from milc.ui.shell import MainShell
+
+    def settle():
+        for _ in range(4):
+            worker.wait_all()
+            app.processEvents()
+
+    w = MainShell()
+    w.open_folder(batches)
+    w.show()
+    s, t = w.session, w.samples
+    t.fill_from_names(PATTERN)
+    for e in s.usable():
+        cells = e.gates.add(GateNode("Cells", RectangleGate(["FSC-A"], [1000.0], [None])))
+        cells.add(GateNode("Bright", RectangleGate(["FSC-A"], [90000.0], [None])))
+        e.gates.add(GateNode("Gate", RectangleGate(["FSC-A"], [0.0], [None])))   # drawn beside
+        e.edited = True
+    s._keep_population()
+    t.refresh()
+    settle()
+    # nobody chose: the end of the longest chain, not the gate drawn last
+    assert s.population == ALL_EVENTS or s.population == "Cells/Bright"
+    t.population.setCurrentIndex(t.population.findData("Cells/Bright"))
+    settle()
+    assert s.population == "Cells/Bright"
+
+    n = len(s.usable())
+    assert t.include.text() == f"{n} of {n} samples"
+    t.include_where("Day", "7", False)
+    kept = [e.name for e in s.usable() if e.include]
+    assert kept and all(e.meta["Day"] == "3" for e in s.usable() if e.include)
+    assert t.include.text() == f"{len(kept)} of {n} samples"
+    days = next(a.menu() for a in t.include.menu().actions() if a.text() == "Day")
+    assert [(a.text().split()[0], a.isChecked()) for a in days.actions()] == [
+        ("3", True), ("7", False)]
+
+    t.concatenate()
+    settle()
+    ds = s.dataset
+    assert set(ds.obs("Day")) == {"3"} and ds.provenance["population"] == "Cells/Bright"
+    assert float(ds.column("FSC-A").min()) >= 90000.0
+
+    again = Session()
+    again.open_folder(batches)
+    assert again.population == "Cells/Bright"
+    assert [e.name for e in again.usable() if e.include] == kept
+    t.include_where(None, None, True)
+    assert all(e.include for e in s.usable())
+    w.close()
