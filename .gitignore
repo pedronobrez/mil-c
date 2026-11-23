@@ -33,3 +33,4 @@ dist/
 
 # Local notes about the data
 NOTES.local.md
+.claude/
