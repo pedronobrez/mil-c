@@ -493,7 +493,7 @@ def cmd_gates(a) -> int:
 # --- quality of the acquisition ------------------------------------------------
 
 _QC_COLUMNS = ["Sample", "Events", "Checked", "Removed", "Removed %", "Intervals",
-               "Time unit", "Flow rate", "Signal", "Between", "Parameters", "Note"]
+               "Time unit", "Flow rate", "Signal", "Drift", "Between", "Parameters", "Note"]
 
 
 def _quality_arguments(s, apply: bool) -> None:
@@ -513,13 +513,17 @@ def _quality_arguments(s, apply: bool) -> None:
                         "there are at least this many (5)")
     s.add_argument("--events-per-bin", type=int,
                    help="by default 1/500 of the file and at least 150")
+    s.add_argument("--drift", type=float,
+                   help="the smallest lasting shift of a population's level that is "
+                        "taken for a drift, as a share of the spread of the parameter's "
+                        "events (0.25); larger removes less, 0 does not look for drifts")
     s.add_argument("--qc-channels", *(() if apply else ("--channels",)), dest="qc_channels",
                    help="the parameters to judge, comma-separated: detectors or stains; "
                         "every one but Time without it")
 
 
 def _quality_settings(a) -> dict:
-    given = {k: getattr(a, k, None) for k in ("mad", "consecutive", "events_per_bin")}
+    given = {k: getattr(a, k, None) for k in ("mad", "consecutive", "events_per_bin", "drift")}
     return {k: v for k, v in given.items() if v is not None}
 
 
@@ -635,7 +639,8 @@ def _quality_row(name, events, checked, removed, intervals, step, result=None,
             "; ".join(f"{lo * scale:.6g}-{hi * scale:.6g}" for lo, hi in intervals),
             "s" if step else "as stored",
             r.counts[qc.RATE] if r else "", r.counts[qc.SIGNAL] if r else "",
-            r.counts[qc.ISLANDS] if r else "", "; ".join(r.blamed) if r else "", note]
+            r.counts[qc.DRIFT] if r else "", r.counts[qc.ISLANDS] if r else "",
+            "; ".join(r.blamed) if r else "", note]
 
 
 def _quality_csv(path: str, rows: list[list]) -> None:
@@ -674,8 +679,7 @@ def cmd_qc(a) -> int:
             print(f"{e.name:{wide}s} {len(r.keep):>9,d}  {'—':>7s}  not checked: {r.reason}")
             continue
         events, removed = events + len(r.keep), removed + gone
-        found = [what for what, key in (("flow rate", qc.RATE), ("signal", qc.SIGNAL))
-                 if r.counts[key]]
+        found = [what for what in (qc.RATE, qc.SIGNAL, qc.DRIFT) if r.counts[what]]
         blamed = ", ".join(r.blamed[:3]) + ("…" if len(r.blamed) > 3 else "")
         print(f"{e.name:{wide}s} {len(r.keep):>9,d}  {r.removed:>7.1%}  "
               + (f"{qc_plots.stretches(r.intervals, steps[e.name])}  ({', '.join(found)}"

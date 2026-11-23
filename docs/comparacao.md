@@ -14,7 +14,7 @@ instalar os pacotes e rodar). Eles não fazem parte da suíte de testes.
 |---|---|---|
 | `abundance.differential` | edgeR 4.10.7, diffcyt 1.32.1 | Chamado do mesmo jeito, o edgeR dá os mesmos números (p dentro de 0,06% no teste QL e 2% no LRT em 95% dos clusters). Contra os *padrões* do edgeR 4 e do diffcyt a diferença é maior, por desenho. A comparação achou dois defeitos no teste QL, que foram corrigidos. |
 | `graphcluster.phenograph` | PhenoGraph 1.5.7 (PyPI) | Mesmo número de clusters, com diferença de um ou dois, e partições tão parecidas com as do pacote quanto duas corridas do pacote entre si (ARI 0,71 nos eventos reais; 0,73 pacote contra pacote). |
-| `qc.check` | PeacoQC 1.22.0, flowAI 1.42.0 | Defeitos nítidos (degrau, entupimento) são achados igual ou melhor. Desvios lentos e moderados o PeacoQC acha e o nosso não: nos arquivos reais o PeacoQC remove 5,1% dos eventos e o nosso 1,4%. É a discrepância que importa. |
+| `qc.check` | PeacoQC 1.22.0, flowAI 1.42.0 | Defeitos nítidos (degrau, entupimento) são achados igual ou melhor. Desvios lentos e moderados o PeacoQC achava e o nosso não (1,4% dos eventos reais removidos contra 5,1%): `qc.check` ganhou uma passada lenta e, medido de novo, acha-os no nível do PeacoQC (5,25% contra 5,13% dos eventos reais; 76% contra 74% de uma deriva injetada), sem as remoções dele em arquivos cujas medianas não se movem. |
 | `normalize.fit` / `apply` | CytoNorm 2.0.13 (GitHub) | Sem clusters é a mesma curva (diferença média de 1e-5 do eixo). Com clusters, os dois programas diferem entre si tanto quanto duas sementes de um mesmo. Fora da faixa das referências o nosso é deliberadamente mais contido. |
 
 Versões: R 4.6.1, Bioconductor 3.23, limma 3.68.5, flowCore 2.24.0, FlowSOM 2.20.0, leidenalg
@@ -287,8 +287,10 @@ clusters cada, com ARI de 0,82 a 0,89 entre eles.
 
 ## 3. Controle de qualidade da aquisição (`milc/qc.py`), o PeacoQC e o flowAI
 
-`qc.py` não foi alterado: outro trabalho está em curso nele. O que segue é para quem o está
-fazendo.
+Esta seção foi medida duas vezes no mesmo dia. A primeira medida achou que o nosso deixava passar
+desvios moderados e sustentados; `qc.check` ganhou então uma segunda passada, lenta, para eles
+(parâmetro `drift`), e tudo foi medido de novo. As tabelas trazem as duas medidas, "antes" e
+"depois". Os números do PeacoQC e do flowAI são os mesmos nas duas.
 
 ### O que foi comparado
 
@@ -296,7 +298,7 @@ Quais eventos cada programa remove de uma mesma aquisição.
 
 - **Nosso**: `qc.check` chamado como o programa chama (`Session.quality`): todos os parâmetros
   menos Time, fluorescência compensada, cada parâmetro na escala em que é exibido, padrões
-  (`mad = 6`, `consecutive = 5`).
+  (`mad = 6`, `consecutive = 5` e, depois, `drift = 0,25`).
 - **PeacoQC**: recebe exatamente os mesmos valores que o nosso julgou, na ordem do arquivo, nos
   seus padrões (`MAD = 6`, `IT_limit = 0.6`, `consecutive_bins = 5`). Rodado inteiro (árvore de
   isolamento e depois MAD) e só com o passo MAD, que é o que o nosso imita.
@@ -312,137 +314,265 @@ O PeacoQC não tem checagem de vazão: ele só olha o sinal. O flowAI tem as dua
   parâmetros de dispersão e dois de fluorescência com duas populações), uma limpa e quatro com
   um defeito cada.
 - Os 32 arquivos reais, inteiros (de 13,8 mil a 247 mil eventos, 12 parâmetros).
-- Um arquivo real limpo (14Case5: o nosso remove 0,4% e o PeacoQC 0,8%) com um defeito escrito
-  nos valores brutos, três vezes: um degrau (fluorescência × 0,5 em 40–50% dos eventos), uma
-  deriva (fluorescência caindo até × 0,5 ao longo dos últimos 30%) e um entupimento (os eventos
-  de 60–63% chegando dez vezes mais devagar, sem mudar o sinal).
+- Um arquivo real limpo (14Case5: o nosso remove 0,4%, antes e depois, e o PeacoQC 0,8%) com um
+  defeito escrito nos valores brutos, três vezes: um degrau (fluorescência × 0,5 em 40–50% dos
+  eventos), uma deriva (fluorescência caindo até × 0,5 ao longo dos últimos 30%) e um
+  entupimento (os eventos de 60–63% chegando dez vezes mais devagar, sem mudar o sinal).
 
 ### Onde o defeito é conhecido
 
 Percentual dos eventos do defeito que cada programa remove, e percentual dos outros eventos que
 ele remove junto:
 
-| Aquisição | Defeito (% dos eventos) | Nosso: do defeito | Nosso: do resto | PeacoQC: do defeito | PeacoQC: do resto | PeacoQC só MAD: do defeito | Só MAD: do resto | flowAI: do defeito | flowAI: do resto |
-|---|---|---|---|---|---|---|---|---|---|
-| Sintética, entupimento (vazão a 3% por 10 s) | 0,56 | 100 | 0,34 | 0 | 0 | 0 | 0 | 4,6 | 31,5 |
-| Sintética, degrau (PE × 1,8 nos últimos 15 s) | 24,9 | 100 | 0,16 | 100 | 1,16 | 100 | 2,28 | 28,9 | 11,1 |
-| Sintética, deriva (FITC até × 3 nos últimos 20 s) | 33,5 | 81,1 | 0 | 97,6 | 0 | 95,1 | 0 | 24,6 | 11,5 |
-| Sintética, queda (tudo × 0,5 por 2 s) | 3,5 | 98,9 | 0,05 | 100 | 1,99 | 100 | 5,86 | 4,1 | 14,3 |
-| 14Case5 + degrau | 10,0 | 99,2 | 0,55 | 99,2 | 1,36 | 100 | 3,52 | 3,7 | 7,8 |
-| 14Case5 + deriva | 30,0 | 53,5 | 0,57 | 74,2 | 0,58 | 74,2 | 0,58 | 82,3 | 7,2 |
-| 14Case5 + entupimento | 3,0 | 100 | 0,63 | 0 | 0,84 | 0 | 0,84 | 8,6 | 12,6 |
+| Aquisição | Defeito (% dos eventos) | Nosso antes: do defeito | Antes: do resto | Nosso depois: do defeito | Depois: do resto | PeacoQC: do defeito | PeacoQC: do resto | PeacoQC só MAD: do defeito | Só MAD: do resto | flowAI: do defeito | flowAI: do resto |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Sintética, entupimento (vazão a 3% por 10 s) | 0,56 | 100 | 0,34 | 100 | 0,34 | 0 | 0 | 0 | 0 | 4,6 | 31,5 |
+| Sintética, degrau (PE × 1,8 nos últimos 15 s) | 24,9 | 100 | 0,16 | 100 | 0,16 | 100 | 1,16 | 100 | 2,28 | 28,9 | 11,1 |
+| Sintética, deriva (FITC até × 3 nos últimos 20 s) | 33,5 | 81,1 | 0 | 97,3 | 0 | 97,6 | 0 | 95,1 | 0 | 24,6 | 11,5 |
+| Sintética, queda (tudo × 0,5 por 2 s) | 3,5 | 98,9 | 0,05 | 98,9 | 0,05 | 100 | 1,99 | 100 | 5,86 | 4,1 | 14,3 |
+| 14Case5 + degrau | 10,0 | 99,2 | 0,55 | 100 | 0,69 | 99,2 | 1,36 | 100 | 3,52 | 3,7 | 7,8 |
+| 14Case5 + deriva | 30,0 | 53,5 | 0,57 | 76,2 | 0,57 | 74,2 | 0,58 | 74,2 | 0,58 | 82,3 | 7,2 |
+| 14Case5 + entupimento | 3,0 | 100 | 0,63 | 100 | 0,63 | 0 | 0,84 | 0 | 0,84 | 8,6 | 12,6 |
 
-Na aquisição sintética limpa o nosso não remove nada, o PeacoQC remove 0,6% e o flowAI 13,2%.
+Na aquisição sintética limpa o nosso não remove nada, antes e depois; o PeacoQC remove 0,6% e o
+flowAI 13,2%.
 
-Sobreposição dos conjuntos removidos (Jaccard) entre o nosso e o PeacoQC: 0,97 no degrau
-sintético, 0,92 no degrau injetado, 0,83 e 0,72 nas derivas, 0,65 na queda, 0 e 0,10 nos
-entupimentos.
+Sobreposição dos conjuntos removidos (Jaccard) entre o nosso e o PeacoQC, antes → depois: 0,97 →
+0,97 no degrau sintético, 0,92 → 0,90 no degrau injetado, 0,83 → 1,00 na deriva sintética, 0,72
+→ 0,98 na injetada, 0,65 na queda, 0 e 0,10 nos entupimentos.
 
 ### Arquivos reais
 
 Os 32 juntos:
 
-| Programa | Nosso remove (% de todos os eventos) | Ele remove | Mediana por arquivo: nosso | Mediana: ele | Jaccard sobre todos os eventos | Do que o nosso remove, ele também remove (%) | Do que ele remove, o nosso também (%) | Arquivos: os dois abaixo de 1% | Os dois com 1% ou mais | Só o nosso com 1% ou mais | Só ele |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| PeacoQC | 1,37 | 5,13 | 0,40 | 2,48 | 0,19 | 75,3 | 20,1 | 8 | 10 | 3 | 11 |
-| PeacoQC só MAD | 1,37 | 4,60 | 0,40 | 2,09 | 0,21 | 75,3 | 22,5 | 8 | 10 | 3 | 11 |
-| flowAI | 1,37 | 11,97 | 0,40 | 7,02 | 0,08 | 73,6 | 8,4 | 0 | 13 | 0 | 19 |
+| Programa | Medida | Nosso remove (% de todos os eventos) | Ele remove | Mediana por arquivo: nosso | Mediana: ele | Jaccard sobre todos os eventos | Do que o nosso remove, ele também remove (%) | Do que ele remove, o nosso também (%) | Arquivos: os dois abaixo de 1% | Os dois com 1% ou mais | Só o nosso com 1% ou mais | Só ele |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| PeacoQC | antes | 1,37 | 5,13 | 0,40 | 2,48 | 0,19 | 75,3 | 20,1 | 8 | 10 | 3 | 11 |
+| PeacoQC | depois | 5,25 | 5,13 | 0,52 | 2,48 | 0,38 | 54,9 | 56,1 | 8 | 11 | 3 | 10 |
+| PeacoQC só MAD | antes | 1,37 | 4,60 | 0,40 | 2,09 | 0,21 | 75,3 | 22,5 | 8 | 10 | 3 | 11 |
+| PeacoQC só MAD | depois | 5,25 | 4,60 | 0,52 | 2,09 | 0,41 | 54,9 | 62,6 | 8 | 11 | 3 | 10 |
+| flowAI | antes | 1,37 | 11,97 | 0,40 | 7,02 | 0,08 | 73,6 | 8,4 | 0 | 13 | 0 | 19 |
+| flowAI | depois | 5,25 | 11,97 | 0,52 | 7,02 | 0,17 | 46,8 | 20,5 | 0 | 14 | 0 | 18 |
 
-Arquivo por arquivo (percentual dos eventos removido):
+Arquivo por arquivo (percentual dos eventos removido). A passada lenta mudou seis arquivos; os
+outros 26 têm exatamente os mesmos eventos removidos antes e depois.
 
-| Arquivo | Eventos | Nosso | Nosso: vazão | Nosso: sinal | PeacoQC | PeacoQC só MAD | flowAI | Jaccard nosso/PeacoQC | Jaccard nosso/flowAI |
-|---|---|---|---|---|---|---|---|---|---|
-| 14Case1 | 166.402 | 6,9 | 0,0 | 6,1 | 14,1 | 14,1 | 69,0 | 0,44 | 0,10 |
-| 14Case2 | 119.308 | 3,0 | 0,2 | 3,0 | 3,1 | 3,1 | 7,8 | 0,96 | 0,22 |
-| 14Case3 | 122.291 | 0,2 | 0,2 | 0,0 | 3,5 | 3,5 | 13,9 | 0,07 | 0,01 |
-| 14Case4 | 140.573 | 1,0 | 0,8 | 1,0 | 1,5 | 1,5 | 11,0 | 0,68 | 0,08 |
-| 14Case4` | 109.370 | 2,1 | 1,5 | 0,0 | 0,5 | 0,5 | 14,5 | 0,09 | 0,02 |
-| 14Case5 | 247.019 | 0,4 | 0,4 | 0,0 | 0,8 | 0,8 | 7,3 | 0,49 | 0,05 |
-| 14Ctrl1 | 240.680 | 1,1 | 0,5 | 0,8 | 13,8 | 13,8 | 6,6 | 0,06 | 0,13 |
-| 14Ctrl2 | 144.357 | 0,4 | 0,2 | 0,2 | 1,7 | 1,7 | 6,0 | 0,10 | 0,03 |
-| 14Ctrl3 | 217.920 | 0,4 | 0,4 | 0,0 | 0,0 | 0,0 | 7,3 | 0,00 | 0,05 |
-| 14Ctrl4 | 194.677 | 0,2 | 0,2 | 0,0 | 1,6 | 1,6 | 6,6 | 0,12 | 0,01 |
-| 14Ctrl5 | 13.816 | 7,7 | 2,3 | 4,3 | 2,3 | 2,3 | 4,9 | 0,30 | 0,03 |
-| 3Case1 | 26.242 | 4,6 | 0,0 | 4,6 | 3,8 | 3,8 | 14,3 | 0,83 | 0,24 |
-| 3Case2 | 44.511 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 6,0 | 1,00 | 0,00 |
-| 3Case3 | 42.226 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 6,1 | 1,00 | 0,00 |
-| 3Case4 | 39.048 | 0,8 | 0,4 | 0,8 | 0,1 | 0,1 | 7,5 | 0,00 | 0,10 |
-| 3Case5 | 48.068 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 4,7 | 1,00 | 0,00 |
-| 3Ctrl1 | 16.337 | 2,7 | 2,7 | 2,7 | 5,1 | 5,1 | 9,0 | 0,52 | 0,30 |
-| 3Ctrl2 | 24.263 | 0,0 | 0,0 | 0,0 | 16,5 | 16,5 | 5,3 | 0,00 | 0,00 |
-| 3Ctrl3 | 30.623 | 1,5 | 0,6 | 1,0 | 2,9 | 2,9 | 5,2 | 0,54 | 0,18 |
-| 3Ctrl4 | 20.043 | 0,0 | 0,0 | 0,0 | 4,0 | 4,0 | 5,1 | 0,00 | 0,00 |
-| 3Ctrl5 | 16.765 | 0,0 | 0,0 | 0,0 | 1,6 | 1,6 | 6,8 | 0,00 | 0,00 |
-| 7Case1 | 47.784 | 0,6 | 0,6 | 0,0 | 12,1 | 10,0 | 5,2 | 0,03 | 0,05 |
-| 7Case2 | 53.920 | 0,0 | 0,0 | 0,0 | 3,7 | 6,5 | 8,2 | 0,00 | 0,00 |
-| 7Case3 | 16.139 | 2,4 | 2,4 | 0,0 | 0,0 | 0,0 | 20,7 | 0,00 | 0,01 |
-| 7Case3` | 65.720 | 0,0 | 0,0 | 0,0 | 2,7 | 1,9 | 6,9 | 0,00 | 0,00 |
-| 7Case4 | 95.972 | 0,4 | 0,2 | 0,4 | 0,5 | 0,5 | 8,7 | 0,00 | 0,00 |
-| 7Case5 | 130.097 | 4,5 | 2,6 | 3,5 | 3,5 | 3,5 | 8,9 | 0,78 | 0,33 |
-| 7Ctrl1 | 27.207 | 0,0 | 0,0 | 0,0 | 8,1 | 8,1 | 29,5 | 0,00 | 0,00 |
-| 7Ctrl2 | 44.866 | 0,3 | 0,3 | 0,0 | 0,8 | 0,8 | 6,2 | 0,00 | 0,00 |
-| 7Ctrl3 | 40.307 | 2,6 | 0,4 | 2,2 | 0,0 | 0,0 | 5,1 | 0,00 | 0,08 |
-| 7Ctrl4 | 60.261 | 0,0 | 0,0 | 0,0 | 31,1 | 7,1 | 7,1 | 0,00 | 0,00 |
-| 7Ctrl5 | 103.643 | 1,0 | 0,8 | 0,2 | 19,4 | 19,4 | 6,8 | 0,05 | 0,08 |
+| Arquivo | Eventos | Nosso antes | Nosso depois | Depois: vazão | Depois: sinal | Depois: deriva | PeacoQC | PeacoQC só MAD | flowAI | Jaccard nosso/PeacoQC antes | Depois | Jaccard nosso/flowAI depois |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 14Case1 | 166.402 | 6,9 | 22,8 | 0,0 | 6,1 | 22,0 | 14,1 | 14,1 | 69,0 | 0,44 | 0,62 | 0,33 |
+| 14Case2 | 119.308 | 3,0 | 4,2 | 0,2 | 3,0 | 4,2 | 3,1 | 3,1 | 7,8 | 0,96 | 0,75 | 0,20 |
+| 14Case3 | 122.291 | 0,2 | 16,5 | 0,2 | 0,0 | 16,2 | 3,5 | 3,5 | 13,9 | 0,07 | 0,20 | 0,03 |
+| 14Case4 | 140.573 | 1,0 | 1,0 | 0,8 | 1,0 | 0,0 | 1,5 | 1,5 | 11,0 | 0,68 | 0,68 | 0,08 |
+| 14Case4` | 109.370 | 2,1 | 11,3 | 1,5 | 0,0 | 9,4 | 0,5 | 0,5 | 14,5 | 0,09 | 0,04 | 0,18 |
+| 14Case5 | 247.019 | 0,4 | 0,4 | 0,4 | 0,0 | 0,0 | 0,8 | 0,8 | 7,3 | 0,49 | 0,49 | 0,05 |
+| 14Ctrl1 | 240.680 | 1,1 | 7,1 | 0,5 | 0,8 | 6,6 | 13,8 | 13,8 | 6,6 | 0,06 | 0,49 | 0,21 |
+| 14Ctrl2 | 144.357 | 0,4 | 0,4 | 0,2 | 0,2 | 0,0 | 1,7 | 1,7 | 6,0 | 0,10 | 0,10 | 0,03 |
+| 14Ctrl3 | 217.920 | 0,4 | 0,4 | 0,4 | 0,0 | 0,0 | 0,0 | 0,0 | 7,3 | 0,00 | 0,00 | 0,05 |
+| 14Ctrl4 | 194.677 | 0,2 | 0,2 | 0,2 | 0,0 | 0,0 | 1,6 | 1,6 | 6,6 | 0,12 | 0,12 | 0,01 |
+| 14Ctrl5 | 13.816 | 7,7 | 7,7 | 2,3 | 4,3 | 0,0 | 2,3 | 2,3 | 4,9 | 0,30 | 0,30 | 0,03 |
+| 3Case1 | 26.242 | 4,6 | 4,6 | 0,0 | 4,6 | 0,0 | 3,8 | 3,8 | 14,3 | 0,83 | 0,83 | 0,24 |
+| 3Case2 | 44.511 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 6,0 | 1,00 | 1,00 | 0,00 |
+| 3Case3 | 42.226 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 6,1 | 1,00 | 1,00 | 0,00 |
+| 3Case4 | 39.048 | 0,8 | 0,8 | 0,4 | 0,8 | 0,0 | 0,1 | 0,1 | 7,5 | 0,00 | 0,00 | 0,10 |
+| 3Case5 | 48.068 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 4,7 | 1,00 | 1,00 | 0,00 |
+| 3Ctrl1 | 16.337 | 2,7 | 2,7 | 2,7 | 2,7 | 0,0 | 5,1 | 5,1 | 9,0 | 0,52 | 0,52 | 0,30 |
+| 3Ctrl2 | 24.263 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 16,5 | 16,5 | 5,3 | 0,00 | 0,00 | 0,00 |
+| 3Ctrl3 | 30.623 | 1,5 | 1,5 | 0,6 | 1,0 | 0,0 | 2,9 | 2,9 | 5,2 | 0,54 | 0,54 | 0,18 |
+| 3Ctrl4 | 20.043 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 4,0 | 4,0 | 5,1 | 0,00 | 0,00 | 0,00 |
+| 3Ctrl5 | 16.765 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 1,6 | 1,6 | 6,8 | 0,00 | 0,00 | 0,00 |
+| 7Case1 | 47.784 | 0,6 | 0,6 | 0,6 | 0,0 | 0,0 | 12,1 | 10,0 | 5,2 | 0,03 | 0,03 | 0,05 |
+| 7Case2 | 53.920 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 3,7 | 6,5 | 8,2 | 0,00 | 0,00 | 0,00 |
+| 7Case3 | 16.139 | 2,4 | 2,4 | 2,4 | 0,0 | 0,0 | 0,0 | 0,0 | 20,7 | 0,00 | 0,00 | 0,01 |
+| 7Case3` | 65.720 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 2,7 | 1,9 | 6,9 | 0,00 | 0,00 | 0,00 |
+| 7Case4 | 95.972 | 0,4 | 0,4 | 0,2 | 0,4 | 0,0 | 0,5 | 0,5 | 8,7 | 0,00 | 0,00 | 0,00 |
+| 7Case5 | 130.097 | 4,5 | 4,5 | 2,6 | 3,5 | 2,9 | 3,5 | 3,5 | 8,9 | 0,78 | 0,78 | 0,33 |
+| 7Ctrl1 | 27.207 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 8,1 | 8,1 | 29,5 | 0,00 | 0,00 | 0,00 |
+| 7Ctrl2 | 44.866 | 0,3 | 0,3 | 0,3 | 0,0 | 0,0 | 0,8 | 0,8 | 6,2 | 0,00 | 0,00 | 0,00 |
+| 7Ctrl3 | 40.307 | 2,6 | 2,6 | 0,4 | 2,2 | 0,0 | 0,0 | 0,0 | 5,1 | 0,00 | 0,00 | 0,08 |
+| 7Ctrl4 | 60.261 | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | 31,1 | 7,1 | 7,1 | 0,00 | 0,00 | 0,00 |
+| 7Ctrl5 | 103.643 | 1,0 | 32,7 | 0,8 | 0,2 | 32,7 | 19,4 | 19,4 | 6,8 | 0,05 | 0,58 | 0,13 |
 
-(Jaccard 1,00 onde nenhum dos dois remove nada. Um bin achado pelas duas checagens do nosso
-conta nas duas colunas.)
+(Jaccard 1,00 onde nenhum dos dois remove nada. Um bin achado por mais de uma checagem do nosso
+conta em cada coluna.)
+
+### O que mudou em `qc.py`, e por que assim
+
+A primeira medida mostrou a falha: o nosso julgava a mediana corrida de 5 bins contra a mediana
+do arquivo, com um limite em MADs dessa mesma curva. Um deslocamento de 0,3 do desvio dos eventos
+fica dentro do ruído de um bin de 150 a 500 eventos, e a mediana corrida de 5 bins não o tira de
+lá. Em 7Ctrl5 o primeiro terço do arquivo tem quatro canais deslocados de 0,25 a 0,35 do desvio
+e o nosso removia 1,0%.
+
+O que foi posto (`drift`, padrão 0,25; 0 desliga):
+
+1. As mesmas medianas de bin passam por uma mediana corrida longa: a janela tem 10.000 eventos,
+   e nunca mais que um quarto dos bins.
+2. O nível de referência é o do trecho estável mais longo: o meio da faixa de valores mais
+   estreita que contém metade dos bins. Não é a mediana.
+3. Um trecho é deriva quando a curva lenta se afasta desse nível mais que `mad` MADs da própria
+   curva lenta *e* mais que `drift` vezes o desvio dos eventos do parâmetro.
+4. Do trecho achado remove-se o afastamento inteiro, desde onde a curva lenta está a 0,7 do
+   limite, e não só a parte além dele.
+
+Cada uma dessas escolhas foi medida contra a alternativa, nos mesmos 40 casos (percentual dos
+eventos removido; "reais" é o total dos 32 arquivos):
+
+| Variante | Reais | 7Ctrl5 | 14Case1 | 3Ctrl2 | 7Case1 | 7Ctrl4 | Deriva sintética (do defeito) | Deriva injetada (do defeito) |
+|---|---|---|---|---|---|---|---|---|
+| Antes (sem passada lenta) | 1,37 | 1,0 | 6,9 | 0 | 0,6 | 0 | 81,1 | 53,5 |
+| **Como ficou** | 5,25 | 32,7 | 22,8 | 0 | 0,6 | 0 | 97,3 | 76,2 |
+| Nível pela mediana do arquivo | 3,85 | 18,5 | 22,2 | 0 | 0,6 | 0 | 95,1 | 75,5 |
+| Sem o piso (`drift = 0,001`) | 10,44 | 39,6 | 22,8 | 25,8 | 24,7 | 17,2 | 100 | 86,9 |
+| Sem o MAD: limite fixo de 0,25 do desvio | 24,17 | 32,7 | 100 | 0 | 0,6 | 0 | 97,3 | 100 |
+| Sem o MAD: limite fixo de 0,4 do desvio | 12,30 | 19,5 | 80,6 | 0 | 0,6 | 0 | 94,4 | 66,1 |
+| Só a parte além do limite | 4,04 | 20,5 | 20,8 | 0 | 0,6 | 0 | 94,4 | 65,5 |
+| Desde 0,5 do limite | 5,95 | 33,3 | 26,2 | 0 | 0,6 | 0 | 100 | 87,5 |
+| Janela de 2.500 eventos | 4,11 | 17,5 | 22,8 | 0 | 0,6 | 0 | 94,4 | 61,5 |
+| Janela de 5.000 eventos | 4,74 | 24,3 | 24,2 | 0 | 0,6 | 0 | 95,1 | 73,5 |
+| Janela de 20.000 eventos | 5,94 | 26,9 | 25,0 | 0 | 0,6 | 0 | 96,6 | 76,2 |
+| `drift = 0,15` | 6,31 | 32,7 | 22,8 | 0 | 24,4 | 0 | 100 | 78,2 |
+| `drift = 0,4` | 3,40 | 19,5 | 22,6 | 0 | 0,6 | 0 | 94,4 | 62,8 |
+| `mad = 5` (as duas passadas) | 6,14 | 33,0 | 27,0 | 1,2 | 0,9 | 0,2 | 97,3 | 76,2 |
+| `mad = 8` (as duas passadas) | 2,99 | 21,7 | 20,2 | 0 | 0 | 0 | 96,6 | 73,5 |
+| PeacoQC | 5,13 | 19,4 | 14,1 | 16,5 | 12,1 | 31,1 | 97,6 | 74,2 |
+
+O que cada linha diz:
+
+- *Nível pela mediana*: a mediana é puxada para o trecho deslocado. De 7Ctrl5 saem 18,5% em vez
+  de 32,7%, e o ressalto de 14Case3 (16,5%) não é visto.
+- *Sem o piso* (`drift` quase zero): é o critério do PeacoQC, MADs de uma curva alisada e mais
+  nada. Um arquivo cuja curva quase não se mexe tem um MAD minúsculo e perde os bins onde ela
+  mais se mexeu: 3Ctrl2, 7Case1 e 7Ctrl4 perdem 25,8%, 24,7% e 17,2%, como no PeacoQC, sem que nenhuma
+  mediana de canal se desloque mais de 0,05 do desvio. O piso é o que impede isso.
+- *Sem o MAD* (só o piso, como limite fixo): as aquisições reais oscilam mais que 0,25 do desvio
+  ao longo do arquivo todo, e um limite fixo corta as que oscilam: 24% de todos os eventos
+  reais, 14Case1 e 14Case3 inteiros, e um terço do resto do arquivo com o degrau injetado. Com
+  0,4, ainda 12%. O MAD da curva lenta é o limite do próprio arquivo.
+- *Só a parte além do limite* (sem o item 4): de uma rampa só sai o trecho final, e de 7Ctrl5
+  saem 20,5% quando o deslocamento dura um terço do arquivo.
+- *Desde 0,5 do limite*: pega mais da deriva injetada, e começa a remover antes do defeito (na
+  deriva sintética, 1,3% do resto; com 0,7, nada).
+- *Janela*: menor, vê menos das derivas; maior, tira mais dos arquivos reais sem achar mais do
+  defeito conhecido (com 20.000, 34% de 14Case3).
+- *`drift` e `mad`*: são os dois limites que estão no diálogo. Com `drift = 0,15` 7Case1 perde
+  24,4%: o piso de 0,25 tem folga para os outros 31 arquivos, não para esse.
+
+Uma variante foi medida só no protótipo, antes do item 4: o desvio dos eventos *da população*,
+e não do parâmetro, como unidade do piso. As populações empilhadas no topo da escala têm desvio
+quase nulo, qualquer movimento delas passa do piso, e 3Ctrl2 perdia 8,7%.
+
+Em simulação, com as aquisições de `tests/test_qc.py` (percentual do defeito removido / do
+resto, média de 10 sementes; 60 s a 1.000 eventos/s):
+
+| Defeito | Antes | Depois |
+|---|---|---|
+| FSC mais alto nos primeiros 20%, em 0,20 do desvio | 0 / 0 | 0 / 0 |
+| idem, 0,25 | 0 / 0 | 56,0 / 0 |
+| idem, 0,30 | 0 / 0 | 97,9 / 0,08 |
+| idem, 0,40 | 8,8 / 0 | 99,8 / 0,40 |
+| idem, 0,50 | 45,8 / 0 | 100 / 0,45 |
+| idem, 0,75 | 99,6 / 0,02 | 100 / 0,42 |
+| Só a população mais brilhante de FITC (40% das células) × 1,10 nos primeiros 20% | 0 / 0 | 95,5 / 0,39 |
+| idem, × 1,15 | 0,1 / 0 | 99,9 / 1,58 |
+| idem, × 1,30 | 92,5 / 0,01 | 100 / 1,92 |
+| Rampa em FSC nos últimos 30%, até 0,5 do desvio | 3,0 / 0 | 64,6 / 0 |
+| idem, até 1 desvio | 42,6 / 0 | 82,2 / 0 |
+| idem, até 2 desvios | 68,7 / 0 | 90,3 / 0 |
+| FSC mais alto em 0,3 do desvio durante 5% do arquivo | 13,5 / 0 | 13,5 / 0 |
+| idem, 0,5 | 92,5 / 0,02 | 92,5 / 0,02 |
+
+Em 520 aquisições limpas simuladas (de 15 a 250 s, de 300 a 1.000 eventos/s, de 10% a 48% das
+células na população brilhante) a passada lenta não removeu nenhum evento: as 6 que perdem algo
+(0,4 a 0,75 por mil dos eventos do seu grupo) perdem o mesmo antes e depois. Uma senoide em FSC
+ao longo do arquivo todo (1,5 período, até 0,8 do desvio) não tira nada.
 
 ### Onde diferem e por quê
 
-1. **Desvios lentos e moderados: o PeacoQC acha, o nosso não. É a discrepância principal.** Nos
-   arquivos reais o PeacoQC remove 5,1% dos eventos e o nosso 1,4%; três quartos do que o nosso
-   remove o PeacoQC também remove, mas só um quinto do que o PeacoQC remove o nosso remove. Dois
-   casos foram abertos:
-   - *7Ctrl5*: o PeacoQC remove os primeiros 17% do arquivo (19,4% ao todo) e o nosso 1,0%.
-     Nesse trecho a mediana de PerCP-Cy5.5 está deslocada em 0,35 do desvio dos eventos, e as de
-     PE, APC e BV421 em 0,25 a 0,30, sempre no mesmo sentido; isso é 3 a 3,7 vezes a dispersão
-     das medianas de bins de 500 eventos no resto do arquivo.
-   - *14Case1*: o PeacoQC remove 14,1% e o nosso 6,9%. No que só o PeacoQC remove, a mediana de
-     APC está deslocada em 0,67 do desvio dos eventos e as de FSC e SSC em 0,3 a 0,4.
+1. **Desvios lentos e moderados: era a discrepância principal, e fechou.** Nos arquivos reais o
+   nosso remove agora 5,25% dos eventos (antes 1,37%) e o PeacoQC 5,13%; mas não são os mesmos
+   eventos: do que cada um remove, o outro remove pouco mais da metade (55% e 56%; antes, 75% e
+   20%), pelos itens 2 e 4. Os dois casos abertos na primeira medida:
+   - *7Ctrl5*: a mediana de PerCP-Cy5.5 está deslocada em 0,35 do desvio dos eventos, e as de
+     PE, APC e BV421 em 0,25 a 0,30, no começo do arquivo (a primeira medida olhou os 17% que o
+     PeacoQC remove; a curva lenta mostra que vai até um terço). O PeacoQC remove os primeiros
+     17% (19,4% ao todo); o nosso removia 1,0% e remove agora os primeiros 31% do tempo (32,7%
+     dos eventos), que é até onde o deslocamento vai (o degrau está em 33% dos bins).
+   - *14Case1*: o PeacoQC remove 14,1%; o nosso removia 6,9% e remove agora 22,8%, de 57% a 95%
+     do tempo: o trecho em que APC, FSC e SSC afundam.
 
-   A deriva injetada confirma: o nosso removeu 53% do trecho e o PeacoQC 74%; na sintética, 81%
-   contra 98%. A causa provável está em duas diferenças de construção, lidas no código do
-   PeacoQC 1.22.0:
-   - o PeacoQC alisa cada trajetória com `smooth.spline(spar = 0.5)` e calcula a mediana e o MAD
-     *da curva alisada*; o nosso usa uma mediana corrida de 5 bins, que deixa quase todo o ruído
-     de bin para bin no MAD. Seis MADs de uma curva bem alisada é uma faixa muito mais estreita;
-   - os bins do PeacoQC são maiores: `ceiling(n / 500 × 2)` arredondado para cima em múltiplos
-     de 500, com sobreposição de metade. Deram 500 ou 1.000 eventos nestes arquivos, onde os
-     nossos têm de 150 a 495. O comentário em `qc.py` diz que 150 e 500 são "os limites do
-     PeacoQC, citados de memória": 150 é o mínimo dele, mas na prática o bin dele nunca tem
-     menos de 500.
+   Nos eventos que só a passada lenta remove, as medianas estão deslocadas, em relação aos
+   eventos mantidos, nesta fração do desvio dos eventos do canal:
 
-   Não foi testado se alisar mais ou aumentar os bins no nosso fecharia a diferença.
-2. **Remoções grandes do PeacoQC sem deslocamento visível das medianas.** Em 3Ctrl2 (16,5%),
-   7Case1 (12,1%) e 7Ctrl4 (31,1%) o nosso remove de 0 a 0,6%. Nos eventos que o PeacoQC remove,
-   nenhuma mediana de canal difere do resto em mais de 0,05 do desvio dos eventos (menos de 0,6
-   da dispersão das medianas dos bins). O próprio PeacoQC atribui essas remoções à posição de
-   picos de densidade (o segundo pico de PE em 7Ctrl4; o pico de PE-Cy7 e o segundo de BV421 em
-   3Ctrl2) e, em 7Ctrl4 e 7Case1, à árvore de isolamento. O PeacoQC segue a moda de cada pico e o
-   nosso a mediana de cada população. O nosso não segue populações com menos de 20 eventos
-   por bin e não tem árvore de isolamento. Sem a verdade não dá para dizer quem tem razão; a
-   medida diz só que o canal inteiro não se moveu.
+   | Arquivo | Nosso antes → depois (%) | Canais mais deslocados |
+   |---|---|---|
+   | 14Case1 | 6,9 → 22,8 | APC-Cy7 1,23; PE-Cy7 0,69; APC 0,59; SSC-H 0,43 |
+   | 14Case2 | 3,0 → 4,2 | PE 0,36; FITC 0,26 |
+   | 14Case3 | 0,2 → 16,5 | FITC 0,29; SSC-H 0,29; SSC-A 0,27; BV421 0,22 |
+   | 14Case4` | 2,1 → 11,3 | SSC-A 0,44; PE 0,33; PerCP-Cy5.5 0,31; SSC-H 0,31 |
+   | 14Ctrl1 | 1,1 → 7,1 | FITC 0,27; PE 0,17; SSC-H 0,16 |
+   | 7Ctrl5 | 1,0 → 32,7 | PerCP-Cy5.5 0,30; BV421 0,30; PE 0,29; BV510 0,26 |
+
+   A causa provável apontada na primeira medida era o alisamento (o PeacoQC calcula a mediana e o
+   MAD de uma curva alisada por `smooth.spline(spar = 0.5)`) e o tamanho dos bins (500 ou 1.000
+   eventos, com sobreposição de metade, contra 150 a 495 nos nossos). O alisamento foi testado e
+   era isso: uma janela longa com o MAD da curva alisada fecha a diferença. Os bins não foram
+   aumentados. O comentário em `qc.py` que dizia que 150 e 500 eram "os limites do PeacoQC" foi
+   corrigido: 150 é só o piso dele, nunca atingido, e o bin dele tem o dobro de 1/500 do arquivo
+   arredondado para cima em múltiplos de 500.
+2. **Remoções grandes do PeacoQC sem deslocamento visível das medianas: o nosso continua sem
+   fazê-las.** Em 3Ctrl2 (16,5%), 7Case1 (12,1%) e 7Ctrl4 (31,1%) o nosso remove 0, 0,6% e 0,
+   antes e depois. Nos eventos que o PeacoQC remove, nenhuma mediana de canal difere do resto em
+   mais de 0,05 do desvio dos eventos (menos de 0,6 da dispersão das medianas dos bins). O
+   próprio PeacoQC atribui essas remoções à posição de picos de densidade (o segundo pico de PE
+   em 7Ctrl4; o pico de PE-Cy7 e o segundo de BV421 em 3Ctrl2) e, em 7Ctrl4 e 7Case1, à árvore de
+   isolamento. O PeacoQC segue a moda de cada pico e o nosso a mediana de cada população. O
+   nosso não segue populações com menos de 20 eventos por bin e não tem árvore de isolamento.
+   Sem a verdade não dá para dizer quem tem razão; a medida diz só que o canal inteiro não se
+   moveu. A passada lenta sem o piso faz o mesmo que o PeacoQC nesses três arquivos (tabela
+   acima); com o piso, não.
 3. **Vazão.** O PeacoQC não a examina: não removeu nada dos dois entupimentos, que o nosso
    removeu inteiros. O flowAI examina, de modo muito mais estrito que o nosso: marcou de 4,7% a
    9% dos eventos em 25 dos 32 arquivos reais e mais nos outros (até 69%). Em 3Case2, o único
    aberto, os 5,994% vêm todos da checagem de vazão, em dezenas de trechos curtos. E não acertou os entupimentos (4,6% e 8,6% do defeito, removendo
    31% e 13% do resto). O nosso só reage a uma vazão fora de um fator 1,5 da habitual ou a 6
    MADs.
-4. **O nosso remove e o PeacoQC não** em poucos arquivos: 14Ctrl5 (7,7% contra 2,3%), 7Ctrl3
-   (2,6% contra 0), e, pela vazão, 7Case3 (2,4%) e 14Case4` (2,1% contra 0,5%). 14Ctrl5 é o menor
-   arquivo (13,8 mil eventos, bins de 150 no nosso e de 500 no PeacoQC, que nele nem roda a
-   árvore de isolamento).
+4. **O nosso remove e o PeacoQC não, ou remove menos.** Já era assim em 14Ctrl5 (7,7% contra
+   2,3%), 7Ctrl3 (2,6% contra 0) e, pela vazão, 7Case3 (2,4%) e 14Case4` (2,1% contra 0,5%). Com a
+   passada lenta: 14Case3 (16,5% contra 3,5%: um ressalto de SSC de 41% a 58% do tempo, do qual o
+   PeacoQC remove o meio), 14Case4` (11,3% contra 0,5%: PE e PerCP-Cy5.5 mais altos nos
+   primeiros 8%), e 7Ctrl5 e 14Case1, onde o nosso remove o afastamento inteiro e o PeacoQC a
+   parte mais afastada. Em 14Ctrl1 é o contrário: 7,1% contra 13,8% (o PeacoQC remove os
+   primeiros 11%, o nosso os primeiros 7%).
 5. **Falsos alarmes.** Onde o defeito é conhecido, o nosso remove menos do que não devia: de 0 a
-   0,6% do resto, contra 0 a 2,0% do PeacoQC inteiro e até 5,9% do passo MAD sozinho.
+   0,7% do resto (antes, de 0 a 0,6%), contra 0 a 2,0% do PeacoQC inteiro e até 5,9% do passo
+   MAD sozinho.
 6. **O flowAI quase não viu os degraus e a queda** (3,7% a 29% do defeito) e removeu de 8% a 14%
    do resto. Ele trabalha nos valores brutos, sem transformação; é provável que isso explique o
    degrau na fluorescência, mas não foi investigado. Para o flowAI esta comparação é só um
    retrato do uso padrão.
 
-Resumo para quem mexe em `qc.py`: nos defeitos nítidos o nosso está igual ou melhor que o
-PeacoQC e tem a checagem de vazão que ele não tem; a sensibilidade a deslocamentos sustentados de
-0,3 a 0,7 desvio é menor, e dois arquivos reais mostram que isso acontece em dados de verdade.
+### O que piorou, e o que continua sem ser visto
+
+- No degrau injetado o nosso remove 0,69% do resto, onde removia 0,55%.
+- Dois arquivos reais perdem mais de um quinto (7Ctrl5 32,7%, 14Case1 22,8%) e dois mais de um
+  décimo (14Case3, 14Case4`). Em todos há deslocamento medido (tabela do item 1), mas não há a
+  verdade: ninguém sabe se esses eventos estavam errados. O diálogo avisa quando passa de um
+  quinto, e os limites estão nele para mudar.
+- Um defeito moderado e curto continua invisível: a passada rápida não tem sensibilidade e a
+  lenta não tem resolução. Em simulação, 0,3 do desvio durante 5% do arquivo: 13,5% do
+  defeito removido, antes e depois.
+- Uma deriva que atravessa o arquivo inteiro sem trecho estável não é removida (em simulação,
+  uma senoide de até 0,8 do desvio: nada). É de propósito: não há nível de que se afastar.
+- Quando mais da metade do arquivo está deslocada, o que sai é a outra parte (em simulação, 60%
+  deslocado: saem os outros 40%).
+- O resultado depende da escala em que o parâmetro é julgado. 14Case1 com as escalas do workspace
+  do FlowJo dá os 22,8% da tabela; aberto sem o workspace, nas escalas padrão do programa, dá
+  13,0%.
+
+Resumo: nos defeitos nítidos o nosso continua igual ou melhor que o PeacoQC e tem a checagem de
+vazão que ele não tem; nos desvios sustentados de 0,3 a 0,7 desvio, que eram a falha, está agora
+no nível do PeacoQC (97,3% contra 97,6% e 76,2% contra 74,2% do defeito conhecido), sem as
+remoções dele em arquivos cujas medianas não se movem.
 
 ---
 

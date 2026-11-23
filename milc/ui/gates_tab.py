@@ -872,15 +872,16 @@ class GatesTab(QtWidgets.QWidget):
 
     # --- quality of the acquisition ------------------------------------------------
 
-    def check_quality(self):
+    def check_quality(self, **settings):
         """What `qc.check` finds in the sample being looked at."""
-        return self.session.quality(self.entry)
+        return self.session.quality(self.entry, **settings)
 
-    def apply_quality(self, found: list) -> None:
+    def apply_quality(self, found: list, settings: dict | None = None) -> None:
         """Remove from each sample its own bad stretches of time —
         (entry, intervals) pairs — as a first population every gate of
-        every sample is then under."""
-        self.session.apply_quality(found)
+        every sample is then under. `settings`: the limits they were
+        found with."""
+        self.session.apply_quality(found, settings)
         self._quality_changed()
 
     def remove_quality(self) -> None:

@@ -7,13 +7,19 @@ PeacoQC look for them — in the order of acquisition, a fixed number of
 events at a time — and what is found is a list of time intervals, so that
 it can be a gate like any other (`gating.TimeGate`).
 
-The method, in two sentences. The events are put in the order of Time and
-cut into bins of the same number of events; a bin is suspect when its flow
-rate is far from the acquisition's usual one, or when the running median
-of the bin medians of any population of any parameter lies more than `mad`
-MADs from that population's median over the whole acquisition. Suspect
-bins are removed, and so is a stretch of fewer than `consecutive` good
-bins between two removed ones.
+The method. The events are put in the order of Time and cut into bins of
+the same number of events. A bin is suspect when
+
+- its flow rate is far from the acquisition's usual one;
+- the running median, over five bins, of the bin medians of any population
+  of any parameter lies more than `mad` MADs from that population's median
+  over the whole acquisition (the signal: steps, bubbles, anything abrupt);
+- or the running median of the same bin medians over a long window lies
+  far from the level the population keeps for longest (the drift: a
+  moderate shift that lasts).
+
+Suspect bins are removed, and so is a stretch of fewer than `consecutive`
+good bins between two removed ones.
 
 What follows from that:
 
@@ -24,12 +30,31 @@ What follows from that:
   population to the other with the bin's share of each, and a quarter of
   a clean file was removed that way (two populations of 48 and 52%).
   How many cells a population has is not judged, only where it lies.
-- The reference is flat: what most of the acquisition looked like. A step
-  and a slow drift are both found, the drift from where it has gone
-  further than the limit — and both only while less than half of the
-  acquisition is affected. With more, the bad part is the reference.
-- The running median (five bins) is what keeps one or two noisy bins among
-  good ones: they do not move it. A defect has to last three bins.
+- The reference of the signal is flat: what most of the acquisition looked
+  like. The running median (five bins) is what keeps one or two noisy bins
+  among good ones: they do not move it. A defect has to last three bins.
+- The drift is what five bins cannot show. A shift of a third of a
+  population's spread is within the noise of a bin of 150 to 500 events,
+  and plain over 10,000: the window of the slow pass (never more than a
+  quarter of the bins). Its reference is the level of the longest stable
+  stretch — the middle of the narrowest range of values that holds half of
+  the bins — and not the median, which a shift over a third of the file
+  pulls towards itself (by the median, a real file whose shift lasts a
+  third of it lost 18%). A stretch is a drift when the slow level goes
+  further from that level than both `mad` MADs of the slow level itself
+  and `drift` times the spread of the parameter's events. The first limit
+  is the file's own: an acquisition that wanders all along has a wide one,
+  and loses nothing. The second keeps a file whose level hardly moves from
+  losing the bins where it moved most: without it, a quarter of two real
+  files and a sixth of a third was removed, as PeacoQC removes it, where
+  no parameter's median moves by 0.05 of its spread. What is removed of a
+  drift is all of the departure, from where the slow level is seven tenths
+  of the way to the limit: the part beyond the limit alone was a fifth of
+  that real file in which the shift lasts a third.
+- Either way a defect is found only while less than half of the
+  acquisition is affected. With more, the bad part is the reference. And
+  a slow ramp is found from where it nears the limit, not from where it
+  began.
 - The flow rate is not smoothed. A clog holds few events and therefore few
   bins, however long it lasts, and its bins are removed on their own.
 - A population too small to give a median in most bins (fewer than 20
@@ -37,20 +62,24 @@ What follows from that:
   it is not seen. One that is followed and then missing from a bin is
   suspect there.
 
-How this differs from the programs it takes after — neither was run beside
-it, so nothing here is claimed to agree with them. PeacoQC finds the
-density peaks of each parameter in every bin and groups them into
-trajectories, where this cuts the parameter once for the whole file; it
-adds an isolation tree, and its bins overlap. flowAI judges the flow rate
-in bins of time after removing its trend, finds the signal's changes by
-changepoint detection on the bin medians and keeps the longest stable
-stretch, and has a third check, of the dynamic range. None of that is
-here.
+How this differs from the programs it takes after (it was run beside both:
+`docs/comparacao.md`, section 3). PeacoQC finds the density peaks of each
+parameter in every bin and groups them into trajectories, where this cuts
+the parameter once for the whole file; it judges one trajectory, smoothed
+by a spline, with the median and the MAD of the smoothed curve, where this
+has two passes and a floor under the second; it adds an isolation tree, its
+bins overlap by half, and it does not look at the flow rate. flowAI judges
+the flow rate in bins of time after removing its trend, finds the signal's
+changes by changepoint detection on the bin medians and keeps the longest
+stable stretch, and has a third check, of the dynamic range.
 
-The defaults: `mad` 6 and `consecutive` 5 are PeacoQC's. The bins hold
-150 events or more and are at most 500, also PeacoQC's limits, quoted from
-memory of its manual. Measured on synthetic acquisitions (see
-`tests/test_qc.py`), not on real ones with known defects.
+The defaults: `mad` 6 and `consecutive` 5 are PeacoQC's. The bins are not:
+here they hold 1/500 of the file and at least 150 events, so 150 to 500
+for files of up to 250,000 events; PeacoQC's hold twice 1/500 of the file
+rounded up to the next 500 (150 is only its floor, never reached), so 500
+or 1,000 for the same files. `drift` 0.25 and the window were chosen on
+the 32 real files and the simulated defects of that comparison, not from
+a principle.
 """
 
 from __future__ import annotations
@@ -84,9 +113,18 @@ FOLLOWED, FEW = 20, 5
 #: rise above the valley beside it, as a share of the tallest
 GRID, BLUR, PROMINENCE = 64, 1.5, 0.15
 
-RATE, SIGNAL, ISLANDS = "flow rate", "signal", "islands"
+#: the slow pass: the events its running median is taken over, and the
+#: share of the bins that may be at most
+SLOW_EVENTS, SLOW_SHARE = 10000, 0.25
+#: a drift, once found, is taken from where the slow level is this share
+#: of the way to the limit
+CARRY = 0.7
+
+RATE, SIGNAL, DRIFT, ISLANDS = "flow rate", "signal", "drift", "islands"
 #: the population quality control makes, above every other
 POPULATION = "Clean"
+#: the default of `check`'s `drift`
+DRIFT_LIMIT = 0.25
 
 
 @dataclass
@@ -109,6 +147,14 @@ class Bins:
     bad_rate: np.ndarray
     #: bins x populations
     bad_signal: np.ndarray
+    #: bins x populations: the running median over `window` bins, which
+    #: the drift is judged on
+    slow: np.ndarray
+    window: int
+    #: populations x 2: how far `slow` may go from the stable level
+    slow_limits: np.ndarray
+    #: bins x populations
+    bad_drift: np.ndarray
     #: what is removed in the end, the islands included
     bad: np.ndarray
 
@@ -121,8 +167,8 @@ class Result:
     keep: np.ndarray = field(repr=False)
     #: (first, last) Time of every stretch to remove, in the file's units
     intervals: list[tuple[float, float]] = field(default_factory=list)
-    #: events in the bins each check found: RATE, SIGNAL, ISLANDS. A bin
-    #: found by two checks is counted by both.
+    #: events in the bins each check found: RATE, SIGNAL, DRIFT, ISLANDS.
+    #: A bin found by two checks is counted by both.
     counts: dict[str, int] = field(default_factory=dict)
     #: share of the events removed
     removed: float = 0.0
@@ -136,6 +182,9 @@ class Result:
     scales: list = field(default_factory=list, repr=False)
     #: the parameters with a suspect population anywhere, the worst first
     blamed: list[str] = field(default_factory=list)
+    #: what found each stretch of `intervals`: RATE, SIGNAL and DRIFT, as
+    #: many as found a bin of it
+    found: list[list[str]] = field(default_factory=list)
     bins: Bins | None = field(default=None, repr=False)
 
     def gate(self, dim: str) -> TimeGate:
@@ -177,6 +226,11 @@ def _spread(x: np.ndarray) -> float:
     return float(1.4826 * np.median(away) or 1.2533 * away.mean())
 
 
+def _spread_about(x: np.ndarray, centre: float) -> float:
+    """The MAD about a centre that is given, scaled to a standard deviation."""
+    return float(1.4826 * np.median(np.abs(x[np.isfinite(x)] - centre)))
+
+
 def _valleys(v: np.ndarray) -> np.ndarray:
     """Where a parameter's populations part: the lowest point between
     every two peaks of its histogram that stand clear of each other.
@@ -210,6 +264,17 @@ def _follow(v: np.ndarray, edges: np.ndarray) -> list[np.ndarray]:
     return out
 
 
+def _level(slow: np.ndarray) -> float:
+    """Where a population stays for longest: the middle of the narrowest
+    range of values that holds half of the bins. Not the median of them
+    all, which a drift over a third of the acquisition pulls a third of
+    the way towards itself."""
+    v = np.sort(slow[np.isfinite(slow)])
+    half = (len(v) + 1) // 2
+    first = int(np.argmin(v[half - 1:] - v[:len(v) - half + 1]))
+    return float(np.median(v[first:first + half]))
+
+
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     """(first, one past the last) of every run of True."""
     edges = np.flatnonzero(np.diff(np.concatenate(([0], mask.astype(np.int8), [0]))))
@@ -227,7 +292,7 @@ def _with_islands(flagged: np.ndarray, consecutive: int) -> np.ndarray:
 
 def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
           scales: list | None = None, mad: float = 6.0, consecutive: int = 5,
-          events_per_bin: int | None = None) -> Result:
+          events_per_bin: int | None = None, *, drift: float = DRIFT_LIMIT) -> Result:
     """Check one acquisition.
 
     `events` holds one column for each of `channels`, the parameters to
@@ -240,6 +305,10 @@ def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
     be suspect; larger removes less. `consecutive`: good bins between two
     removed stretches are kept only when there are at least this many.
     `events_per_bin`: by default 1/500 of the file and at least 150.
+    `drift`: the smallest move of a population's slow level away from
+    where it stays for longest that is taken for a drift, as a share of
+    the spread of the parameter's events; larger removes less, and 0
+    leaves the drift unjudged.
     """
     n = len(events)
     size = int(events_per_bin or max(MIN_BIN, -(-n // MAX_BINS)))
@@ -263,10 +332,12 @@ def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
     bad_rate = np.abs(log_rate - usual) > reach
 
     scales = list(scales) if scales is not None else [None] * len(channels)
-    tracks, channel, names = [], [], []
+    tracks, channel, names, width = [], [], [], []
     for j, scale in enumerate(scales):
         v = np.asarray(events[:, j], dtype=np.float64)[order]
-        followed = _follow(scale(v) if scale is not None else v, edges)
+        v = scale(v) if scale is not None else v
+        followed = _follow(v, edges)
+        width += [_spread(v)] * len(followed)
         for track in followed:
             where = float(np.median(track[np.isfinite(track)]))
             where = float(scale.inverse(where)) if scale is not None else where
@@ -282,7 +353,22 @@ def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
     # a population missing from three bins of five is as wrong as one that moved
     bad_signal = ~np.isfinite(smooth) | ((np.abs(smooth - centre) > mad * spread) & (spread > 0))
 
-    flagged = bad_rate | bad_signal.any(axis=1)
+    # the slow pass: the same medians over a window long enough for a
+    # shift of a quarter of a spread to stand clear of the bins' noise
+    window = max(SMOOTH, min(round(SLOW_EVENTS / size), int(SLOW_SHARE * len(count)))) | 1
+    slow = median_filter(medians, size=(window, 1), mode="mirror")
+    level = np.array([_level(c) for c in slow.T])
+    wander = np.array([_spread_about(c, at) for c, at in zip(slow.T, level)])
+    reach_slow = np.maximum(mad * wander, drift * np.array(width))
+    away = np.where(np.isfinite(slow) & (reach_slow > 0) & (drift > 0),
+                    np.abs(slow - level), 0.0)
+    bad_drift = away > reach_slow
+    # the whole of a departure that went beyond the limit, not only its peak
+    for j, near in enumerate((away > CARRY * reach_slow).T):
+        for a, b in _runs(near):
+            bad_drift[a:b, j] = bad_drift[a:b, j].any()
+
+    flagged = bad_rate | bad_signal.any(axis=1) | bad_drift.any(axis=1)
     bad = _with_islands(flagged, consecutive)
     intervals = [(float(start[a]), float(end[b - 1])) for a, b in _runs(bad)]
     result = Result(True, np.ones(n, dtype=bool), intervals, channels=list(channels),
@@ -291,19 +377,32 @@ def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
     # events of a neighbouring bin on the very tick an interval ends at go too
     result.keep = result.gate("Time").contains(lambda _: time)
     result.removed = float(1.0 - result.keep.mean())
-    result.counts = {RATE: int(count[bad_rate].sum()),
-                     SIGNAL: int(count[bad_signal.any(axis=1)].sum()),
+    by = {RATE: bad_rate, SIGNAL: bad_signal.any(axis=1), DRIFT: bad_drift.any(axis=1)}
+    result.counts = {**{what: int(count[where].sum()) for what, where in by.items()},
                      ISLANDS: int(count[bad & ~flagged].sum())}
-    worst = np.array([bad_signal[:, channel == j].any(axis=1).sum()
-                      for j in range(len(channels))])
-    result.blamed = [channels[j] for j in np.argsort(-worst, kind="stable") if worst[j]]
+    result.found = [[what for what, where in by.items() if where[a:b].any()]
+                    for a, b in _runs(bad)]
+    result.blamed = _blamed(bad_signal | bad_drift, channel, channels)
     result.bins = Bins(start, end, count, rate,
                        (float(np.exp(usual - reach)), float(np.exp(usual + reach))),
                        medians, channel,
                        np.column_stack([centre - mad * spread, centre + mad * spread]),
-                       bad_rate, bad_signal, bad)
+                       bad_rate, bad_signal, slow, window,
+                       np.column_stack([level - reach_slow, level + reach_slow]),
+                       bad_drift, bad)
     result.summary = _summary(result, n, size)
     return result
+
+
+def _blamed(bad: np.ndarray, channel: np.ndarray, channels: list[str]) -> list[str]:
+    """The parameters with a population among `bad` (bins x populations),
+    the one with most bins first."""
+    worst = np.array([bad[:, channel == j].any(axis=1).sum() for j in range(len(channels))])
+    return [channels[j] for j in np.argsort(-worst, kind="stable") if worst[j]]
+
+
+def _named(names: list[str], most: int = 3) -> str:
+    return ", ".join(names[:most]) + ("…" if len(names) > most else "")
 
 
 def _summary(r: Result, n: int, size: int) -> str:
@@ -313,9 +412,10 @@ def _summary(r: Result, n: int, size: int) -> str:
     found = []
     if r.counts[RATE]:
         found.append(f"flow rate {r.counts[RATE]:,d} events")
-    if r.counts[SIGNAL]:
-        found.append(f"signal {r.counts[SIGNAL]:,d} ({', '.join(r.blamed[:3])}"
-                     f"{'…' if len(r.blamed) > 3 else ''})")
+    for what, bad in ((SIGNAL, r.bins.bad_signal), (DRIFT, r.bins.bad_drift)):
+        if r.counts[what]:
+            found.append(f"{what} {r.counts[what]:,d} "
+                         f"({_named(_blamed(bad, r.bins.channel, r.channels))})")
     if r.counts[ISLANDS]:
         found.append(f"short stretches between them {r.counts[ISLANDS]:,d}")
     text = (f"To remove: {100 * r.removed:.1f}% of {n:,d} events, in {len(r.intervals)} "

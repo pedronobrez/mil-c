@@ -693,7 +693,7 @@ class Session:
         if time is None:
             raise ValueError("these files have no Time parameter to gate on")
         usual = {k: p.default for k, p in inspect.signature(qc.check).parameters.items()
-                 if k in ("mad", "consecutive", "events_per_bin")}
+                 if k in ("mad", "consecutive", "events_per_bin", "drift")}
         checked = set((self.quality_settings or {}).get("checked", []))
         self.quality_settings = {**usual, "channels": None, **(settings or {}),
                                  "checked": sorted(checked | {e.name for e, _ in found})}
