@@ -5,7 +5,9 @@ from __future__ import annotations
 import sys
 
 
-def main(folder: str | None = None) -> int:
+def main(folder: str | None = None, quit_after: float | None = None) -> int:
+    """`quit_after` closes the window by itself after that many seconds:
+    how a build is asked whether it starts at all."""
     from PyQt6 import QtWidgets
 
     from .ui import style
@@ -29,6 +31,9 @@ def main(folder: str | None = None) -> int:
     window.show()
     if folder:
         window.open_folder(folder)
+    if quit_after is not None:
+        from PyQt6 import QtCore
+        QtCore.QTimer.singleShot(int(quit_after * 1000), app.quit)
     status = app.exec()
     # take the window down before the interpreter does: PyQt's exit hook
     # otherwise walks wrappers whose Qt objects are already gone

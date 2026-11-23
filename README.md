@@ -91,7 +91,13 @@ and 2,100 events, five markers). The tests in `tests/test_real.py` assert these 
 
 ## Install and run
 
-Python 3.10 or newer.
+**Installers** are on the releases page: a disk image for macOS (Apple Silicon) and an installer
+for Windows, with a portable `.zip` beside it for machines where an installer cannot run.
+Nothing is signed. On macOS, right-click ▸ Open the first time; on Windows, choose "More info",
+then "Run anyway". The first UMAP after installing takes a while longer than the ones after it:
+the numerical code is compiled once and kept.
+
+**From source**, Python 3.10 or newer.
 
 ```bash
 pip install -e .
@@ -140,10 +146,26 @@ milc/
   session.py        the open analysis; what the window reads and writes
   cli.py            the command line
   ui/               the window (PyQt6, pyqtgraph). Nothing outside imports Qt.
+run.py              what a packaged MIL-C starts from
 packaging/
   make_icon.py      the mark and the application icon
+  milc.spec         the PyInstaller build, for macOS and Windows
+  make_dmg.sh       the macOS disk image
+  milc.wxs          the Windows installer (WiX)
 tests/              pytest; test_real.py runs only where the acquisitions are
 ```
+
+## Building the installers
+
+```bash
+bash packaging/make_dmg.sh      # macOS: builds MIL-C.app, tests it, wraps it in dist/*.dmg
+```
+
+The Windows installer cannot be built on a Mac: a bundle is the interpreter and every compiled
+extension for the machine that built it. `.github/workflows/ci.yml` builds both on GitHub's
+machines — on a tag `v*`, which also creates the release, or on request from the Actions tab.
+Every build is asked to run the whole route on invented data (`MIL-C selftest`) and to open its
+window before it is wrapped.
 
 ## Tests
 

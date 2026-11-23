@@ -187,6 +187,114 @@ def cmd_analyze(a) -> int:
     return 0
 
 
+def cmd_selftest(a) -> int:
+    """The whole route on invented data, with no screen: what a build is
+    asked before it is shipped. Says what it did and how long it took.
+
+    With `--log FILE` everything goes to the file as well and a failure is
+    written there and returned as an exit code, never raised: a windowed
+    program on Windows has no console, and an error raised in one is a
+    dialog that a build machine cannot dismiss."""
+    if not a.log:
+        return _selftest(a, print)
+    import traceback
+    with open(a.log, "w", encoding="utf-8") as log:
+        def say(*parts, **_):
+            text = " ".join(str(p) for p in parts)
+            log.write(text + "\n")
+            log.flush()
+            print(text, flush=True)
+        try:
+            return _selftest(a, say)
+        except BaseException:
+            log.write(traceback.format_exc())
+            return 1
+
+
+def _selftest(a, print) -> int:
+    import tempfile
+    import time
+
+    from . import figures
+    from .fcs import write_fcs
+    from .session import Session
+
+    started = time.time()
+
+    def step(text):
+        print(f"  {time.time() - started:5.1f}s  {text}", flush=True)
+
+    rng = np.random.default_rng(0)
+    centres = np.array([[300, 3000, 100], [3000, 200, 100], [200, 300, 4000.0]])
+    with tempfile.TemporaryDirectory() as folder:
+        for name, n in (("3Ctrl1", 300), ("3Ctrl2", 450), ("3Case1", 900), ("3Case2", 1200)):
+            pop = rng.integers(0, 3, n)
+            fluo = np.abs(centres[pop] * rng.lognormal(0, 0.25, (n, 3)))
+            ev = np.column_stack([rng.normal(90000, 9000, n), fluo]).astype(np.float32)
+            write_fcs(os.path.join(folder, name + ".fcs"), ev,
+                      ["FSC-A", "FITC-A", "PE-A", "APC-A"], markers=["", "CD8", "CD4", "Foxp3"],
+                      keywords={"SPILL": "3,FITC-A,PE-A,APC-A,1,0.05,0,0.02,1,0,0,0,1"})
+        s = Session()
+        s.open_folder(folder)
+        ds = s.build()
+        assert len(ds) == 1200 and len(ds.samples) == 4, ds.counts()
+        step(f"read 4 files, concatenated {len(ds):,d} events")
+        channels = s.default_channels()
+        s.run_umap(channels)
+        step(f"UMAP, keeps {ds.runs['UMAP']['neighbours_kept']:.0%} of the neighbours")
+        s.run_tsne(channels)
+        step("tSNE")
+        s.run_flowsom(channels, n_clusters=3, grid=5)
+        assert set(np.unique(ds.derived["FlowSOM"])) == {1, 2, 3}
+        step("FlowSOM, 3 clusters")
+        content = figures.MapContent(
+            ds.derived["UMAP1"], ds.derived["UMAP2"], "UMAP1", "UMAP2",
+            color=figures.categories_of(ds.derived["FlowSOM"], "Cluster"))
+        for ext in ("svg", "pdf", "png", "tiff"):
+            path = os.path.join(folder, "f." + ext)
+            figures.save(content, figures.FigureStyle(), path)
+            assert os.path.getsize(path) > 1000, ext
+        step("figure as SVG, PDF, PNG and TIFF")
+
+        if not a.no_window:
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+            os.environ.setdefault("MILC_SETTINGS", os.path.join(folder, "settings.ini"))
+            from PyQt6 import QtWidgets
+
+            from .ui import style, worker
+            from .ui.theme import apply_defaults
+            app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+            style.apply(app)
+            apply_defaults()
+            from .ui.shell import MainShell
+            window = MainShell()
+            window.open_folder(folder)
+            window.samples.concatenate()
+            for _ in range(3):
+                worker.wait_all()
+                app.processEvents()
+            window.explore.clusters.setValue(3)
+            window.explore.grid.setValue(5)
+            window.explore.run(["UMAP", "FlowSOM"])
+            for _ in range(3):
+                worker.wait_all()
+                app.processEvents()
+            assert "FlowSOM" in s.dataset.derived or "FlowSOM" in window.session.dataset.derived
+            assert window.clusters.heatmap.table is not None
+            window.close()
+            step("the window: folder, concatenation, UMAP and FlowSOM off the main thread")
+    print(f"MIL-C {__version__}: self-test passed")
+    return 0
+
+
+def cmd_gui(a) -> int:
+    # imported by name, here, where a packager can see it. Asked for through
+    # __import__ it was left out of the first bundle, which then passed its
+    # self-test and did not open.
+    from .app import main as start
+    return start(a.folder, a.quit_after)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="milc")
     ap.add_argument("--version", action="version", version=__version__)
@@ -245,9 +353,16 @@ def main(argv=None) -> int:
     s.add_argument("--out", default="analysis")
     s.set_defaults(run=cmd_analyze)
 
+    s = sub.add_parser("selftest", help="the whole route on invented data: is this build sound?")
+    s.add_argument("--no-window", action="store_true", help="skip the part that needs Qt")
+    s.add_argument("--log", metavar="FILE",
+                   help="write the steps, and any failure, to FILE; never raise")
+    s.set_defaults(run=cmd_selftest)
+
     s = sub.add_parser("gui", help="the window (also what no command at all opens)")
     s.add_argument("folder", nargs="?")
-    s.set_defaults(run=lambda a: __import__("milc.app", fromlist=["main"]).main(a.folder))
+    s.add_argument("--quit-after", type=float, metavar="SECONDS", help=argparse.SUPPRESS)
+    s.set_defaults(run=cmd_gui)
 
     if argv is None:
         argv = sys.argv[1:]

@@ -450,3 +450,16 @@ def test_shared_gates_reach_unlisted_files(tmp_path):
     assert not workspace((0.2, 0.3), (500, 500)).can_extend()
     s = workspace((0.2, 0.2), (500, 600))
     assert not s.can_extend() and not s.entries[1].borrowed
+
+
+def test_selftest_never_raises_when_logging(tmp_path, monkeypatch):
+    """A windowed build on Windows cannot show an error: it has to end up
+    in the file and in the exit code."""
+    from milc import cli
+    log = tmp_path / "s.log"
+    assert cli.main(["selftest", "--no-window", "--log", str(log)]) == 0
+    assert "self-test passed" in log.read_text()
+    monkeypatch.setattr("milc.session.Session.run_umap",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no UMAP today")))
+    assert cli.main(["selftest", "--no-window", "--log", str(log)]) == 1
+    assert "no UMAP today" in log.read_text() and "Traceback" in log.read_text()

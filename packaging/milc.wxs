@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Windows installer, built from the PyInstaller output.
+
+  Unsigned. That does not stop it installing, but SmartScreen will show
+  "Windows protected your PC" and the reader has to choose More info, then
+  Run anyway. A code signing certificate removes that; nothing else does.
+
+  Installs for the current user, into their own application data folder, so
+  it needs no administrator: the usual case on a laboratory computer.
+
+  The whole application directory is taken as it stands, rather than each file
+  being listed: a PyInstaller bundle is a few thousand files and no hand-kept
+  list survives a dependency change.
+
+  Build with WiX 5, installed as a dotnet tool. Pinned: WiX 7 refuses to run
+  without accepting a paid maintenance-fee EULA.
+
+      dotnet tool install wix -g ; version 5.0.2
+      wix build packaging/milc.wxs -d Version=0.1.0 -d BundleDir=C:\...\dist\MIL-C
+          -d IconFile=C:\...\packaging\icons\MIL-C.ico -o MIL-C.msi
+
+  BundleDir and IconFile are absolute paths. A relative one resolves against
+  this file's own directory, and a glob that matches nothing is not an error:
+  MIL-Q's first installer was 36 KB and WiX called it a success.
+
+  (written without a double hyphen anywhere: XML forbids one inside a comment)
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="MIL-C"
+           Manufacturer="MIL-C"
+           Version="$(Version)"
+           UpgradeCode="cb1d18fa-4039-4ead-86e3-11430ef4311d"
+           Scope="perUser"
+           Compressed="yes">
+
+    <!-- an upgrade replaces the previous version rather than sitting beside it -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of MIL-C is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="MilcIcon" SourceFile="$(IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="MilcIcon" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="MIL-C" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ShortcutFolder" Name="MIL-C" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="MIL-C" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentGroupRef Id="Shortcuts" />
+    </Feature>
+
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(BundleDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="Shortcuts" Directory="ShortcutFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="MilcShortcut"
+                  Name="MIL-C"
+                  Target="[INSTALLFOLDER]MIL-C.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="MilcIcon" />
+        <RemoveFolder Id="RemoveShortcutFolder" Directory="ShortcutFolder"
+                      On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\MIL-C"
+                       Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Package>
+</Wix>
