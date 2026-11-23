@@ -125,19 +125,23 @@ class FrequencyView(pg.GraphicsLayoutWidget):
         self.freq = None
         self._groups: list[str] = []
         self._facets: list[str] | None = None
+        self._notes: dict | None = None
         self.panels: list[pg.PlotItem] = []
         self.setBackground(theme.background())
         self.scene().sigMouseClicked.connect(self._clicked)
 
     def content(self):
-        return (FrequencyContent(self.freq, self._groups, self._facets)
+        return (FrequencyContent(self.freq, self._groups, self._facets, self._notes)
                 if self.freq is not None else None)
 
     def show_frequencies(self, freq, groups: list[str], selected: int | None = None,
-                         facets: list[str] | None = None) -> None:
+                         facets: list[str] | None = None, notes: dict | None = None) -> None:
+        """`notes[(panel or None, cluster)]` is written above that
+        cluster's bars: what a test between the groups said."""
         self.freq = freq
         self._groups = list(groups)
         self._facets = list(facets) if facets else None
+        self._notes = dict(notes) if notes else None
         self.clear()
         self.panels = []
         self.setBackground(theme.background())
@@ -201,12 +205,31 @@ class FrequencyView(pg.GraphicsLayoutWidget):
                     (x[:, None] + jitter).ravel(), vals.ravel(), size=5,
                     pen=pg.mkPen(theme.foreground(), width=0.8),
                     brush=pg.mkBrush(theme.background())))
+            mine = [c for c in range(len(groups))
+                    if value is None or self._facets[c] == value]
+            for i, row in enumerate(freq.rows):
+                text = (self._notes or {}).get((value, row))
+                if not text or not mine:
+                    continue
+                vals = freq.values[i, mine]
+                high = float(np.nanmax(vals)) if np.isfinite(vals).any() else 0.0
+                for g in names:   # clear of the tallest whisker too
+                    part = freq.values[i, [c for c in mine if groups[c] == g]]
+                    part = part[np.isfinite(part)]
+                    if part.size > 1:
+                        high = max(high, float(part.mean() + part.std(ddof=1)))
+                note = pg.TextItem(text, anchor=(0.5, 1.0), color=theme.foreground())
+                font = QtGui.QFont()
+                font.setPointSize(9)
+                note.setFont(font)
+                note.setPos(i, high + top * 0.07)
+                plot.addItem(note)
             plot.getAxis("bottom").setTicks([[(i, n) for i, n in enumerate(freq.rows)]])
             plot.setLabel("bottom", "Cluster")
             if k == 0:
                 plot.setLabel("left", "% of the sample's events")
             plot.setXRange(-0.6, n_clusters - 0.4, padding=0)
-            plot.setYRange(0, top * 1.12, padding=0)
+            plot.setYRange(0, top * (1.22 if self._notes else 1.12), padding=0)
             if self.panels:
                 plot.setYLink(self.panels[0])
             self.panels.append(plot)

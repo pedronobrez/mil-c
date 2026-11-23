@@ -12,7 +12,7 @@ import os
 import numpy as np
 from PyQt6 import QtCore, QtWidgets
 
-from .. import stats
+from .. import compare, stats
 from ..session import Session
 from . import style, worker
 from .settings import settings
@@ -90,6 +90,11 @@ class StatisticsTab(QtWidgets.QWidget):
         self.export_button = QtWidgets.QPushButton("Export CSV…")
         self.copy_button = QtWidgets.QPushButton("Copy")
         self.copy_button.setToolTip("The whole table, to paste into Excel or Prism")
+        self.compare_button = QtWidgets.QPushButton("Compare groups…")
+        self.compare_button.setToolTip(
+            "Test any column of the table between the groups of samples: a t test or "
+            "Mann-Whitney for two, ANOVA or Kruskal-Wallis for more, adjusted for the "
+            "number of populations tested")
 
         left = QtWidgets.QVBoxLayout()
         left.addWidget(self._eyebrow("Populations"))
@@ -104,6 +109,7 @@ class StatisticsTab(QtWidgets.QWidget):
         row.addWidget(self.export_button)
         row.addWidget(self.copy_button)
         left.addLayout(row)
+        left.addWidget(self.compare_button)
         panel = QtWidgets.QWidget()
         panel.setLayout(left)
         panel.setFixedWidth(330)
@@ -140,6 +146,7 @@ class StatisticsTab(QtWidgets.QWidget):
         self.compute_button.clicked.connect(self.compute)
         self.export_button.clicked.connect(self.export)
         self.copy_button.clicked.connect(self.copy)
+        self.compare_button.clicked.connect(self._ask_comparison)
         self.refresh()
 
     @staticmethod
@@ -164,7 +171,8 @@ class StatisticsTab(QtWidgets.QWidget):
         self.parameters.clear()
         entries = s.usable()
         has = bool(entries)
-        for w in (self.compute_button, self.export_button, self.copy_button):
+        for w in (self.compute_button, self.export_button, self.copy_button,
+                  self.compare_button):
             w.setEnabled(has and (w is self.compute_button or self.result is not None))
         if not has:
             self.result = None
@@ -309,6 +317,7 @@ class StatisticsTab(QtWidgets.QWidget):
             "compensated values in the file's own units. Click a header to sort.")
         self.export_button.setEnabled(True)
         self.copy_button.setEnabled(True)
+        self.compare_button.setEnabled(True)
 
     # --- taking it elsewhere -----------------------------------------------------------
 
@@ -324,7 +333,96 @@ class StatisticsTab(QtWidgets.QWidget):
             settings().setValue(SETTING_FOLDER, os.path.dirname(path))
             self.sigStatus.emit(f"Wrote {path}")
 
+    # --- between groups -----------------------------------------------------------------
+
+    def value_columns(self) -> list[str]:
+        """The columns of the table that hold a number per sample."""
+        cols = self.result.columns
+        return cols[cols.index("Count"):] if self.result is not None else []
+
+    def comparison(self, value: str, group: list[str], within: str | None = None,
+                   kind: str = compare.PARAMETRIC, correction: str = compare.BH,
+                   pairwise: bool = False):
+        """(table of results, the comparisons): `value` between the groups
+        `group` makes, for every population of the table."""
+        values, names = compare.from_table(self.result, value, group, within)
+        found = compare.compare(values, kind, correction, pairwise)
+        return compare.to_table(found, names, correction), found
+
+    def _ask_comparison(self) -> None:
+        if self.result is None:
+            return
+        from .results_dialog import NOTE, ResultsDialog
+        dialog = CompareDialog(self.value_columns(), self.session.columns,
+                               self.session.group_by, self)
+        if not dialog.exec() or not dialog.groups():
+            return
+        table, found = self.comparison(dialog.value.currentData(), dialog.groups(),
+                                       dialog.within.currentData() or None,
+                                       dialog.test.currentData(), dialog.correction.currentData(),
+                                       dialog.pairwise.isChecked())
+        note = NOTE.format(tests=sum(1 for c in found if c.p == c.p),
+                           correction=dialog.correction.currentData())
+        ResultsDialog(table, f"{dialog.value.currentData()} between groups",
+                      f"{dialog.value.currentData()} of each population, compared between "
+                      f"{' + '.join(dialog.groups())}. " + note, self,
+                      "group_comparison").exec()
+
     def copy(self) -> None:
         if self.result is not None:
             QtWidgets.QApplication.clipboard().setText(self.result.to_text())
             self.sigStatus.emit(f"{len(self.result.rows):,d} rows copied")
+
+
+class CompareDialog(QtWidgets.QDialog):
+    """What to compare, between which groups, and how."""
+
+    def __init__(self, values: list[str], columns: list[str], chosen: list[str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Compare groups")
+        self.value = QtWidgets.QComboBox()
+        for v in values:
+            self.value.addItem(v, v)
+        self.value.setCurrentIndex(max(self.value.findData("% of parent"), 0))
+        self.group_list = QtWidgets.QListWidget()
+        self.group_list.setMaximumHeight(110)
+        for c in columns:
+            item = QtWidgets.QListWidgetItem(c)
+            item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(QtCore.Qt.CheckState.Checked if c in chosen[:1]
+                               else QtCore.Qt.CheckState.Unchecked)
+            self.group_list.addItem(item)
+        self.within = QtWidgets.QComboBox()
+        self.within.addItem("—", "")
+        for c in columns:
+            self.within.addItem(c, c)
+        if len(chosen) > 1:
+            self.within.setCurrentIndex(max(self.within.findData(chosen[1]), 0))
+        self.within.setToolTip("A separate comparison for each value of this column: "
+                               "the groups within each day, say")
+        self.test = QtWidgets.QComboBox()
+        for key, text in compare.KINDS.items():
+            self.test.addItem(text, key)
+        self.correction = QtWidgets.QComboBox()
+        for name in compare.CORRECTIONS:
+            self.correction.addItem(name, name)
+        self.pairwise = QtWidgets.QCheckBox("With more than two groups, every pair as well")
+        self.pairwise.setChecked(True)
+        box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                         | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Compare")
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        form = QtWidgets.QFormLayout(self)
+        form.addRow("Compare", self.value)
+        form.addRow("Between", self.group_list)
+        form.addRow("Within each", self.within)
+        form.addRow("Test", self.test)
+        form.addRow("Adjust p by", self.correction)
+        form.addRow(self.pairwise)
+        form.addRow(box)
+
+    def groups(self) -> list[str]:
+        return [self.group_list.item(i).text() for i in range(self.group_list.count())
+                if self.group_list.item(i).checkState() == QtCore.Qt.CheckState.Checked
+                and self.group_list.item(i).text() != self.within.currentData()]

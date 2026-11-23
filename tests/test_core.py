@@ -796,3 +796,80 @@ def test_export_a_population(tmp_path):
                  "--out", str(tmp_path / "cli")]) == 0
     assert sorted(os.listdir(tmp_path / "cli")) == ["3Case1_Big cells.csv", "3Ctrl1_Big cells.csv"]
     assert main(["export", str(tmp_path), "--population", "Nothing"]) == 2
+
+
+# --- comparing groups -------------------------------------------------------------
+
+def test_tests_between_groups():
+    from scipy import stats as st
+
+    from milc import compare as c
+    a, b, d = [1.0, 2, 3, 4, 5], [4.0, 5, 6, 7, 9], [9.0, 10, 11]
+    name, stat, p, note = c.test_groups([a, b])
+    assert name == "Welch t" and p == pytest.approx(st.ttest_ind(a, b, equal_var=False).pvalue)
+    assert c.test_groups([a, b], c.RANK)[2] == pytest.approx(
+        st.mannwhitneyu(a, b, alternative="two-sided").pvalue)
+    assert c.test_groups([a, b, d])[0] == "ANOVA"
+    assert c.test_groups([a, b, d])[2] == pytest.approx(st.f_oneway(a, b, d).pvalue)
+    assert c.test_groups([a, b, d], c.RANK)[2] == pytest.approx(st.kruskal(a, b, d).pvalue)
+    # three against three cannot go below 0.1 by ranks, and it says so
+    name, _, p, note = c.test_groups([[1.0, 2, 3], [7.0, 8, 9]], c.RANK)
+    assert p == pytest.approx(0.1) and "0.1" in note
+    # what cannot be tested is no p value, with the reason
+    for samples, why in (([a], "one group"), ([a, [3.0]], "fewer than 2"),
+                         ([[2.0, 2], [2.0, 2]], "same value"),
+                         ([[1.0, 1], [2.0, 2]], "no variation")):
+        _, _, p, note = c.test_groups(samples)
+        assert np.isnan(p) and why in note
+    assert c.test_groups([[1.0, np.nan, 3, 5], [7.0, 8, 9]])[2] == pytest.approx(
+        st.ttest_ind([1.0, 3, 5], [7.0, 8, 9], equal_var=False).pvalue)   # a missing value is skipped
+
+    # corrections: against scipy where it has one, by hand where not
+    p = [0.01, 0.04, 0.03, 0.005]
+    assert np.allclose(c.adjust(p, c.BH), st.false_discovery_control(p))
+    assert np.allclose(c.adjust(p, c.BONFERRONI), [0.04, 0.16, 0.12, 0.02])
+    assert np.allclose(c.adjust(p, c.HOLM), [0.03, 0.06, 0.06, 0.02])
+    assert np.allclose(c.adjust(p, c.NONE), p)
+    assert np.allclose(c.adjust([0.5, 0.9], c.BONFERRONI), [1.0, 1.0])     # never above 1
+    mixed = c.adjust([0.01, np.nan, 0.04], c.BONFERRONI)                   # a test not done
+    assert np.isnan(mixed[1]) and np.allclose(mixed[[0, 2]], [0.02, 0.08])  # is not counted
+    assert all(np.all(np.diff(c.adjust(sorted(p), m)) >= 0) for m in c.CORRECTIONS)
+
+    # many things at once, and every pair
+    found = c.compare({("1",): {"7": a, "14": b, "3": d}, ("2",): {"7": a, "14": a, "3": a}},
+                      pairwise=True)
+    assert len(found) == 8 and found[0].groups == ["3", "7", "14"]        # days in order
+    assert [f.test for f in found[:4]] == ["ANOVA", "Welch t", "Welch t", "Welch t"]
+    assert found[0].n == [3, 5, 5] and found[0].mean[1] == 3
+    assert np.allclose([f.p_adjusted for f in found], c.adjust([f.p for f in found], c.BH))
+    assert all(f.p_adjusted >= f.p for f in found)
+    table = c.to_table(found, ["Cluster"])
+    assert table.columns[:3] == ["Cluster", "Groups", "Mean ± SD (n)"]
+    assert table.rows[0][1] == "3 vs 7 vs 14" and "(3)" in table.rows[0][2]
+    assert c.stars(0.03) == "*" and c.stars(0.2) == "ns" and c.stars(float("nan")) == ""
+    assert c.label(0.034) == "p = 0.03" and c.label(0.0041) == "p = 0.0041"
+    assert c.label(1e-6) == "p < 0.0001"
+
+
+def test_comparing_a_statistics_table():
+    from milc import compare as c
+    from milc.stats import StatsTable
+    t = StatsTable(["Sample", "Group", "Day", "Population", "Path", "Count", "% of parent"])
+    rng = np.random.default_rng(0)
+    for day in ("3", "7"):
+        for group, centre in (("Ctrl", 10), ("Case", 30 if day == "7" else 10)):
+            for animal in range(5):
+                value = float(rng.normal(centre, 2))
+                t.rows.append([f"{day}{group}{animal}", group, day, "T", "Cells/T", 100, value])
+                t.rows.append([f"{day}{group}{animal}", group, day, "B", "Cells/B", 100, 50.0])
+    values, names = c.from_table(t, "% of parent", ["Group"])
+    assert names == ["Population"] and set(values) == {("T",), ("B",)}
+    assert len(values[("T",)]["Case"]) == 10
+    values, names = c.from_table(t, "% of parent", ["Group"], within="Day")
+    assert names == ["Day", "Population"] and len(values[("7", "T")]["Ctrl"]) == 5
+    found = {f.key: f for f in c.compare(values)}
+    assert found[("7", "T")].p_adjusted < 0.001 and found[("3", "T")].p_adjusted > 0.05
+    assert np.isnan(found[("3", "B")].p) and "same value" in found[("3", "B")].note
+    # two columns together are the groups
+    values, _ = c.from_table(t, "% of parent", ["Group", "Day"])
+    assert set(values[("T",)]) == {"Ctrl · 3", "Ctrl · 7", "Case · 3", "Case · 7"}

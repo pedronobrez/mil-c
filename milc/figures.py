@@ -159,6 +159,9 @@ class FrequencyContent:
     #: optionally, a second subdivision of the samples: one panel for each
     #: of its values — groups compared within each day, say
     facets: list[str] | None = None
+    #: (panel or None, cluster) → what to write above that cluster's bars:
+    #: the result of a test between the groups
+    notes: dict | None = None
 
 
 @dataclass
@@ -523,6 +526,19 @@ def _frequency_panel(ax, c: FrequencyContent, style: FigureStyle, keep: list[int
         handles.append(Patch(facecolor=color, alpha=0.6, edgecolor=color,
                              label=style.label(g) + suffix))
     ax.set_xticks(range(n_clusters), [style.label(r) for r in c.freq.rows])
+    panel = c.facets[keep[0]] if c.facets and keep else None
+    for i, row in enumerate(c.freq.rows):
+        text = (c.notes or {}).get((panel, row))
+        if text:
+            vals = c.freq.values[i, keep]
+            top = float(np.nanmax(vals)) if np.isfinite(vals).any() else 0.0
+            for g in cluster_stats.ordered(c.groups):   # clear of the tallest whisker too
+                part = c.freq.values[i, [k for k in keep if c.groups[k] == g]]
+                part = part[np.isfinite(part)]
+                if part.size > 1:
+                    top = max(top, float(part.mean() + part.std(ddof=1)))
+            ax.annotate(text, (i, top), xytext=(0, 4), textcoords="offset points",
+                        ha="center", va="bottom", fontsize=style.font_size - 1.5)
     ax.set_xlabel("Cluster" if style.xlabel is None else style.xlabel)
     if first:
         ax.set_ylabel("% of the sample's events" if style.ylabel is None else style.ylabel)

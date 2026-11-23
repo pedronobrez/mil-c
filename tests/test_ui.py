@@ -665,3 +665,69 @@ def test_scale_compensation_and_export_from_gates(app, folder, tmp_path):
     every = g.export_population(str(tmp_path / "all"), "csv", every_sample=True)
     assert len(every) == 4 and all(p.endswith("_Round.csv") for p in every)
     w.close()
+
+
+def test_tests_between_groups_in_the_window(app, folder, tmp_path):
+    from milc import compare, figures
+    from milc.ui import worker
+    from milc.ui.results_dialog import ResultsDialog
+    from milc.ui.statistics_tab import CompareDialog
+    from milc.ui.shell import MainShell
+
+    def settle():
+        for _ in range(3):
+            worker.wait_all()
+            app.processEvents()
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.samples.concatenate()
+    settle()
+    e = w.explore
+    e.clusters.setValue(3)
+    e.grid.setValue(5)
+    e.run(["FlowSOM"])
+    settle()
+    c = w.clusters
+    assert c.test.currentData() == "" and c.comparisons() == []
+    assert not c.results_button.isEnabled() and c.freq.content().notes is None
+
+    c.test.setCurrentIndex(c.test.findData(compare.PARAMETRIC))
+    found = c.comparisons()
+    assert len(found) == 3 and all(f.groups == ["Case", "Ctrl"] and f.n == [2, 2] for f in found)
+    notes = c.freq.content().notes
+    assert set(notes) <= {(None, "1"), (None, "2"), (None, "3")}
+    assert all(text == "ns" or text.startswith("p ") for text in notes.values())
+    assert c.results_button.isEnabled() and c.correction.isEnabled()
+    # the correction is the one chosen
+    raw = [f.p for f in found]
+    c.correction.setCurrentIndex(c.correction.findData(compare.BONFERRONI))
+    assert np.allclose([f.p_adjusted for f in c.comparisons()], compare.adjust(raw, compare.BONFERRONI),
+                       equal_nan=True)
+    table, _ = c.results_table()
+    assert table.columns[0] == "Cluster" and len(table.rows) == 3 and len(table.rows[0]) == len(table.columns)
+    # and it is on the figure
+    assert figures.preview_png(c.freq.content(), figures.FigureStyle(font="DejaVu Sans"),
+                               dpi=40)[:4] == b"\x89PNG"
+    d = ResultsDialog(table, "x", "note", c)
+    assert d.table.rowCount() == 3
+    d.copy()
+    assert QtWidgets.QApplication.clipboard().text().startswith("Cluster\tGroups")
+    d.close()
+    # by ranks, two against two can never be significant — and it says so
+    c.test.setCurrentIndex(c.test.findData(compare.RANK))
+    assert all("smallest p possible" in f.note for f in c.comparisons() if f.p == f.p)
+
+    # the statistics table, between groups
+    st = w.statistics
+    st.tick(parameters=["CD4"], statistics=["Median"])
+    st.compute()
+    settle()
+    assert st.compare_button.isEnabled() and st.value_columns()[-1] == "CD4 · Median"
+    d = CompareDialog(st.value_columns(), w.session.columns, w.session.group_by, st)
+    assert d.value.currentData() == "% of parent" and d.groups() == ["Group"]
+    d.close()
+    table, found = st.comparison("CD4 · Median", ["Group"])
+    assert len(found) == 1 and found[0].key == ("All events",) and found[0].test == "Welch t"
+    assert table.columns[0] == "Population"
+    w.close()

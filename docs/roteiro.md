@@ -138,8 +138,9 @@ material de divulgação.
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Média e desvio por grupo | P | **S** | vários |
-| Teste t, Mann-Whitney, ANOVA | N | N | Cytobank, FCS Express (ANOVA), FlowLogic? |
-| Correção para múltiplos testes | N | N | Cytobank, OMIQ |
+| Teste t (Welch), Mann-Whitney, ANOVA, Kruskal-Wallis | N | **S** | Cytobank, FCS Express (ANOVA), FlowLogic? |
+| Correção para múltiplos testes | N | **S** (Benjamini-Hochberg, Holm, Bonferroni) | Cytobank, OMIQ |
+| Desenhos pareados ou de medidas repetidas | N | N | — |
 | Exportar para o Prism | N | N (CSV genérico) | FCS Express, OMIQ |
 
 ### Figuras, relatórios e exportação
@@ -208,7 +209,7 @@ Sem isto, o programa não substitui o FlowJo no dia a dia, só no fim da anális
 
 São as lacunas do FlowJo que mais de um concorrente já cobre, e todas servem ao objetivo do MIL-C.
 
-8. **Testes entre grupos.** t, Mann-Whitney, ANOVA e Kruskal-Wallis sobre a frequência dos
+8. ~~**Testes entre grupos.**~~ **Feito** (aba Clusters e aba Statistics). t, Mann-Whitney, ANOVA e Kruskal-Wallis sobre a frequência dos
    clusters e sobre as estatísticas da tabela, com correção para múltiplos testes e o valor de p
    no gráfico. O FlowJo não tem.
 9. **Saída para o Prism.** Tabela já no formato de colunas agrupadas.

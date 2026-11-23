@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 from PyQt6 import QtCore, QtWidgets
 
-from .. import cluster_stats
+from .. import cluster_stats, compare
 from ..session import Session
 from . import palette, style, theme
 from .ramp_picker import RampPicker
@@ -52,6 +52,20 @@ class ClustersTab(QtWidgets.QWidget):
             "A second subdivision: one panel for each of its values, so the groups "
             "are compared within each — the groups within each day, say")
         self.tree_color = QtWidgets.QComboBox()
+        self.test = QtWidgets.QComboBox()
+        self.test.addItem("No test", "")
+        for key, text in compare.KINDS.items():
+            self.test.addItem(text, key)
+        self.test.setToolTip(
+            "Compare the groups' share of each cluster, one value per sample. Two groups: "
+            "Welch's t or Mann-Whitney. Three or more: ANOVA or Kruskal-Wallis. The p "
+            "written above each cluster is adjusted for the number of clusters tested.")
+        self.correction = QtWidgets.QComboBox()
+        for name in compare.CORRECTIONS:
+            self.correction.addItem(name, name)
+        self.results_button = QtWidgets.QPushButton("Results…")
+        self.results_button.setToolTip("Every comparison as a table, pair by pair where "
+                                       "there are more than two groups")
         self.clear_button = QtWidgets.QPushButton("Clear selection")
 
         bar = QtWidgets.QHBoxLayout()
@@ -59,13 +73,15 @@ class ClustersTab(QtWidgets.QWidget):
                               ("Colours", self.ramp),
                               (None, self.per_marker), (None, self.all_markers),
                               ("Compare", self.group_by), ("within each", self.facet_by),
-                              ("Tree", self.tree_color)):
+                              ("Tree", self.tree_color), ("Test", self.test),
+                              (None, self.correction)):
             if label:
                 cap = QtWidgets.QLabel(label)
                 cap.setProperty("role", "caption")
                 bar.addWidget(cap)
             bar.addWidget(widget)
             bar.addSpacing(10)
+        bar.addWidget(self.results_button)
         bar.addStretch(1)
         bar.addWidget(self.clear_button)
 
@@ -118,6 +134,9 @@ class ClustersTab(QtWidgets.QWidget):
         self.facet_by.currentIndexChanged.connect(self._draw_tables)
         self.facet_by.currentIndexChanged.connect(self._summarise)
         self.tree_color.currentIndexChanged.connect(self._draw_tree)
+        self.test.currentIndexChanged.connect(self._draw_tables)
+        self.correction.currentIndexChanged.connect(self._draw_tables)
+        self.results_button.clicked.connect(self.show_results)
         palette.notifier.changed.connect(self._recolour)
         self.refresh()
 
@@ -320,7 +339,57 @@ class ClustersTab(QtWidgets.QWidget):
             return
         expression, freq = tables
         self.heatmap.show_table(expression, self.per_marker.isChecked(), self.selected)
-        self.freq.show_frequencies(freq, self._groups(), self.selected, self._facets())
+        self._frequency = freq
+        self.correction.setEnabled(bool(self.test.currentData()))
+        self.results_button.setEnabled(bool(self.test.currentData()))
+        # on the plot, what a reader looks for: the p where there is a
+        # difference, "ns" where there is not. Every number is in Results.
+        notes = {c.key: compare.label(c.p_adjusted) if c.p_adjusted < 0.05 else "ns"
+                 for c in self.comparisons() if c.p_adjusted == c.p_adjusted}
+        self.freq.show_frequencies(freq, self._groups(), self.selected, self._facets(), notes)
+
+    def _values(self) -> dict:
+        """(panel, cluster) → group → one share per sample."""
+        freq = self._frequency
+        groups, facets = self._groups(), self._facets()
+        out: dict = {}
+        for i, cluster in enumerate(freq.rows):
+            for j, group in enumerate(groups):
+                value = freq.values[i, j]
+                if value == value:
+                    panel = facets[j] if facets else None
+                    out.setdefault((panel, cluster), {}).setdefault(group, []).append(float(value))
+        return out
+
+    def comparisons(self, pairwise: bool = False) -> list:
+        """The groups compared in each cluster — in each panel, where the
+        chart has panels — with the test and the correction chosen."""
+        kind = self.test.currentData()
+        if not kind or getattr(self, "_frequency", None) is None:
+            return []
+        return compare.compare(self._values(), kind, self.correction.currentData(), pairwise)
+
+    def results_table(self):
+        found = self.comparisons(pairwise=True)
+        panels = self._facets() is not None
+        table = compare.to_table(found, [self.facet_by.currentText(), "Cluster"] if panels
+                                 else ["Cluster"], self.correction.currentData())
+        if not panels:
+            for row in table.rows:   # the empty panel is not a column
+                del row[0]
+        return table, found
+
+    def show_results(self) -> None:
+        from .results_dialog import NOTE, ResultsDialog
+        table, found = self.results_table()
+        if not found:
+            return
+        note = NOTE.format(tests=sum(1 for c in found if c.p == c.p),
+                           correction=self.correction.currentData())
+        ResultsDialog(table, "Clusters between groups",
+                      "The share of each sample's events in each cluster, compared between "
+                      f"{self.group_by.currentText().lower()}s. " + note, self,
+                      "cluster_comparison").exec()
 
     def _draw_tree(self) -> None:
         if self._filling:

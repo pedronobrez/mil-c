@@ -65,6 +65,7 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   compensated values in the file's own units, by FlowJo's definitions.
 - The samples' own columns sit beside the name; sort by any header; export as CSV or copy
   into Excel or Prism.
+- Compare groups on any column of the table, with the same tests and corrections.
 
 **Explore** — UMAP, tSNE and FlowSOM, run in the background with FlowJo's defaults.
 - Any two axes: an embedding, or two markers on a biexponential scale ticked in decades.
@@ -77,6 +78,8 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   second column: the groups compared within each day.
 - Click a cluster in any of the four and it is marked in the other three.
 - The colour ramp is yours to choose: a named one, or two or three colours of your own.
+- Test the groups in each cluster: Welch's t or Mann-Whitney for two, ANOVA or Kruskal-Wallis
+  for more, with p adjusted for the number of clusters and written on the chart.
 - Shift+drag on the map outlines any set of events and reports the same numbers for it.
 
 **Figure…** — on every plot.
@@ -92,7 +95,8 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   boolean combinations are drawn here; from a FlowJo workspace only rectangles and polygons are
   read. No offset or curly quadrants, no automatic gates, no logicle scale, and one
   compensation matrix for all the samples rather than one each.
-- **No statistics between groups.** Means and standard deviations, no test.
+- **Tests between groups are the simple ones.** One value per sample, compared by group. No
+  mixed models, no paired or repeated-measures designs, no diffcyt or edgeR.
 - **One figure at a time.** No multi-panel plates.
 - **Its maps are not FlowJo's maps point for point.** See below.
 
@@ -177,6 +181,7 @@ milc/
   density.py        smoothed histograms and probability contours, for overlays
   cluster_stats.py  expression and frequency tables
   stats.py          the statistics table: counts, percentages, medians, CVs
+  compare.py        tests between groups, and adjustment for many of them
   figures.py        a plot and a style into SVG, PDF, PNG or TIFF (matplotlib)
   session.py        the open analysis; what the window reads and writes
   cli.py            the command line
