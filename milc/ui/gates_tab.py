@@ -21,12 +21,13 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .. import density, figures
+from .. import density, figures, views
 from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
 from ..session import Session
 from ..transforms import Arcsinh, Biex, Log, decade_ticks, display_range, same
 from . import palette, style, theme
+from .view_dialogs import BackgateDialog, MatrixDialog, OverlayChoice, draw_distributions
 
 HISTOGRAM = "#histogram"
 PSEUDOCOLOUR, CONTOUR = "pseudocolour", "contour"
@@ -195,9 +196,15 @@ class GatesTab(QtWidgets.QWidget):
         self.colour_by = QtWidgets.QComboBox()
         self.colour_by.setToolTip("With several samples overlaid: a colour for each "
                                   "sample, or for each value of one of your columns")
-        self.offset = QtWidgets.QCheckBox("Staggered")
-        self.offset.setToolTip("Overlaid histograms one above the other "
-                               "instead of on one baseline")
+        self.overlay = OverlayChoice()
+        #: histograms one above the other instead of on one baseline
+        self.offset = self.overlay.staggered
+        self.matrix_button = QtWidgets.QPushButton("Matrix…")
+        self.matrix_button.setToolTip("Every pair of parameters of the population shown, "
+                                      "in one grid: where spillover shows")
+        self.backgate_button = QtWidgets.QPushButton("Backgate…")
+        self.backgate_button.setToolTip("Where the events of the population shown fall on "
+                                        "each gate above it")
         self.figure_button = QtWidgets.QPushButton("Figure…")
         self.x_scale = QtWidgets.QToolButton()
         self.y_scale = QtWidgets.QToolButton()
@@ -221,7 +228,7 @@ class GatesTab(QtWidgets.QWidget):
             if extra is not None:
                 bar.addWidget(extra)
             bar.addSpacing(10)
-        bar.addWidget(self.offset)
+        bar.addWidget(self.overlay)
         bar.addStretch(1)
         bar.addWidget(self.compensation_button)
         bar.addWidget(self.export_button)
@@ -239,7 +246,11 @@ class GatesTab(QtWidgets.QWidget):
         self.stack.addWidget(self.plot)
         right = QtWidgets.QVBoxLayout()
         right.addLayout(bar)
-        right.addWidget(self.caption)
+        looks = QtWidgets.QHBoxLayout()
+        looks.addWidget(self.caption, 1)
+        looks.addWidget(self.matrix_button)
+        looks.addWidget(self.backgate_button)
+        right.addLayout(looks)
         right.addWidget(self.stack, 1)
 
         layout = QtWidgets.QHBoxLayout(self)
@@ -251,7 +262,9 @@ class GatesTab(QtWidgets.QWidget):
         self.samples.itemSelectionChanged.connect(self._selection_changed)
         self.kind.currentIndexChanged.connect(self._axes_changed)
         self.colour_by.currentIndexChanged.connect(self._axes_changed)
-        self.offset.toggled.connect(self._axes_changed)
+        self.overlay.sigChanged.connect(self._axes_changed)
+        self.matrix_button.clicked.connect(self.open_matrix)
+        self.backgate_button.clicked.connect(self.open_backgate)
         self.figure_button.clicked.connect(self.make_figure)
         self.compensation_button.clicked.connect(self._ask_compensation)
         self.export_button.clicked.connect(self._ask_export)
@@ -443,6 +456,94 @@ class GatesTab(QtWidgets.QWidget):
                 shown.add(s.group)
                 legend.addItem(first, s.group)
         return yr
+
+    # --- violins and boxes, every pair, the gates above ---------------------------
+
+    def set_overlay(self, mode: str, pooled: bool = False) -> None:
+        """How several samples are shown on a histogram: "overlaid",
+        "staggered", "violin" or "box" — the last two one for each sample
+        or, `pooled`, one for each value of the "Colour by" column."""
+        self.overlay.select(mode, pooled)
+
+    def _distributions(self, entries, xdim, xr, kind) -> views.DistributionContent:
+        """The parameter on X in each sample's population shown — or in
+        each group's, its samples' events taken together."""
+        by = self.colour_by.currentData()
+        path = self.node.path
+        parts: dict[str, tuple[str, list]] = {}
+        for e in entries:
+            sample = self.session.load(e)
+            masks = sample.masks()
+            if path not in masks:
+                continue   # gated its own way: this population is not in it
+            group = e.name if by == BY_SAMPLE else (e.meta.get(by, "") or "—")
+            label = group if self.overlay.pooled() else e.name
+            parts.setdefault(label, (group, []))[1].append(
+                self._display(xdim, sample)[masks[path]])
+        series = [views.distribution(np.concatenate(values), *xr, label, group)
+                  for label, (group, values) in parts.items()]
+        return views.DistributionContent(
+            series, kind, self.x_axis.currentText(),
+            decade_ticks(self._scale(xdim)) if self._scale(xdim) else None, xr)
+
+    def _label(self, dim: str) -> str:
+        i = self.x_axis.findData(dim)
+        return self.x_axis.itemText(i) if i >= 0 else dim
+
+    def matrix_default(self) -> list[str]:
+        """The stained fluorescence parameters — those the files name a
+        marker for; every fluorescence one where none is named, and every
+        parameter where nothing is compensated."""
+        f, fluo = self.sample.fcs, self.session.fluorescence()
+        stained = [self._dim(c) for c, m in zip(f.channels, f.markers) if c in fluo and m]
+        return (stained or [self._dim(c) for c in f.channels if c in fluo]
+                or list(f.channels))[:views.MAX_PARAMETERS]
+
+    def matrix_content(self, dims: list[str] | None = None) -> views.MatrixContent:
+        """Every pair of `dims` for the population shown of this sample."""
+        dims = (dims or self.matrix_default())[:views.MAX_PARAMETERS]
+        rows = self.sample.mask(self.node.path)
+        ranges = [self._range(d) for d in dims]
+        ticks = [decade_ticks(self._scale(d)) if self._scale(d) else views.plain_ticks(*r)
+                 for d, r in zip(dims, ranges)]
+        return views.MatrixContent([self._label(d) for d in dims],
+                                   views.pairs([self._display(d)[rows] for d in dims], ranges),
+                                   ranges, ticks)
+
+    def backgate_content(self) -> views.BackgateContent:
+        """The population shown on each gate above it, and on its own."""
+        return views.backgate(self.entry.gates, self.node.path, self.sample.masks(),
+                              self._display, self._scale, self._range, self._label)
+
+    def _shown_name(self) -> str:
+        name = self.node.name if self.node.gate is not None else "All events"
+        return f"{self.entry.name} · {name}"
+
+    def matrix_dialog(self) -> MatrixDialog | None:
+        if self.sample is None or self.node is None:
+            return None
+        parameters = [(self.x_axis.itemText(i), self.x_axis.itemData(i))
+                      for i in range(self.x_axis.count())]
+        return MatrixDialog(f"Every pair — {self._shown_name()}", parameters,
+                            self.matrix_default(), self.matrix_content, self)
+
+    def backgate_dialog(self) -> BackgateDialog | None:
+        if self.sample is None or self.node is None:
+            return None
+        if self.node.gate is None:
+            self.sigStatus.emit("Choose a gated population: all events have no gate above them")
+            return None
+        return BackgateDialog(f"Backgate — {self._shown_name()}", self.backgate_content(), self)
+
+    def open_matrix(self) -> None:
+        dialog = self.matrix_dialog()
+        if dialog is not None:
+            dialog.exec()
+
+    def open_backgate(self) -> None:
+        dialog = self.backgate_dialog()
+        if dialog is not None:
+            dialog.exec()
 
     def content(self):
         """What is on the plot, for a figure."""
@@ -650,9 +751,13 @@ class GatesTab(QtWidgets.QWidget):
                                         and self.kind.currentData() == CONTOUR)
         self.kind.setEnabled(ydim != HISTOGRAM and len(overlay) <= 1)
         self.colour_by.setEnabled(len(overlay) > 1)
-        self.offset.setEnabled(len(overlay) > 1 and ydim == HISTOGRAM)
+        self.overlay.enable(len(overlay) > 1 and ydim == HISTOGRAM)
         self._content = None
-        if as_lines:
+        shape = self.overlay.mode() if len(overlay) > 1 and ydim == HISTOGRAM else None
+        if shape in (views.VIOLIN, views.BOX):
+            self._content = self._distributions(overlay, xdim, xr, shape)
+            yr = draw_distributions(self.plot, self._content)
+        elif as_lines:
             yr = (0.0, 1.0) if ydim == HISTOGRAM else self._range(ydim)
             if ydim != HISTOGRAM:
                 self.plot.setLabel("left", self.y_axis.currentText())
@@ -720,6 +825,8 @@ class GatesTab(QtWidgets.QWidget):
         name = self.node.name if self.node.gate is not None else "All events"
         together = (f" · {len(overlay)} samples overlaid; gates are {self.entry.name}'s"
                     if len(overlay) > 1 else "")
+        if isinstance(self._content, views.DistributionContent):
+            together += " · " + self._content.note()
         self.caption.setText(
             f"{self.entry.name} · {name}: {rows.size:,d} events{of}{more}{together}")
 

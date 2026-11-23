@@ -215,6 +215,8 @@ STAGGER = 0.62
 def category_names(content) -> list[tuple[str, str]]:
     """(name, default colour) of what the content colours by category —
     what a person may want to rename or recolour."""
+    if hasattr(content, "category_names"):   # a content defined elsewhere answers for itself
+        return content.category_names()
     if isinstance(content, OverlayContent):
         names = content.groups()
         return list(zip(names, categorical(len(names))))
@@ -231,6 +233,8 @@ def category_names(content) -> list[tuple[str, str]]:
 
 
 def uses_colormap(content) -> bool:
+    if hasattr(content, "uses_colormap"):
+        return content.uses_colormap
     return (isinstance(content, HeatmapContent)
             or (isinstance(content, MapContent) and isinstance(content.color, Values))
             or (isinstance(content, TreeContent) and content.color_by is not None))
