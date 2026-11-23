@@ -17,6 +17,7 @@ from PyQt6 import QtCore, QtWidgets
 from .. import clusters
 from . import palette
 from .scatter import Categories
+from .flow import FlowLayout
 
 ONLY_HERE = ("It exists in this dataset only. It cannot become a population of the full "
              "samples: the map it was outlined on has coordinates for the events drawn "
@@ -33,8 +34,11 @@ class ClusterTools(QtWidgets.QWidget):
     def __init__(self, tab):
         super().__init__(tab)
         self.tab = tab
-        row = QtWidgets.QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
+        row = FlowLayout(self, spacing=6)       # onto another line in a narrow window
+        policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                                       QtWidgets.QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
         self.buttons: dict[str, QtWidgets.QPushButton] = {}
         for text, slot, tip in (
                 ("Rename…", self._ask_rename,
@@ -64,7 +68,6 @@ class ClusterTools(QtWidgets.QWidget):
             button.clicked.connect(lambda _=False, s=slot: self._try(s))
             row.addWidget(button)
             self.buttons[text.rstrip("…")] = button
-        row.addStretch(1)
 
     @property
     def ds(self):

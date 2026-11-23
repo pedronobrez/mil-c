@@ -11,6 +11,11 @@ class FlowLayout(QtWidgets.QLayout):
     """Widgets left to right, wrapping; each line as tall as its tallest,
     and everything on it centred on the line."""
 
+    #: the row does not ask to be narrower than this, if it is wider on one
+    #: line: a layout sizes a window for the height a row has at its
+    #: narrowest, and a row a button wide is as tall as the screen
+    FLOOR = 640
+
     def __init__(self, parent=None, spacing: int = 8, line_spacing: int = 6):
         super().__init__(parent)
         self._items: list[QtWidgets.QLayoutItem] = []
@@ -46,10 +51,14 @@ class FlowLayout(QtWidgets.QLayout):
         return self.minimumSize()
 
     def minimumSize(self):
-        """As wide as the widest single item: the rest can wrap."""
+        """As wide as the widest single item, or as `FLOOR` if all of it
+        on one line is wider than that: the rest can wrap."""
         size = QtCore.QSize()
-        for item in self._shown():
+        shown = self._shown()
+        for item in shown:
             size = size.expandedTo(item.minimumSize())
+        line = sum(i.sizeHint().width() for i in shown) + self._gap * max(len(shown) - 1, 0)
+        size.setWidth(max(size.width(), min(line, self.FLOOR)))
         m = self.contentsMargins()
         return size + QtCore.QSize(m.left() + m.right(), m.top() + m.bottom())
 
