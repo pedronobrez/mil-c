@@ -83,6 +83,10 @@ class MainShell(QtWidgets.QMainWindow):
             group.addAction(action)
             self._appearance[key] = action
 
+        view.addSeparator()
+        self._action(view, "Plate…", self.show_plate)
+        self._plate = None
+
         screen = QtWidgets.QApplication.primaryScreen()
         room = screen.availableGeometry() if screen else QtCore.QRect(0, 0, 1280, 800)
         self.resize(min(self.WANTED_SIZE[0], room.width() - 40),
@@ -120,6 +124,26 @@ class MainShell(QtWidgets.QMainWindow):
         self.gates._draw()
         self.clusters.refresh()
         self.samples.refresh()
+
+    # --- the plate ---------------------------------------------------------------
+
+    def plate_window(self):
+        """The page of several panels: one for the session, made when first
+        asked for."""
+        if self._plate is None:
+            from .plate_window import PlateWindow
+            self._plate = PlateWindow(self.session, self)
+        return self._plate
+
+    def add_to_plate(self, content, style, source=None, name: str = "") -> str:
+        letter = self.plate_window().add(content, style, source, name)
+        self.status(f"Panel {letter} added to the plate (View ▸ Plate…)")
+        return letter
+
+    def show_plate(self) -> None:
+        window = self.plate_window()
+        window.show()
+        window.raise_()
 
     # --- files -----------------------------------------------------------------
 
