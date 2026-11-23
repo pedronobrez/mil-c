@@ -17,9 +17,20 @@ the log fold change, and it is tested.
 
 What is implemented, and where it is not edgeR
 ----------------------------------------------
-Nothing here was run beside edgeR or diffcyt: R is not a dependency and
-the numbers were not compared. The method is "in the manner of", and this
-is the manner exactly:
+R is not a dependency, but the numbers were set beside edgeR 4.10.7 and
+diffcyt 1.32.1 on 2026-11-23 (`tests/reference/abundance_compare.py`,
+written up in `docs/comparacao.md`), on 600 simulated tables and four of
+the real experiment. Against edgeR called the way described below, the
+fold changes agree to 4e-4 of a log2, the common dispersion to 0.4%, and
+the p values to 0.06% (QL) and 2% (LRT) in 95% of the clusters; at FDR
+0.05 the same clusters were found but one in 7,600. Against edgeR 4's and
+diffcyt's *defaults* — `estimateDisp`, which estimates the prior degrees
+of freedom where this fixes them — p values differ more (a factor of 2 in
+5% of the clusters) and one discovery in ten (LRT against diffcyt) to one
+in five (QL against edgeR 4's defaults) is not shared. Two
+things were corrected because of that comparison: the F test's degrees of
+freedom are capped at the pooled ones, and variances that do not differ
+are replaced by their mean. What is implemented:
 
 * The GLM is fitted by iteratively reweighted least squares with step
   halving. (edgeR: Levenberg-damped Fisher scoring; same maximum.)
@@ -40,8 +51,12 @@ is the manner exactly:
   not count, as in edgeR), squeezed towards the others' by limma's
   empirical Bayes (`squeezeVar`: Smyth 2004) — without its trend on
   abundance, without its robust option, without edgeR 4's bias-adjusted
-  deviances and without `poisson.bound`. F = likelihood ratio / squeezed
-  quasi-dispersion on (1, residual + prior) degrees of freedom.
+  deviances and without `poisson.bound` (where the squeezed variance is
+  below a Poisson's, edgeR takes the larger of this p and a Poisson
+  test's; it mattered in 2 clusters of 7,600 simulated). F = likelihood
+  ratio / squeezed quasi-dispersion on (1, residual + prior) degrees of
+  freedom, and never more than clusters x residual: an "infinite" prior
+  was still learnt from that many.
 * `LRT` is the other test, and is what diffcyt's `testDA_edgeR` calls:
   cluster-wise dispersions maximising each cluster's adjusted profile
   likelihood plus `PRIOR_DF / residual df` times the average of all
@@ -69,24 +84,30 @@ of p < 0.05 (5% is right). With a true two-fold change in 3 clusters, the
 share of those found at FDR < 0.05 and the false discovery rate actually
 had. "t" is Welch's test on the percentages (`compare.compare`), which
 the Clusters tab already offers. 2,000 data sets for the first line of
-each block, 1,000 for the others.
+each block, 1,000 for the others. QL and LRT were measured again on
+2026-11-23, after the correction to the F test's degrees of freedom; the
+t test's lines are from the first measurement, on other data sets.
 
                                null p < 0.05    power    FDR had
-    5 v 5, 15 clusters   QL        5.3%          65%       4.9%
-                         LRT       5.3%          72%       6.3%
+    5 v 5, 15 clusters   QL        5.4%          66%       4.3%
+                         LRT       5.4%          73%       5.1%
                          t         4.5%          34%       2.9%
-    3 v 3, 15 clusters   QL        5.8%          36%       4.7%
-                         LRT       6.0%          45%       6.7%
+    3 v 3, 15 clusters   QL        5.7%          33%       6.4%
+                         LRT       5.8%          44%       8.8%
                          t         3.4%           6%       1.7%
-    5 v 5, 8 clusters    QL        5.6%          67%       3.7%
-                         LRT       5.7%          73%       4.1%
+    5 v 5, 8 clusters    QL        6.0%          68%       3.0%
+                         LRT       6.3%          75%       3.3%
                          t         4.3%          35%       1.8%
 
 So the counts find about twice what the percentages do, and both tests
 give somewhat too many small p values: QL the fewer, which is why it is
-the default. Further out it is worse: under the null, p < 0.01 came 1.1%
-of the time with QL and 1.5% with LRT (5 v 5), and with 2 v 2 (400 data
-sets) 1.7% and 2.3%. Two samples a group is not enough for either.
+the default. Further out it is worse: under the null, p < 0.01 came 1.3%
+of the time with QL and 1.6% with LRT (5 v 5), and with 2 v 2 (400 data
+sets) 1.6% and 2.7%. Two samples a group is not enough for either. edgeR
+itself, on 300 of these tables, was no better: where this gave 4.5%,
+6.5% and 5.9% of null p values under 0.05 (QL, the three settings above),
+edgeR called the same way gave the same, and at its defaults 5.3%, 6.9%
+and 6.5%.
 
 The simulation and the model share their assumption — counts that vary
 between animals much as a negative binomial, with dispersions not too
@@ -290,7 +311,8 @@ def squeeze(s2: np.ndarray, df: np.ndarray) -> tuple[np.ndarray, float]:
     e = np.log(x) - digamma(df[ok] / 2) + np.log(df[ok] / 2)
     spread = e.var(ddof=1) - polygamma(1, df[ok] / 2).mean()
     if spread <= 0:
-        return np.full(s2.shape, float(np.exp(e.mean()))), float("inf")
+        # one variance for all: their mean, as limma's fitFDist has it
+        return np.full(s2.shape, float(x.mean())), float("inf")
     prior_df = 2.0 * _trigamma_inverse(spread)
     prior = np.exp(e.mean() + digamma(prior_df / 2) - np.log(prior_df / 2))
     return (df * np.where(ok, s2, 0.0) + prior_df * prior) / (df + prior_df), prior_df
@@ -359,7 +381,14 @@ def _test(y: np.ndarray, X: np.ndarray, offset: np.ndarray, test: str):
     with np.errstate(divide="ignore", invalid="ignore"):
         # no difference at all is p = 1 whatever the variance, zero included
         f = np.where(lr > 0, lr / squeezed, 0.0)
-    total = np.minimum(df + prior_df, 1e12)     # infinity is a chi-square; scipy says NaN
+    # The others cannot be worth more than they have: when the clusters'
+    # variances do not differ more than chance would have them the prior
+    # is "infinite", but it was still estimated from clusters x residual
+    # degrees of freedom, and that is what the F test is given (limma's
+    # and edgeR's `df.total <- pmin(df.total, df.pooled)`). Without it a
+    # dozen clusters of 3 v 3 were tested against a chi-square.
+    pooled = y.shape[0] * (X.shape[0] - X.shape[1])
+    total = np.minimum(df + prior_df, pooled)
     p = np.where(total > 0, st.f.sf(f, 1, np.where(total > 0, total, 1.0)), np.nan)
     return phi, f, p
 

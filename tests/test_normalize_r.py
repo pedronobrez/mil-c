@@ -17,8 +17,9 @@ R continues the spline's end slope, this continues as a shift.
 pass through the same knots; they choose the slopes at the knots a little
 differently, which shows where knots are far apart.
 
-The whole CytoNorm package (with its clustering) is not installed here and
-is not what this compares with. Skipped where there is no Rscript.
+The whole CytoNorm package (with its clustering) is not what this compares
+with: that is `tests/reference/normalize_compare.py`, run by hand, and
+written up in `docs/comparacao.md`. Skipped where there is no Rscript.
 """
 
 import shutil
