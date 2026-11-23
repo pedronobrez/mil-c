@@ -1026,6 +1026,25 @@ class Session:
             cluster_stats.expression(X, now.labels, [ds.label(c) for c in channels], stat),
             cluster_stats.frequencies(now.labels, ds.sample_index, ds.samples)))
 
+    def cluster_medians(self, channels: list[str] | None = None, key: str = FLOWSOM,
+                        transform: str | None = None):
+        """What each sample's cells of each cluster express — the median
+        of every marker asked for, as `expression.Medians`, clusters by
+        their names — or None before there are clusters. On the scale the
+        clustering ran on unless another is asked for."""
+        from . import expression
+        ds = self.dataset
+        now = self.clusters(key)
+        if now is None:
+            return None
+        run = ds.runs.get(key, {})
+        channels = channels or run.get("channels") or self.default_channels()
+        transform = transform or run.get("transform", "biex")
+        ids, values, counts = expression.medians(
+            self.features(channels, transform), now.labels, ds.sample_index, len(ds.samples))
+        return expression.Medians([now.name(c) for c in ids], list(ds.samples),
+                                  [ds.label(c) for c in channels], values, counts, transform)
+
     def suggest_cluster_names(self, key: str = FLOWSOM) -> dict[int, str]:
         """cluster → a name from what it expresses (`clusters.suggest_names`),
         on the markers the clustering ran on. Only the clusters a name was
