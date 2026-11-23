@@ -14,7 +14,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .. import abundance, cluster_stats, compare
+from .. import abundance, cluster_stats, clusters, compare
 from ..volcano import COLORS, REST, VolcanoContent
 from . import style, theme
 from .results_dialog import SETTING_FOLDER, _text
@@ -195,7 +195,10 @@ class AbundanceDialog(QtWidgets.QDialog):
     def for_tab(cls, tab) -> "AbundanceDialog":
         """What the Clusters tab is comparing now, as counts."""
         ds = tab.session.dataset
-        counts = cluster_stats.counts(ds.derived["FlowSOM"], ds.sample_index, ds.samples)
+        # the clusters as the tab shows them: merged, and by their names
+        now = tab.session.clusters(tab.key)
+        counts = clusters.named(
+            cluster_stats.counts(now.labels, ds.sample_index, ds.samples), now)
         facets = tab._facets()
         used = {tab.group_by.currentData(), tab.facet_by.currentData() if facets else ""}
         columns = {k: [m.get(k, "") for m in ds.meta]

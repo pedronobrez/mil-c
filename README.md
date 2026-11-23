@@ -41,7 +41,9 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   sample was acquired in and the samples that should look alike in every batch; each batch is
   brought onto the others before the samples are concatenated, marker by marker or within
   FlowSOM clusters. Afterwards, look at every batch's references over one another, marker by
-  marker, before and after.
+  marker, before and after. The batches meet at their mean, or one batch is the target and is
+  left exactly as acquired. Optionally the samples themselves are normalised as they are read,
+  so Gates and Statistics show normalised values too.
 - Three ways to balance: the same number from every sample, the same total from every group, or
   a ceiling per sample; and a minimum below which a sample is left out rather than allowed to
   drag every other down.
@@ -63,6 +65,20 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - Export the population shown, of the samples selected or of all, as FCS or CSV.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
 - What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
+- **Quality…** checks each acquisition for clogs, bubbles, bursts and drifts — the flow rate and
+  the signal of every population over time — and removes the bad stretches as a first
+  population, Clean, that every gate, statistic and concatenation then starts from. No R
+  needed; it takes after flowAI and PeacoQC but was not compared with them.
+- With several samples selected on a histogram, show each sample — or each group pooled — as
+  a violin (median and quartiles marked) or a box (Tukey whiskers, at most 200 outliers a box).
+- **Matrix…**: every pair of the chosen parameters for the population shown, as density with
+  histograms on the diagonal — where spillover shows.
+- **Backgate…**: the population shown, highlighted over its parent's events on each gate above
+  it, with the outlines drawn.
+- From a FlowJo workspace, quadrants, boolean combinations and ellipses are read as well as
+  rectangles and polygons. Those three are read by rules taken from FlowKit and CytoML, not
+  checked against FlowJo on our own files: such populations are in italics, with FlowJo's own
+  count in the tooltip to compare.
 
 **Statistics** — a row for each population of each sample.
 - Count and percent of parent, of grandparent and of all events.
@@ -71,10 +87,21 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - The samples' own columns sit beside the name; sort by any header; export as CSV or copy
   into Excel or Prism.
 - Compare groups on any column of the table, with the same tests and corrections.
+- Where the same animals or donors were measured in every group, choose the column that names
+  them under *Paired by*: the tests become the paired t or Wilcoxon signed-rank test for two
+  groups and repeated-measures ANOVA (Greenhouse-Geisser corrected) or Friedman for more, on
+  the subjects present in every group. Welch's ANOVA is offered for three or more independent
+  groups with unequal variances.
 - Send any column to GraphPad Prism as a `.pzfx` file: populations down, groups across, a
   subcolumn for each sample. The cluster frequencies go the same way from the Clusters tab.
 
 **Explore** — UMAP, tSNE and FlowSOM, run in the background with FlowJo's defaults.
+- PhenoGraph-style clustering finds the clusters without being told how many: nearest
+  neighbours, Jaccard weights, Louvain communities, with a resolution to make them coarser or
+  finer. At resolution 1 it tends to split large populations into several pieces, the more so
+  with few markers: lower it, or merge the pieces in Clusters.
+- PCA gives two axes that can be read, each with its share of the variance and the markers that
+  weigh in it.
 - Any two axes: an embedding, or two markers on a biexponential scale ticked in decades.
 - Colour by group, day, animal, sample, cluster, or the expression of a marker.
 - Split into one panel per group — or per group and day — with everyone else faint behind.
@@ -88,6 +115,17 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - Test the groups in each cluster: Welch's t or Mann-Whitney for two, ANOVA or Kruskal-Wallis
   for more, with p adjusted for the number of clusters and written on the chart.
 - Shift+drag on the map outlines any set of events and reports the same numbers for it.
+- Clusters can be renamed, annotated and merged (the algorithm's own clusters are kept
+  underneath, so merges can be undone), names can be proposed from the markers each cluster is
+  positive for, and a lasso can be kept as a cluster of its own. A FlowSOM cluster can be turned
+  into a population of the full files, available in Gates and Statistics, by assigning every
+  event to its nearest node of the trained map.
+- Where both FlowSOM and PhenoGraph were run, choose which clustering the tab shows.
+- **Differential abundance…**: two groups compared on each cluster's cell counts by a
+  negative-binomial model in the manner of diffcyt's DA-edgeR (quasi-likelihood F test, optional
+  adjustment for a batch or day), with a table and a volcano. It tests shares of the
+  concatenated events, was calibrated by simulation but not checked against edgeR, and is not
+  to be trusted with two samples a group.
 
 **Figure…** — on every plot.
 - Width and height in millimetres, resolution, font and size, title and axis labels, frame,
@@ -95,16 +133,19 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - Recolour or rename any category: double-click its colour, type over its label.
 - Save the look under a name and apply it to the next figure.
 - The preview is drawn by the code that writes the file.
+- **Add to plate**: several panels on one page (View ▸ Plate…), lettered A, B, C…, in one type,
+  at a journal's column width, refreshed from the plots they came from when the analysis
+  changes. A report writes the plate as a PDF behind a page stating the population, sampling
+  plan, seed, normalisation and the settings of each run.
 
 ## What it does not do
 
 - **Gating is not all of FlowJo's.** Rectangles, polygons, ellipses, quadrants, ranges and
-  boolean combinations are drawn here; from a FlowJo workspace only rectangles and polygons are
-  read. No offset or curly quadrants, no automatic gates, no logicle scale, and one
-  compensation matrix for all the samples rather than one each.
-- **Tests between groups are the simple ones.** One value per sample, compared by group. No
-  mixed models, no paired or repeated-measures designs, no diffcyt or edgeR.
-- **One figure at a time.** No multi-panel plates.
+  boolean combinations are drawn here and read from a FlowJo workspace. No offset or curly
+  quadrants, no automatic gates, no logicle scale, and one compensation matrix for all the
+  samples rather than one each.
+- **Tests between groups stop short of mixed models.** One value per sample, compared by group,
+  paired or not; counts by a negative-binomial model written here, not by edgeR itself.
 - **Its maps are not FlowJo's maps point for point.** See below.
 
 ## How close it is to FlowJo
@@ -178,12 +219,19 @@ milc/
   fcs.py            FCS 2.0 / 3.0 / 3.1, read and written with numpy alone
   compensation.py   spillover matrices, from the file or from the workspace
   transforms.py     linear, arcsinh, FlowJo's biexponential; decade ticks
-  gating.py         rectangle and polygon gates, and the tree they form
+  gating.py         the gates — drawn, by time, by cluster — and the tree they form
   wsp.py            a FlowJo 10 workspace: files, matrices, transforms, gates
   sample.py         one file with its matrix and its gates
   sampling.py       the plan: how many events each sample gives, and why
   dataset.py        the concatenated events, and where each came from
-  embed.py          UMAP and tSNE; how well a map keeps neighbours
+  embed.py          UMAP, tSNE and PCA; how well a map keeps neighbours
+  graphcluster.py   PhenoGraph-style clustering: neighbours, Jaccard, Louvain
+  clusters.py       clusters as the user has them: names, notes, merges
+  qc.py             quality of an acquisition over time
+  abundance.py      differential abundance of clusters, on counts
+  volcano.py        the volcano plot of it
+  views.py          violins and boxes, the matrix of pairs, backgating
+  plate.py          several panels on a page, and the PDF report
   flowsom.py        the self-organising map, consensus metaclustering, the tree
   density.py        smoothed histograms and probability contours, for overlays
   cluster_stats.py  expression and frequency tables
@@ -227,6 +275,19 @@ window before it is wrapped.
 - **Prism files** follow the layout of the R package `pzfx`, round-trip through this program's
   own reader, and have not been opened in Prism by the author.
 - **Statistics** follow FlowJo's definitions and were not set beside FlowJo's numbers.
+- **Quadrants, booleans and ellipses from a workspace.** Quadrant and boolean counts rest on
+  arithmetic already verified for rectangles. Ellipses were checked against FlowJo once, on a
+  100-event published file with linear axes; on biexponential axes nothing was measured, and an
+  ellipse near zero may sit up to about one display channel off. FlowJo's count beside each is
+  the check.
+- **Quality control** was tested on simulated clogs, bursts, steps, bubbles and drifts, not
+  against flowAI or PeacoQC, and on real files only without a known truth.
+- **PhenoGraph** is written from the papers and was never compared with the package.
+- **Differential abundance** was never run beside edgeR or diffcyt. Under no difference, 5
+  samples a group, it gave p < 0.05 in 5.3% of simulated tests (Welch's t on percentages:
+  4.5%), with about twice the t test's power for a two-fold change.
+- **Repeated-measures and Welch's ANOVA** reproduce textbook and R examples typed from memory,
+  and independent calculations on random data.
 
 ## Tests
 

@@ -24,6 +24,10 @@ from .scatter import Categories, MapView
 METACLUSTER = "Metacluster"
 
 
+#: the clusterings the tab can show, in the order they are offered
+CLUSTERINGS = ("FlowSOM", "PhenoGraph")
+
+
 class ClustersTab(QtWidgets.QWidget):
     sigStatus = QtCore.pyqtSignal(str)
     #: clusters were renamed, merged or drawn: whatever shows them is out of date
@@ -41,6 +45,11 @@ class ClustersTab(QtWidgets.QWidget):
         self._filling = False
         self._tree = None
 
+        self.clustering = QtWidgets.QComboBox()
+        self.clustering.setToolTip("Which clustering of the events is shown: every one "
+                                   "that was run in Explore")
+        self.clustering_caption = QtWidgets.QLabel("Clusters")
+        self.clustering_caption.setProperty("role", "caption")
         self.embedding = QtWidgets.QComboBox()
         self.all_markers = QtWidgets.QCheckBox("Other markers too")
         self.ramp = RampPicker()
@@ -80,14 +89,6 @@ class ClustersTab(QtWidgets.QWidget):
             "more — and those not found in every group are left out.")
         self.pairing = QtWidgets.QLabel("")
         self.pairing.setProperty("role", "warning")
-        # a row of its own: the bar above is already wider than a laptop's screen
-        cap = QtWidgets.QLabel("Paired by")
-        cap.setProperty("role", "caption")
-        pairing_row = QtWidgets.QHBoxLayout()
-        pairing_row.addWidget(cap)
-        pairing_row.addWidget(self.paired_by)
-        pairing_row.addSpacing(10)
-        pairing_row.addWidget(self.pairing, 1)
         self.results_button = QtWidgets.QPushButton("Results…")
         self.results_button.setToolTip("Every comparison as a table, pair by pair where "
                                        "there are more than two groups")
@@ -102,24 +103,29 @@ class ClustersTab(QtWidgets.QWidget):
             "model in the manner of diffcyt and edgeR, with a volcano")
         self.clear_button = QtWidgets.QPushButton("Clear selection")
 
-        bar = QtWidgets.QHBoxLayout()
-        for label, widget in (("Map", self.embedding), ("Heatmap", self.stat),
-                              ("Colours", self.ramp),
-                              (None, self.per_marker), (None, self.all_markers),
-                              ("Compare", self.group_by), ("within each", self.facet_by),
-                              ("Tree", self.tree_color), ("Test", self.test),
-                              (None, self.correction)):
-            if label:
-                cap = QtWidgets.QLabel(label)
-                cap.setProperty("role", "caption")
-                bar.addWidget(cap)
-            bar.addWidget(widget)
-            bar.addSpacing(10)
-        bar.addWidget(self.results_button)
-        bar.addWidget(self.prism_button)
-        bar.addWidget(self.abundance_button)
+        # two rows — how it looks, and what is compared: one was wider than
+        # any laptop's screen
+        def row(*items) -> QtWidgets.QHBoxLayout:
+            lay = QtWidgets.QHBoxLayout()
+            for label, widget in items:
+                if label:
+                    cap = QtWidgets.QLabel(label)
+                    cap.setProperty("role", "caption")
+                    lay.addWidget(cap)
+                lay.addWidget(widget)
+                lay.addSpacing(10)
+            return lay
+
+        bar = row((None, self.clustering_caption), (None, self.clustering),
+                  ("Map", self.embedding), ("Heatmap", self.stat), ("Colours", self.ramp),
+                  (None, self.per_marker), (None, self.all_markers), ("Tree", self.tree_color))
         bar.addStretch(1)
         bar.addWidget(self.clear_button)
+        pairing_row = row(("Compare", self.group_by), ("within each", self.facet_by),
+                          ("Test", self.test), (None, self.correction),
+                          ("Paired by", self.paired_by), (None, self.results_button),
+                          (None, self.prism_button), (None, self.abundance_button))
+        pairing_row.addWidget(self.pairing, 1)
 
         self.map = MapView()
         self.heatmap = HeatmapView()
@@ -129,7 +135,8 @@ class ClustersTab(QtWidgets.QWidget):
         top.addWidget(self._titled("Map", self.map, "cluster_map"))
         top.addWidget(self._titled("Expression", self.heatmap, "cluster_expression"))
         bottom = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        bottom.addWidget(self._titled("FlowSOM tree", self.tree, "flowsom_tree"))
+        self._tree_box = self._titled("FlowSOM tree", self.tree, "flowsom_tree")
+        bottom.addWidget(self._tree_box)
         bottom.addWidget(self._titled("Frequency", self.freq, "cluster_frequency"))
         grid = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         grid.addWidget(top)
@@ -141,7 +148,8 @@ class ClustersTab(QtWidgets.QWidget):
         self.summary = QtWidgets.QLabel("")
         self.summary.setWordWrap(True)
         self.summary.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        self.empty = QtWidgets.QLabel("Run FlowSOM in the Explore tab: the clusters appear here.")
+        self.empty = QtWidgets.QLabel(
+            "Run FlowSOM or PhenoGraph in the Explore tab: the clusters appear here.")
         self.empty.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.empty.setProperty("role", "hint")
         body = QtWidgets.QWidget()
@@ -164,6 +172,7 @@ class ClustersTab(QtWidgets.QWidget):
             view.sigCluster.connect(self.select)
         self.map.sigSelected.connect(self._lassoed)
         self.clear_button.clicked.connect(self.clear_selection)
+        self.clustering.currentIndexChanged.connect(self._clustering_chosen)
         self.embedding.currentIndexChanged.connect(self._draw_map)
         self.stat.currentIndexChanged.connect(self._draw_tables)
         self.per_marker.toggled.connect(self._draw_tables)
@@ -212,6 +221,17 @@ class ClustersTab(QtWidgets.QWidget):
     def refresh(self) -> None:
         """After a run, or a new dataset."""
         ds = self.session.dataset
+        found = [k for k in CLUSTERINGS if ds is not None and k in ds.derived]
+        if self.key not in found and found:
+            self.key = found[0]
+        self._filling = True
+        self.clustering.clear()
+        for k in found:
+            self.clustering.addItem(k, k)
+        self.clustering.setCurrentIndex(max(self.clustering.findData(self.key), 0))
+        self._filling = False
+        for w in (self.clustering, self.clustering_caption):
+            w.setVisible(len(found) > 1)
         now = self.session.clusters(self.key)
         if now is None:
             self.stack.setCurrentIndex(0)
@@ -222,7 +242,10 @@ class ClustersTab(QtWidgets.QWidget):
             self.selected = None
         if self._lasso is not None and self._lasso.size != len(ds):
             self._lasso = None
-        self._tree = self.session.flowsom_tree()
+        # the tree is FlowSOM's own: its nodes, joined as the map joins them
+        self._tree = self.session.flowsom_tree() if self.key == clusters.FLOWSOM else None
+        self._tree_box.setVisible(self._tree is not None)
+        self.tree_color.setEnabled(self._tree is not None)
 
         # the box used to do nothing whenever FlowSOM had been run on every
         # marker, which is what the Explore tab ticks to begin with; now it
@@ -278,6 +301,16 @@ class ClustersTab(QtWidgets.QWidget):
                 combo.setCurrentIndex(i)
         self._filling = False
         self._draw_all()
+
+    def set_clustering(self, key: str) -> None:
+        """Show another clustering of the same events."""
+        self.key = key
+        self.selected, self._lasso = None, None
+        self.refresh()
+
+    def _clustering_chosen(self) -> None:
+        if not self._filling and self.clustering.currentData():
+            self.set_clustering(self.clustering.currentData())
 
     def _recolour(self) -> None:
         if self.stack.currentIndex() == 1:

@@ -187,6 +187,9 @@ class MainShell(QtWidgets.QMainWindow):
             self.samples.refresh()
             self.gates.refresh()
             self.statistics.refresh()
+            report = self.session.workspace_report()
+            if report:
+                self.status(f"{os.path.basename(path)}: {report}")
 
     def open_dataset(self, path: str) -> None:
         self.session.dataset = (Dataset.load(path) if path.endswith(".npz")

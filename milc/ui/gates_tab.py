@@ -728,6 +728,16 @@ class GatesTab(QtWidgets.QWidget):
             for col in (1, 2):
                 item.setTextAlignment(col, QtCore.Qt.AlignmentFlag.AlignRight
                                       | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            if node.note:
+                # read from a workspace by a rule not checked against FlowJo:
+                # set apart, with FlowJo's own count to compare
+                font = item.font(0)
+                font.setItalic(True)
+                item.setFont(0, font)
+                theirs = (f" FlowJo counted {node.reference_count:,d}; here {n:,d}."
+                          if node.reference_count is not None else "")
+                for col in range(3):
+                    item.setToolTip(col, node.note + theirs)
             (parent_item.addChild if parent_item is not None
              else self.tree.addTopLevelItem)(item)
             if node.path == select:

@@ -28,7 +28,7 @@ material de divulgação.
 | Ver e editar keywords | S | N | FCS Express, OMIQ, CellEngine |
 | Anotação de amostras em colunas livres | S | **S** | OMIQ, CellEngine |
 | Agrupar por metadados, mais de uma coluna | S | **S** | OMIQ, CellEngine |
-| Ler workspace do FlowJo (.wsp) | S | **S** (retângulo, polígono, compensação) | FlowKit; Floreada escreve |
+| Ler workspace do FlowJo (.wsp) | S | **S** (retângulo, polígono, quadrante, booleano e elipse; os três últimos por regras não conferidas com o FlowJo) | FlowKit; Floreada escreve |
 | GatingML | N? | N | FCS Express, Cytobank?, FlowKit |
 
 ### Compensação e escalas
@@ -50,22 +50,22 @@ material de divulgação.
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Gate manual no tempo | S | P (retângulo sobre Time) | todos |
-| flowAI / flowCut / PeacoQC | P (plugins, exigem R) | N | OMIQ, FCS Express, Cytobank |
-| Relatório de QC | P | N | FCS Express, Kaluza, FlowLogic |
+| flowAI / flowCut / PeacoQC | P (plugins, exigem R) | **S** (método próprio, embutido: vazão e sinal no tempo; não comparado com eles) | OMIQ, FCS Express, Cytobank |
+| Relatório de QC | P | P (tabela por amostra do que a limpeza tira) | FCS Express, Kaluza, FlowLogic |
 
 ### Gates
 
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Retângulo, polígono, faixa (1D) | S | **S** | todos |
-| Elipse | S | **S** (desenhada aqui; não lida do .wsp) | FCS Express, CellEngine, Kaluza, Floreada |
+| Elipse | S | **S** (desenhada aqui e lida do .wsp) | FCS Express, CellEngine, Kaluza, Floreada |
 | Quadrante | S | **S** (idem) | idem |
 | Quadrante deslocado, angulado, curvo | S | N | Kaluza (parte) |
 | Booleanos (E / OU / NÃO) | S | **S** | FCS Express, Cytobank, Kaluza |
 | Autogate por contorno, gate magnético | S | N | Kaluza (contorno) |
 | Autogating por modelo | P (plugins) | N | OMIQ, Cytobank, FlowLogic, openCyto |
-| Gate sobre clusters | P (plugin) | P (laço com estatísticas, sem virar população) | FCS Express, OMIQ, Cytobank |
-| Backgating | S | N | FCS Express, OMIQ |
+| Gate sobre clusters | P (plugin) | **S** (cluster do FlowSOM vira população dos arquivos inteiros) | FCS Express, OMIQ, Cytobank |
+| Backgating | S | **S** | FCS Express, OMIQ |
 | Gate do grupo para todas as amostras | S | **S** | todos |
 | Ajuste por amostra | S | **S** | FCS Express, CellEngine, Floreada |
 
@@ -80,9 +80,9 @@ material de divulgação.
 | Sobreposição de amostras (overlay) | S | **S** (histogramas, também escalonados; contornos) | todos |
 | Heatmap de populações | S | **S** (clusters) | FCS Express, OMIQ, Cytobank, CellEngine |
 | Barras por grupo com cada amostra como ponto | P (table plots) | **S**, com painéis por segunda coluna | FCS Express, OMIQ, Cytobank |
-| Violino / box | P (plugin) | N | FCS Express, Cytoflow |
+| Violino / box | P (plugin) | **S** | FCS Express, Cytoflow |
 | Radar, árvore de fenótipos | N | N | Kaluza |
-| Matriz N×N de gráficos | P | N | FCS Express, Kaluza |
+| Matriz N×N de gráficos | P | **S** (até 12 parâmetros) | FCS Express, Kaluza |
 | Cinética no tempo | S | N | FCS Express, Floreada |
 | Mapa dividido em painéis por grupo | P (layout) | **S**, por uma ou duas colunas | OMIQ |
 
@@ -120,17 +120,17 @@ material de divulgação.
 | UMAP | P (plugin, exige R) | **S**, embutido | FCS Express, OMIQ, Cytobank, CellEngine |
 | tSNE | S | **S** | idem |
 | opt-SNE / FIt-SNE | ? | P (openTSNE usa FIt-SNE) | OMIQ, Cytobank |
-| PCA | P (plugin) | N | FCS Express, OMIQ, CellEngine |
+| PCA | P (plugin) | **S** | FCS Express, OMIQ, CellEngine |
 | TriMap, PaCMAP, PHATE | P (plugins) | N | OMIQ |
 | FlowSOM | P (plugin, exige R) | **S**, embutido | FCS Express, OMIQ, Cytobank, CellEngine |
-| PhenoGraph / Louvain / Leiden | P (plugin) | N | FCS Express, OMIQ, CellEngine |
+| PhenoGraph / Louvain / Leiden | P (plugin) | **S** (Louvain, no estilo do PhenoGraph; sem Leiden) | FCS Express, OMIQ, CellEngine |
 | X-Shift, SPADE, CITRUS | P / N | N | OMIQ, Cytobank, FCS Express (SPADE) |
 | Trajetória (Wanderlust, Wishbone) | P (plugins) | N | OMIQ |
 | Explorador de clusters com painéis ligados | S | **S** | FCS Express, OMIQ, FlowLogic |
-| Renomear, juntar e anotar clusters | S | N | OMIQ, FCS Express |
-| Nome automático de clusters | P (plugins) | N | FlowLogic |
-| Abundância diferencial (diffcyt, edgeR, SAM) | P (plugin) | N | OMIQ; Cytobank (CITRUS) |
-| Normalização de lote (CytoNorm, cyCombine) | P (plugins) | **S** (no estilo do CytoNorm) | OMIQ |
+| Renomear, juntar e anotar clusters | S | **S** | OMIQ, FCS Express |
+| Nome automático de clusters | P (plugins) | **S** (sugerido pelos marcadores positivos) | FlowLogic |
+| Abundância diferencial (diffcyt, edgeR, SAM) | P (plugin) | **S** (binomial negativa no estilo do edgeR, não conferida com ele) | OMIQ; Cytobank (CITRUS) |
+| Normalização de lote (CytoNorm, cyCombine) | P (plugins) | **S** (no estilo do CytoNorm; também em Gates e Statistics; lote alvo) | OMIQ |
 | Semente e parâmetros gravados com o resultado | P | **S** | OMIQ (registro de passos) |
 
 ### Comparação entre grupos
@@ -140,7 +140,7 @@ material de divulgação.
 | Média e desvio por grupo | P | **S** | vários |
 | Teste t (Welch), Mann-Whitney, ANOVA, Kruskal-Wallis | N | **S** | Cytobank, FCS Express (ANOVA), FlowLogic? |
 | Correção para múltiplos testes | N | **S** (Benjamini-Hochberg, Holm, Bonferroni) | Cytobank, OMIQ |
-| Desenhos pareados ou de medidas repetidas | N | N | — |
+| Desenhos pareados ou de medidas repetidas | N | **S** (t pareado, Wilcoxon, ANOVA de medidas repetidas, Friedman) | — |
 | Exportar para o Prism | N | **S** (.pzfx, tabela agrupada com réplicas) | FCS Express, OMIQ |
 
 ### Figuras, relatórios e exportação
@@ -151,8 +151,8 @@ material de divulgação.
 | SVG / PDF com texto editável, PNG / TIFF com dpi | P | **S** | OMIQ e Cytobank (SVG, PDF) |
 | Estilos de figura salvos e reaplicáveis | N? | **S** | — |
 | Rampa de cor à escolha, inclusive cores próprias | P | **S** | — |
-| Editor de layout com vários painéis | S | N | todos os comerciais |
-| Relatório em lote | S | N | todos os comerciais |
+| Editor de layout com vários painéis | S | **S** (prancha com letras, largura de coluna de revista) | todos os comerciais |
+| Relatório em lote | S | P (PDF: prancha e página de métodos) | todos os comerciais |
 | PowerPoint | S | N | FCS Express, OMIQ, FlowLogic |
 | Exportar população gatada como FCS / CSV | S | **S** | FCS Express, Cytobank, CellEngine, Floreada |
 
@@ -248,6 +248,13 @@ amostras, gates de elipse, quadrante e booleanos, escala por parâmetro, ediçã
 exportação de população, contorno, testes entre grupos, saída para o Prism e normalização de
 lote.
 
+Feito em seguida, da lista "Próximas implementações" que estava aqui: trabalhar os clusters
+(nomes, notas, junção, nome sugerido, cluster como população); prancha de vários painéis e
+relatório em PDF; limpeza automática da aquisição com gráfico no tempo; PhenoGraph e PCA;
+abundância diferencial com volcano; testes pareados, de medidas repetidas e ANOVA de Welch;
+normalização também em Gates e Statistics, com lote alvo; leitura de quadrantes, booleanos e
+elipses do workspace do FlowJo; violino e box, matriz N×N e backgating.
+
 ### A conferir, antes de qualquer item novo
 
 Coisas feitas que ainda dependem de um olhar de fora:
@@ -258,34 +265,31 @@ Coisas feitas que ainda dependem de um olhar de fora:
   foram testados por código e por capturas, não à mão.
 - **Uma estatística lado a lado com o FlowJo.** As definições são as dele; os números não foram
   comparados.
+- **Um workspace com elipse, quadrante ou booleano.** As regras de leitura vieram do FlowKit e
+  do CytoML; nenhum arquivo nosso tem esses gates. A contagem do FlowJo aparece ao lado de cada
+  população lida assim: é só comparar.
+- **A abundância diferencial ao lado do edgeR/diffcyt**, e o PhenoGraph ao lado do pacote. Os
+  dois foram calibrados por simulação, não comparados com o original.
+- **A limpeza automática numa amostra que se sabe ruim.** Em dados simulados acerta o trecho; nos
+  arquivos reais tirou de 0 a 8%, sem gabarito. A `14Ctrl1` perde os primeiros ~23 s.
+- **A normalização "em Gates e Statistics".** Os gates foram desenhados nos valores originais:
+  depois de ligá-la, vale rever cada um.
 
 ### Próximas implementações, na ordem em que eu faria
 
-1. **Trabalhar os clusters** (item 10). Renomear, juntar e anotar clusters; transformar um
-   cluster ou um laço em população, com gate e estatísticas; sugerir nome pelo perfil de
-   marcadores. Hoje um cluster é um número, e é isso que mais atrapalha levar um resultado para
-   uma figura.
-2. **Prancha de vários painéis e relatório** (item 15). Montar numa página o mapa, o heatmap, as
-   frequências e os gates, com os estilos que já existem, e refazer tudo num clique quando a
-   análise muda.
-3. **Limpeza automática e gráfico no tempo** (item 13). PeacoQC ou flowAI, e o sinal ao longo da
-   aquisição: dá para ver uma amostra ruim antes que ela entre na análise — a `3Case1` é
-   candidata.
-4. **PhenoGraph / Leiden e PCA** (item 11). Um método que não pede o número de clusters, e a
-   redução mais simples de todas.
-5. **Abundância diferencial** (item 14). diffcyt ou edgeR sobre as contagens por cluster, com
-   volcano. Os testes de hoje comparam porcentagens; estes modelam contagens e lidam melhor com
-   poucos animais.
-6. **Desenhos pareados e de medidas repetidas** nos testes entre grupos, e ANOVA de Welch.
-7. **Normalização: o que falta.** Aplicá-la também a Gates e Statistics (hoje só o concatenado é
-   normalizado); escolher um lote como alvo; comparar com o pacote CytoNorm inteiro.
-8. **Ler mais do workspace do FlowJo.** Elipses, quadrantes e booleanos; hoje só retângulos e
-   polígonos.
-9. **Logicle**, e matriz de compensação por amostra.
-10. **Violino e box por marcador; matriz N×N; backgating.**
-11. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
-12. **Distribuição.** Publicar a versão 0.1.0; instalador para Linux; assinatura dos instaladores
-    (hoje o macOS e o Windows avisam na primeira abertura).
+1. **Comparar com os originais** o que foi escrito a partir dos artigos: abundância diferencial
+   com o edgeR, PhenoGraph com o pacote, limpeza com o PeacoQC, normalização com o CytoNorm
+   inteiro. Precisa de R com Bioconductor.
+2. **Logicle**, e matriz de compensação por amostra.
+3. **Expressão diferencial por cluster** (o "DS" do diffcyt): a mediana de um marcador dentro de
+   cada cluster, entre grupos.
+4. **Leiden** no lugar do Louvain, e tamanho mínimo de cluster no PhenoGraph, que hoje divide
+   demais as populações grandes na resolução 1.
+5. **Prancha guardada com o projeto**, e mais de uma prancha; hoje ela dura a sessão.
+6. **Limpeza pela linha de comando**, e o resumo dela no relatório.
+7. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
+8. **Distribuição.** Publicar a versão 0.1.0; instalador para Linux; assinatura dos instaladores
+   (hoje o macOS e o Windows avisam na primeira abertura).
 
 Mais adiante, sem mudança: proliferação, ciclo celular e cinética; autocompensação e AutoSpill;
 GatingML; autogating; unmixing espectral; trilha de auditoria.

@@ -204,6 +204,25 @@ class Session:
         # the deepest gate every gated sample has is what was meant
         self.population = paths[-1] if paths else ALL_EVENTS
 
+    def workspace_report(self) -> str:
+        """What a reader should know about the workspace just read: what
+        was left unread, and what was read by a rule not checked against
+        FlowJo. Empty where there is nothing to say."""
+        from .wsp import unverified
+        if self.workspace is None:
+            return ""
+        parts = []
+        skipped = self.workspace.skipped
+        if skipped:
+            kinds = Counter(s.kind for s in skipped)
+            parts.append(f"{len(skipped)} population(s) not read ("
+                         + ", ".join(f"{n} {k}" for k, n in kinds.most_common()) + ")")
+        marked = sum(len(unverified(s.gates)) for s in self.workspace.samples)
+        if marked:
+            parts.append(f"{marked} read by rules not checked against FlowJo: they are in "
+                         "italics in Gates, with FlowJo's own count to compare")
+        return "; ".join(parts)
+
     def _borrow(self) -> None:
         """Every file its own gating tree: what was saved beside the files
         if anything was, else the workspace's, else the group's, else none."""
