@@ -223,14 +223,14 @@ def cmd_analyze(a) -> int:
 
     if a.phenograph:
         from . import graphcluster
-        found = graphcluster.phenograph(X, a.k, a.resolution, a.seed)
+        found = graphcluster.phenograph(X, a.k, a.resolution, a.seed, method=a.method,
+                                        min_cluster_size=a.min_cluster_size)
         ds.derived["PhenoGraph"] = found.labels.astype(np.int32)
-        ds.runs["PhenoGraph"] = {**base, "k": found.k, "resolution": a.resolution,
-                                 "n_clusters": found.n_clusters,
-                                 "modularity": found.modularity}
+        ds.runs["PhenoGraph"] = {**base, **found.settings()}
         print(f"PhenoGraph: {found.n_clusters} clusters, modularity "
               f"{found.modularity:.3f}; the largest holds "
-              f"{np.mean(found.labels == 1):.1%} of the events")
+              f"{np.mean(found.labels == 1):.1%} of the events"
+              f" ({graphcluster.describe(ds.runs['PhenoGraph'])})")
         _cluster_tables(ds, X, found.labels, channels, a.group_by,
                         a.out + "_phenograph")
     if a.pca:
@@ -747,6 +747,11 @@ def main(argv=None) -> int:
     s.add_argument("--k", type=int, default=30, help="PhenoGraph's neighbours")
     s.add_argument("--resolution", type=float, default=1.0,
                    help="above 1, more and smaller clusters")
+    s.add_argument("--method", choices=("leiden", "louvain"), default="leiden",
+                   help="how PhenoGraph's graph is cut into communities")
+    s.add_argument("--min-cluster-size", type=int, default=10,
+                   help="PhenoGraph clusters of fewer events join the cluster "
+                        "they are most joined to; 1 keeps them all")
     s.add_argument("--pca", action="store_true")
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--group-by", default="Group")
