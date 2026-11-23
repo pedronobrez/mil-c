@@ -47,6 +47,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import figures, order
+from .qc import time_channel  # noqa: F401  (the Time parameter of a file)
+from .qc_plots import timestep  # noqa: F401  (seconds in one unit of it)
 
 MEDIAN, MEAN, ABOVE = "Median", "Mean", "% above threshold"
 STATISTICS = [MEDIAN, MEAN, ABOVE]
@@ -56,21 +58,6 @@ SMOOTHINGS = {NONE: "None", MOVING: "Moving average", GAUSSIAN: "Gaussian"}
 SLICES = 100
 #: a slice of fewer events than this has no number: one cell is not a median
 MIN_EVENTS = 5
-
-
-def time_channel(channels: list[str]) -> str | None:
-    """The parameter that holds the time of acquisition, if there is one."""
-    return next((c for c in channels if c.strip().lower() == "time"), None)
-
-
-def timestep(keywords: dict) -> float:
-    """Seconds in one unit of Time, as FCS 3 says it; 0 where the file
-    does not."""
-    try:
-        step = float(keywords.get("$TIMESTEP", "") or 0)
-    except (TypeError, ValueError):
-        return 0.0
-    return step if np.isfinite(step) and step > 0 else 0.0
 
 
 @dataclass
