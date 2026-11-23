@@ -46,6 +46,11 @@ class ClustersTab(QtWidgets.QWidget):
             "Each column runs over the whole ramp by itself, so a dim marker "
             "shows its own differences. Unticked, one ramp for the table.")
         self.group_by = QtWidgets.QComboBox()
+        self.group_by.setToolTip("What the bars compare, by colour")
+        self.facet_by = QtWidgets.QComboBox()
+        self.facet_by.setToolTip(
+            "A second subdivision: one panel for each of its values, so the groups "
+            "are compared within each — the groups within each day, say")
         self.tree_color = QtWidgets.QComboBox()
         self.clear_button = QtWidgets.QPushButton("Clear selection")
 
@@ -53,7 +58,8 @@ class ClustersTab(QtWidgets.QWidget):
         for label, widget in (("Map", self.embedding), ("Heatmap", self.stat),
                               ("Colours", self.ramp),
                               (None, self.per_marker), (None, self.all_markers),
-                              ("Groups", self.group_by), ("Tree", self.tree_color)):
+                              ("Compare", self.group_by), ("within each", self.facet_by),
+                              ("Tree", self.tree_color)):
             if label:
                 cap = QtWidgets.QLabel(label)
                 cap.setProperty("role", "caption")
@@ -108,6 +114,9 @@ class ClustersTab(QtWidgets.QWidget):
         self.per_marker.toggled.connect(self._draw_tables)
         self.all_markers.toggled.connect(self._draw_tables)
         self.group_by.currentIndexChanged.connect(self._draw_tables)
+        self.group_by.currentIndexChanged.connect(self._summarise)
+        self.facet_by.currentIndexChanged.connect(self._draw_tables)
+        self.facet_by.currentIndexChanged.connect(self._summarise)
         self.tree_color.currentIndexChanged.connect(self._draw_tree)
         palette.notifier.changed.connect(self._recolour)
         self.refresh()
@@ -168,7 +177,8 @@ class ClustersTab(QtWidgets.QWidget):
             "Untick the lineage and viability markers in Explore and run it again "
             "to cluster on fewer.")
         self._filling = True
-        keep = {c: c.currentData() for c in (self.embedding, self.group_by, self.tree_color)}
+        keep = {c: c.currentData() for c in (self.embedding, self.group_by, self.facet_by,
+                                             self.tree_color)}
         self.embedding.clear()
         for name in ("UMAP", "tSNE"):
             if name + "1" in ds.derived:
@@ -178,22 +188,28 @@ class ClustersTab(QtWidgets.QWidget):
         self.embedding.addItem(" × ".join(ds.label(c).split()[0] for c in pair),
                                "channels")
         self.group_by.clear()
+        self.facet_by.clear()
         keys = [k for k in dict.fromkeys(k for m in ds.meta for k in m)
                 if len({m.get(k, "") for m in ds.meta}) > 1]
         if len(self.session.group_by) > 1:
-            self.group_by.addItem(" + ".join(k.capitalize() for k in self.session.group_by),
-                                  "*")
+            self.group_by.addItem(" + ".join(self.session.group_by), "*")
         for k in keys:
-            self.group_by.addItem(k.capitalize(), k)
+            self.group_by.addItem(k, k)
         if self.group_by.count() == 0:
             self.group_by.addItem("All samples", "")
+        self.facet_by.addItem("—", "")
+        for k in keys:
+            self.facet_by.addItem(k, k)
         self.tree_color.clear()
         self.tree_color.addItem(METACLUSTER, "")
         for m in (self._tree or {}).get("markers", []):
             self.tree_color.addItem(m.split()[0], m)
         # the grouping chosen for the sampling is the one asked about first
-        first = "*" if len(self.session.group_by) > 1 else (self.session.group_by or [""])[0]
+        first = (self.session.group_by or [""])[0]
         self.group_by.setCurrentIndex(max(self.group_by.findData(first), 0))
+        # two columns chosen to group by: compare the first within each of the second
+        second = self.session.group_by[1] if len(self.session.group_by) > 1 else ""
+        self.facet_by.setCurrentIndex(max(self.facet_by.findData(second), 0))
         for combo, value in keep.items():
             i = combo.findData(value) if value else -1
             if i >= 0:
@@ -211,6 +227,20 @@ class ClustersTab(QtWidgets.QWidget):
         used = set(ds.runs.get("FlowSOM", {}).get("channels") or [])
         return [c for c, m, comp in zip(ds.channels, ds.markers, ds.compensated)
                 if comp and m and c not in used]
+
+    def _facets(self) -> list[str] | None:
+        key = self.facet_by.currentData()
+        if not key or key == self.group_by.currentData():
+            return None
+        return [m.get(key, "") for m in self.session.dataset.meta]
+
+    def _summary_groups(self) -> list[str]:
+        """The groups a selection is described by: every combination of
+        what is compared and what it is compared within."""
+        groups, facets = self._groups(), self._facets()
+        if not facets:
+            return groups
+        return [f"{g or '—'} · {f or '—'}" for g, f in zip(groups, facets)]
 
     def _groups(self) -> list[str]:
         ds = self.session.dataset
@@ -290,7 +320,7 @@ class ClustersTab(QtWidgets.QWidget):
             return
         expression, freq = tables
         self.heatmap.show_table(expression, self.per_marker.isChecked(), self.selected)
-        self.freq.show_frequencies(freq, self._groups(), self.selected)
+        self.freq.show_frequencies(freq, self._groups(), self.selected, self._facets())
 
     def _draw_tree(self) -> None:
         if self._filling:
@@ -298,7 +328,9 @@ class ClustersTab(QtWidgets.QWidget):
         self.tree.show_tree(self._tree, self.tree_color.currentData() or None,
                             self.selected)
 
-    def _summarise(self) -> None:
+    def _summarise(self, *_) -> None:
+        if self._filling:
+            return
         ds = self.session.dataset
         mask = self.selection_mask()
         if ds is None or mask is None:
@@ -307,7 +339,8 @@ class ClustersTab(QtWidgets.QWidget):
                 "through the others. Shift+drag on the map to outline any set "
                 "of events.</span>" % theme.muted())
             return
-        info = cluster_stats.selection(mask, ds.sample_index, ds.samples, self._groups())
+        info = cluster_stats.selection(mask, ds.sample_index, ds.samples,
+                                       self._summary_groups())
         what = (f"Cluster {self.selected}" if self._lasso is None else "Selection")
         parts = [f"<b>{what}</b>: {info['n']:,d} events, {info['share']:.1%} of all"]
         for g, (mean, sd, n) in info["by_group"].items():

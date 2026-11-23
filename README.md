@@ -34,8 +34,9 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 **Samples** — open a folder; a workspace beside the files is picked up.
 - Gates and the compensation matrix come from the FlowJo workspace (`.wsp`). Files the workspace
   does not list are given the gates and the matrix the listed ones share, when they do share them.
-- Groups are read from the file names by a pattern you can edit (`14Case4` → day 14, group Case,
-  animal 4).
+- The table is yours to type in. It starts with one column, Group, guessed from the file names;
+  add your own — day, tissue, donor — type a value into several rows at once, or fill columns
+  from the names with a pattern. Any column, or several together, makes the groups.
 - Three ways to balance: the same number from every sample, the same total from every group, or
   a ceiling per sample; and a minimum below which a sample is left out rather than allowed to
   drag every other down.
@@ -51,11 +52,12 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 **Explore** — UMAP, tSNE and FlowSOM, run in the background with FlowJo's defaults.
 - Any two axes: an embedding, or two markers on a biexponential scale ticked in decades.
 - Colour by group, day, animal, sample, cluster, or the expression of a marker.
-- Split into one panel per group, with everyone else faint behind.
+- Split into one panel per group — or per group and day — with everyone else faint behind.
 
 **Clusters** — what ClusterExplorer shows, linked.
 - The map, the heatmap of expression, the FlowSOM tree and the frequency of each cluster by group
-  (mean, standard deviation and every sample as a dot).
+  (mean, standard deviation and every sample as a dot), in one panel or in one per value of a
+  second column: the groups compared within each day.
 - Click a cluster in any of the four and it is marked in the other three.
 - The colour ramp is yours to choose: a named one, or two or three colours of your own.
 - Shift+drag on the map outlines any set of events and reports the same numbers for it.
@@ -130,7 +132,8 @@ Everything the window does, without the window.
 ```bash
 python -m milc inspect DATA                      # what a folder holds
 python -m milc counts  DATA --wsp analysis.wsp   # every gate, against FlowJo's count
-python -m milc concat  DATA --wsp analysis.wsp --group-by day,group --out concat
+python -m milc concat  DATA --wsp analysis.wsp --out concat \
+    --pattern '(?P<Day>\d+)(?P<Group>[A-Za-z]+)' --group-by Day,Group
 python -m milc analyze concat.npz --channels CD8,CD4,Foxp3 --umap --tsne --flowsom --out run
 ```
 

@@ -22,8 +22,6 @@ from .fcs import read_header
 from .sample import Sample
 from .transforms import Arcsinh, Biex
 
-#: `14Case4` → day 14, group Case, animal 4; a trailing ` marks a re-run
-DEFAULT_PATTERN = r"(?P<day>\d+)(?P<group>[A-Za-z]+)(?P<animal>\d+)(?P<rerun>`)?$"
 
 
 def _files(folder: str) -> list[str]:
@@ -51,7 +49,8 @@ def _load(a) -> tuple[list[Sample], list[str]]:
     session.open_folder(a.data)
     session.set_workspace(a.wsp)
     session.set_extend_gates(not a.listed_only)
-    session.annotate(a.pattern)
+    if a.pattern:
+        session.annotate(a.pattern)
     samples, left_out = [], []
     for e in session.entries:
         if e.gated and not e.problem:
@@ -309,9 +308,11 @@ def main(argv=None) -> int:
         s.add_argument("--listed-only", action="store_true",
                        help="only the files the workspace lists; by default the "
                             "others are given the gates and the matrix those share")
-        s.add_argument("--pattern", default=DEFAULT_PATTERN,
-                       help="regular expression with named groups, read "
-                            "from each file name")
+        s.add_argument("--pattern",
+                       help="regular expression read from each file name; every "
+                            "named group is a column: '(?P<Day>\\d+)(?P<Group>[A-Za-z]+)'. "
+                            "Without it there is one column, Group, guessed from "
+                            "the names or as typed in the window")
 
     s = sub.add_parser("counts", help="every gate, against FlowJo's count")
     common(s)
@@ -323,8 +324,8 @@ def main(argv=None) -> int:
     s.add_argument("--mode", choices=sampling.MODES, default=sampling.EQUAL_PER_SAMPLE)
     s.add_argument("--n", type=int)
     s.add_argument("--min-events", type=int, default=1)
-    s.add_argument("--group-by", default="group",
-                   help="annotation(s) that define a group, comma-separated")
+    s.add_argument("--group-by", default="Group",
+                   help="column(s) that define a group, comma-separated")
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--dry-run", action="store_true", help="the plan only")
     s.add_argument("--out", default="concat")
@@ -345,7 +346,7 @@ def main(argv=None) -> int:
     s.add_argument("--clusters", type=int, default=5)
     s.add_argument("--grid", type=int, default=10)
     s.add_argument("--seed", type=int, default=0)
-    s.add_argument("--group-by", default="group")
+    s.add_argument("--group-by", default="Group")
     s.add_argument("--sample-column", default="SampleID",
                    help="for a .fcs: the column that says which sample")
     s.add_argument("--out", default="analysis")

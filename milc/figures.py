@@ -115,6 +115,19 @@ def categories_of(labels, title: str = "", order: list[str] | None = None) -> Ca
     return Categories(remap[codes], names, categorical(len(names)), title)
 
 
+def combine(a: Categories | None, b: Categories | None) -> Categories | None:
+    """Two subdivisions as one: every combination that occurs, `Case · 3`,
+    in the order of the first and then of the second."""
+    if a is None or b is None:
+        return a if b is None else b
+    key = a.codes.astype(np.int64) * len(b.names) + b.codes
+    present, codes = np.unique(key, return_inverse=True)
+    names = [f"{a.names[k // len(b.names)] or '—'} · {b.names[k % len(b.names)] or '—'}"
+             for k in present]
+    return Categories(codes, names, categorical(len(names)),
+                      " · ".join(t for t in (a.title, b.title) if t))
+
+
 @dataclass
 class MapContent:
     x: np.ndarray
@@ -127,6 +140,9 @@ class MapContent:
     #: a biexponential scale, ticked in decades
     xticks: list | None = None
     yticks: list | None = None
+    #: panels per row when split; None lets the number of panels decide.
+    #: Split by two columns, a row is one value of the first.
+    columns: int | None = None
 
 
 @dataclass
@@ -138,8 +154,11 @@ class HeatmapContent:
 @dataclass
 class FrequencyContent:
     freq: cluster_stats.Table
-    #: the group of each column of `freq`
+    #: the group of each column of `freq`: what is compared, by colour
     groups: list[str]
+    #: optionally, a second subdivision of the samples: one panel for each
+    #: of its values — groups compared within each day, say
+    facets: list[str] | None = None
 
 
 @dataclass
@@ -313,7 +332,9 @@ def _draw_map(fig, c: MapContent, style: FigureStyle) -> None:
     groups = ([(None, np.ones(n, dtype=bool))] if c.split is None else
               [(name, c.split.codes == i) for i, name in enumerate(c.split.names)])
     # up to four panels read best side by side; more than that, a grid
-    cols = len(groups) if len(groups) <= 4 else int(np.ceil(np.sqrt(len(groups))))
+    cols = c.columns or (len(groups) if len(groups) <= 4
+                         else int(np.ceil(np.sqrt(len(groups)))))
+    cols = max(1, min(cols, len(groups)))
     rows = -(-len(groups) // cols)
     grid = fig.subplots(rows, cols, sharex=True, sharey=True, squeeze=False)
     axes = [grid[k // cols][k % cols] for k in range(len(groups))]
@@ -414,20 +435,35 @@ def _draw_heatmap(fig, c: HeatmapContent, style: FigureStyle) -> None:
 
 
 def _draw_frequencies(fig, c: FrequencyContent, style: FigureStyle) -> None:
+    panels = cluster_stats.ordered(c.facets) if c.facets else [None]
+    axes = fig.subplots(1, len(panels), sharey=True, squeeze=False)[0]
+    handles = []
+    for k, (ax, panel) in enumerate(zip(axes, panels)):
+        keep = [i for i in range(len(c.groups)) if panel is None or c.facets[i] == panel]
+        handles = _frequency_panel(ax, c, style, keep, first=k == 0) or handles
+        if panel is not None:
+            ax.set_title(style.label(panel))
+    _legend(fig, list(axes), handles, style, "")
+
+
+def _frequency_panel(ax, c: FrequencyContent, style: FigureStyle, keep: list[int],
+                     first: bool) -> list:
+    """One panel of bars: the samples in `keep`, by group."""
     from matplotlib.patches import Patch
-    ax = fig.subplots()
-    names = cluster_stats.ordered(c.groups)
-    colors = categorical(len(names))
+    names = cluster_stats.ordered(c.groups)      # every group in every panel:
+    colors = categorical(len(names))             # a colour means one thing
     n_clusters = len(c.freq.rows)
     width = 0.8 / max(len(names), 1)
     rng = np.random.default_rng(0)
     handles = []
     for j, (g, default) in enumerate(zip(names, colors)):
         color = style.color(g, default)
-        cols = [k for k, x in enumerate(c.groups) if x == g]
+        cols = [k for k in keep if c.groups[k] == g]
         vals = c.freq.values[:, cols]
         vals = vals[:, ~np.isnan(vals).all(axis=0)]
         if vals.shape[1] == 0:
+            handles.append(Patch(facecolor=color, alpha=0.6, edgecolor=color,
+                                 label=style.label(g)))
             continue
         x = np.arange(n_clusters) - 0.4 + width * (j + 0.5)
         mean = vals.mean(axis=1)
@@ -444,11 +480,12 @@ def _draw_frequencies(fig, c: FrequencyContent, style: FigureStyle) -> None:
                              label=style.label(g) + suffix))
     ax.set_xticks(range(n_clusters), [style.label(r) for r in c.freq.rows])
     ax.set_xlabel("Cluster" if style.xlabel is None else style.xlabel)
-    ax.set_ylabel("% of the sample's events" if style.ylabel is None else style.ylabel)
+    if first:
+        ax.set_ylabel("% of the sample's events" if style.ylabel is None else style.ylabel)
     ax.set_xlim(-0.6, n_clusters - 0.4)
     ax.set_ylim(bottom=0)
     _frame(ax, style)
-    _legend(fig, [ax], handles, style, "")
+    return handles
 
 
 def _draw_tree(fig, c: TreeContent, style: FigureStyle) -> None:

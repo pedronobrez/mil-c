@@ -65,15 +65,18 @@ class MapView(pg.GraphicsLayoutWidget):
         self.opacity = 0.8
         self._args = None
         self._ticks = (None, None)
+        self._columns = None
         self.setBackground(theme.background())
 
     # --- what to draw ------------------------------------------------------
 
     def show_points(self, x, y, xlabel: str, ylabel: str, color=None,
-                    split: Categories | None = None, xticks=None, yticks=None) -> None:
+                    split: Categories | None = None, xticks=None, yticks=None,
+                    columns: int | None = None) -> None:
         self._args = (np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64),
                       xlabel, ylabel, color, split)
         self._ticks = (xticks, yticks)
+        self._columns = columns
         self.redraw()
 
     def content(self) -> MapContent | None:
@@ -81,7 +84,8 @@ class MapView(pg.GraphicsLayoutWidget):
         if self._args is None:
             return None
         x, y, xlabel, ylabel, color, split = self._args
-        return MapContent(x, y, xlabel, ylabel, color, split, *self._ticks)
+        return MapContent(x, y, xlabel, ylabel, color, split, *self._ticks,
+                          columns=self._columns)
 
     def lasso(self, polygon: np.ndarray) -> None:
         if self._args is None:
@@ -150,7 +154,8 @@ class MapView(pg.GraphicsLayoutWidget):
 
         groups = ([(None, np.ones(n, dtype=bool))] if split is None else
                   [(name, split.codes == i) for i, name in enumerate(split.names)])
-        cols = int(np.ceil(np.sqrt(len(groups)))) if len(groups) > 1 else 1
+        cols = self._columns or (int(np.ceil(np.sqrt(len(groups)))) if len(groups) > 1 else 1)
+        cols = max(1, min(cols, len(groups)))
         for k, (name, member) in enumerate(groups):
             plot = self.addPlot(row=k // cols, col=k % cols, viewBox=_LassoBox(self))
             plot.setMenuEnabled(False)

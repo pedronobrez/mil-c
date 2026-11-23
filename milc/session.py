@@ -10,6 +10,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -23,14 +24,55 @@ from .sample import Sample, annotate
 from .transforms import Arcsinh, Biex
 from .wsp import Workspace, WspSample, read_wsp
 
-#: `14Case4` → day 14, group Case, animal 4; a trailing ` marks a re-run
-DEFAULT_PATTERN = r"(?P<day>\d+)(?P<group>[A-Za-z]+)(?P<animal>\d+)(?P<rerun>`)?$"
+#: the one column a new folder starts with; every other is the user's
+GROUP = "Group"
+#: the table's own columns, which a column of the user's cannot be called
+RESERVED = ("Sample", "Events", "In gate", "Takes", "Note")
 
 #: every event of the file, no gate
 ALL_EVENTS = ""
 
-#: where gates drawn here are kept: beside the files they gate
-GATES_FILE = "MIL-C gates.json"
+#: what the user did to a folder — columns and their values, which files
+#: are left out, gates drawn — kept beside the files it is about
+PROJECT_FILE = "MIL-C.json"
+#: where gates alone were kept, for a day, before there was more to keep
+OLD_GATES_FILE = "MIL-C gates.json"
+
+
+def guess_groups(names: list[str]) -> list[str]:
+    """A first guess at the group of each file from its name: the run of
+    letters that takes few values across the files (`14Case4`, `3Ctrl1` →
+    Case, Ctrl). Nothing where no run of letters does; it is a starting
+    point for a column the user can type over, not a rule."""
+    tokens = [re.findall(r"[A-Za-z]+", n) for n in names]
+    if not tokens or not all(tokens):
+        return [""] * len(names)
+    best = None
+    for i in range(min(len(t) for t in tokens)):
+        values = [t[i] for t in tokens]
+        k = len(set(values))
+        if 1 < k <= max(2, len(names) // 2) and (best is None or k < best[0]):
+            best = (k, values)
+    return best[1] if best else [""] * len(names)
+
+
+def suggest_pattern(name: str) -> str:
+    """A pattern with a named group for every run of digits or letters in
+    a file name, to be edited: `14Case4` → number, Group, number."""
+    parts, n, letters = [], 0, 0
+    for token in re.findall(r"\d+|[A-Za-z]+|[^A-Za-z\d]+", name):
+        if token.isdigit():
+            n += 1
+            parts.append(f"(?P<Number{n}>\\d+)")
+        elif token.isalpha():
+            letters += 1
+            parts.append("(?P<%s>[A-Za-z]+)" % (GROUP if letters == 1 else f"Text{letters}"))
+        else:
+            parts.append(re.escape(token))
+    # a mark at the end of one name (a re-run's backtick) is not in the others
+    while parts and not parts[-1].startswith("(?P<"):
+        parts.pop()
+    return "".join(parts)
 
 
 @dataclass
@@ -69,8 +111,10 @@ class Session:
         self.folder = ""
         self.workspace: Workspace | None = None
         self.entries: list[Entry] = []
-        self.pattern = DEFAULT_PATTERN
-        self.group_by: list[str] = ["group"]
+        #: the annotation columns, in order: free text per sample, to group,
+        #: balance, colour and split by
+        self.columns: list[str] = [GROUP]
+        self.group_by: list[str] = [GROUP]
         self.population = ALL_EVENTS
         self.mode = sampling.EQUAL_PER_SAMPLE
         self.n: int | None = None
@@ -110,7 +154,12 @@ class Session:
             for e in self.entries:
                 if e.channels and tuple(e.channels) != common:
                     e.problem, e.include = "different channels from the others", False
-        self.annotate()
+        self.columns, self.group_by = [GROUP], [GROUP]
+        usable = [e for e in self.entries if not e.problem]
+        for e, group in zip(usable, guess_groups([e.name for e in usable])):
+            e.meta = {GROUP: group}
+        self._project = self._read_project()
+        self._restore_annotations()
         found = sorted(glob.glob(os.path.join(folder, "*.wsp")))
         self.set_workspace(found[0] if found else None)
 
@@ -130,7 +179,7 @@ class Session:
     def _borrow(self) -> None:
         """Every file its own gating tree: what was saved beside the files
         if anything was, else the workspace's, else the group's, else none."""
-        saved = self._read_saved()
+        saved = self._saved_gates()
         for e in self.entries:
             e.sample = None
             e.borrowed = e.edited = False
@@ -175,17 +224,59 @@ class Session:
 
     # --- gates of the user's own ---------------------------------------------
 
-    def gates_file(self) -> str:
-        return os.path.join(self.folder, GATES_FILE)
+    def project_file(self) -> str:
+        return os.path.join(self.folder, PROJECT_FILE)
 
-    def _read_saved(self) -> dict[str, GateNode]:
+    def _read_project(self) -> dict:
         try:
-            with open(self.gates_file(), encoding="utf-8") as f:
+            with open(self.project_file(), encoding="utf-8") as f:
                 data = json.load(f)
-            return {name: tree_from_dict(tree)
-                    for name, tree in data.get("samples", {}).items()}
-        except (OSError, ValueError, KeyError, TypeError):
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            pass
+        try:  # gates drawn before the file held anything else
+            with open(os.path.join(self.folder, OLD_GATES_FILE), encoding="utf-8") as f:
+                return {"gates": json.load(f).get("samples", {})}
+        except (OSError, ValueError, AttributeError):
             return {}
+
+    def _saved_gates(self) -> dict[str, GateNode]:
+        try:
+            return {name: tree_from_dict(tree)
+                    for name, tree in getattr(self, "_project", {}).get("gates", {}).items()}
+        except (KeyError, TypeError, ValueError):
+            return {}
+
+    def _restore_annotations(self) -> None:
+        data = self._project
+        if not data.get("columns"):
+            return
+        self.columns = [str(c) for c in data["columns"]]
+        self.group_by = [c for c in data.get("group_by", []) if c in self.columns] \
+            or self.columns[:1]
+        notes, left_out = data.get("annotations", {}), set(data.get("excluded", []))
+        for e in self.entries:
+            file = os.path.basename(e.path)
+            if file in notes:
+                e.meta = {c: str(notes[file].get(c, "")) for c in self.columns}
+            if file in left_out:
+                e.include = False
+
+    def save_project(self) -> None:
+        """Written when the user changes something, never just for opening
+        a folder: a folder that was only looked at is left as it was."""
+        usable = self.usable()
+        data = {
+            "version": 2, "columns": self.columns, "group_by": self.group_by,
+            "annotations": {os.path.basename(e.path): {c: e.meta.get(c, "") for c in self.columns}
+                            for e in usable},
+            "excluded": [os.path.basename(e.path) for e in usable if not e.include],
+            "gates": {os.path.basename(e.path): tree_to_dict(e.gates)
+                      for e in usable if e.edited},
+        }
+        self._project = data
+        with open(self.project_file(), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1)
 
     def gates_changed(self, e: Entry, everyone: bool = True) -> None:
         """`e`'s tree was edited. With `everyone`, the other files get a
@@ -205,50 +296,81 @@ class Session:
                 c.sample.gates, c.sample._masks = c.gates, None
         self._counts.clear()
         self._keep_population()
-        self.save_gates()
-
-    def save_gates(self) -> None:
-        trees = {os.path.basename(e.path): tree_to_dict(e.gates)
-                 for e in self.usable() if e.edited}
-        with open(self.gates_file(), "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "samples": trees}, f, indent=1)
+        self.save_project()
 
     def discard_gates(self) -> None:
-        """Back to the workspace's gates: the saved ones are deleted."""
+        """Back to the workspace's gates: the saved ones are deleted. The
+        columns and what was typed in them stay."""
         try:
-            os.remove(self.gates_file())
+            os.remove(os.path.join(self.folder, OLD_GATES_FILE))
         except OSError:
             pass
+        self._project = {**getattr(self, "_project", {}), "gates": {}}
         self._borrow()
         self._keep_population()
+        if os.path.exists(self.project_file()):
+            self.save_project()
 
-    def annotate(self, pattern: str | None = None) -> None:
-        if pattern is not None:
-            self.pattern = pattern
+    # --- annotations -------------------------------------------------------------
+
+    def annotate(self, pattern: str) -> list[str]:
+        """Fill columns from the file names: every named group of the
+        pattern, `(?P<Day>\\d+)`, is a column, added if it is new. A file
+        the pattern does not match keeps what it had. Returns the columns
+        it filled."""
+        names = list(re.compile(pattern).groupindex)
+        for name in names:
+            if name not in self.columns:
+                self.columns.append(name)
+        for e in self.usable():
+            found = annotate(e.name, pattern)
+            for name in names:
+                if name in found:
+                    e.meta[name] = found[name]
+        return names
+
+    def add_column(self, name: str) -> str:
+        name = name.strip()
+        if not name or name in self.columns or name in RESERVED:
+            raise ValueError(f"there is already a column {name!r}" if name
+                             else "a column needs a name")
+        self.columns.append(name)
         for e in self.entries:
-            try:
-                e.meta = annotate(e.name, self.pattern)
-            except Exception:
-                e.meta = {}
+            e.meta.setdefault(name, "")
+        return name
+
+    def remove_column(self, name: str) -> None:
+        self.columns.remove(name)
+        self.group_by = [c for c in self.group_by if c != name]
+        for e in self.entries:
+            e.meta.pop(name, None)
+
+    def rename_column(self, old: str, new: str) -> None:
+        new = new.strip()
+        if not new or new in RESERVED or (new in self.columns and new != old):
+            raise ValueError(f"there is already a column {new!r}" if new
+                             else "a column needs a name")
+        self.columns[self.columns.index(old)] = new
+        self.group_by = [new if c == old else c for c in self.group_by]
+        for e in self.entries:
+            e.meta[new] = e.meta.pop(old, "")
+
+    def set_value(self, entries: list[Entry], column: str, value: str) -> None:
+        for e in entries:
+            e.meta[column] = value.strip()
 
     def repeats(self) -> list[list[str]]:
-        """Included files that carry the same annotations apart from the
-        re-run mark: one animal acquired twice, which would be counted as
-        two."""
-        seen: dict[tuple, list[str]] = {}
+        """Included files whose names differ only by a mark at the end —
+        `14Case4` and ``14Case4` `` — which is how a re-acquisition of one
+        tube is usually named: one animal that would be counted as two."""
+        seen: dict[str, list[str]] = {}
         for e in self.entries:
-            if e.include and not e.problem and e.meta:
-                key = tuple(sorted((k, v) for k, v in e.meta.items() if k != "rerun"))
-                seen.setdefault(key, []).append(e.name)
+            if e.include and not e.problem:
+                seen.setdefault(re.sub(r"[^A-Za-z0-9]+$", "", e.name), []).append(e.name)
         return [names for names in seen.values() if len(names) > 1]
 
     def meta_keys(self) -> list[str]:
-        keys: list[str] = []
-        for e in self.entries:
-            for k in e.meta:
-                if k not in keys:
-                    keys.append(k)
-        return keys
+        return list(self.columns)
 
     def usable(self) -> list[Entry]:
         return [e for e in self.entries if not e.problem]
@@ -268,7 +390,7 @@ class Session:
         return not e.problem and (self.population == ALL_EVENTS or e.gated)
 
     def group_of(self, meta: dict[str, str]) -> str:
-        return " ".join(meta.get(k, "") for k in self.group_by).strip()
+        return " · ".join(meta.get(k, "") or "—" for k in self.group_by) if self.group_by else ""
 
     # --- events ----------------------------------------------------------
 
@@ -277,7 +399,7 @@ class Session:
             matrix = self.matrix_of(e)
             e.sample = (Sample.open(e.path, compensation=matrix, gates=e.gates)
                         if matrix is not None else Sample.open(e.path, gates=e.gates))
-            e.sample.meta = dict(e.meta)
+            e.sample.meta = {c: e.meta.get(c, "") for c in self.columns}
         return e.sample
 
     def count(self, e: Entry) -> int | None:
@@ -319,7 +441,7 @@ class Session:
         for e in self.entries:
             if p.take.get(e.name, 0) > 0:
                 s = self.load(e)
-                s.meta = dict(e.meta)
+                s.meta = {c: e.meta.get(c, "") for c in self.columns}
                 samples.append(s)
         self.dataset = concatenate(samples, p, self.population, self.seed)
         self.flowsom = None

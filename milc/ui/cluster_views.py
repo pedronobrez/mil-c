@@ -109,79 +109,119 @@ class HeatmapView(_Clickable):
         return None
 
 
-class FrequencyView(_Clickable):
+class FrequencyView(pg.GraphicsLayoutWidget):
     """For each cluster, the share of each sample's events in it: a bar
     per group at the mean, a whisker at one standard deviation, and every
-    sample as a dot — five animals are five dots, not just a bar."""
+    sample as a dot — five animals are five dots, not just a bar.
+
+    With a second subdivision there is one panel for each of its values,
+    on one scale: the groups compared within each day, the days side by
+    side."""
+
+    sigCluster = QtCore.pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.freq = None
+        self._groups: list[str] = []
+        self._facets: list[str] | None = None
+        self.panels: list[pg.PlotItem] = []
+        self.setBackground(theme.background())
+        self.scene().sigMouseClicked.connect(self._clicked)
 
-    def show_frequencies(self, freq, groups: list[str], selected: int | None = None) -> None:
+    def content(self):
+        return (FrequencyContent(self.freq, self._groups, self._facets)
+                if self.freq is not None else None)
+
+    def show_frequencies(self, freq, groups: list[str], selected: int | None = None,
+                         facets: list[str] | None = None) -> None:
         self.freq = freq
         self._groups = list(groups)
+        self._facets = list(facets) if facets else None
         self.clear()
+        self.panels = []
         self.setBackground(theme.background())
-        if self.plotItem.legend is not None:
-            self.plotItem.legend.clear()
         if freq is None:
             return
         names = cluster_stats.ordered(groups)
         colors = palette.categorical(len(names))
-        legend = self.plotItem.addLegend(offset=(-8, 8))
-        # the legend outlives a redraw, and a change of theme with it: it is
-        # given its colours every time, or it keeps the first ones it had
-        legend.setBrush(theme.legend_brush())
-        legend.setPen(theme.legend_pen())
-        legend.setLabelTextColor(theme.foreground())
         n_clusters = len(freq.rows)
         width = 0.8 / max(len(names), 1)
-        if selected is not None and str(selected) in freq.rows:
-            i = freq.rows.index(str(selected))
-            band = pg.LinearRegionItem((i - 0.48, i + 0.48), movable=False,
-                                       brush=pg.mkBrush(QtGui.QColor(theme.line())),
-                                       pen=pg.mkPen(None))
-            band.setZValue(-10)
-            self.addItem(band)
-        rng = np.random.default_rng(0)
-        for j, (g, color) in enumerate(zip(names, colors)):
-            cols = [k for k, x in enumerate(groups) if x == g]
-            vals = freq.values[:, cols]
-            ok = ~np.isnan(vals).all(axis=0)
-            vals = vals[:, ok]
-            if vals.shape[1] == 0:
-                continue
-            x = np.arange(n_clusters) - 0.4 + width * (j + 0.5)
-            mean = vals.mean(axis=1)
-            fill = QtGui.QColor(color)
-            fill.setAlpha(150)
-            bars = pg.BarGraphItem(x=x, height=mean, width=width * 0.9,
-                                   brush=pg.mkBrush(fill), pen=pg.mkPen(color))
-            self.addItem(bars)
-            legend.addItem(bars, f"{g or '—'} (n={vals.shape[1]})")
-            if vals.shape[1] > 1:
-                sd = vals.std(axis=1, ddof=1)
-                self.addItem(pg.ErrorBarItem(x=x, y=mean, top=sd, bottom=sd,
-                                             beam=width * 0.3,
-                                             pen=pg.mkPen(theme.foreground(), width=1)))
-            jitter = (rng.random(vals.shape) - 0.5) * width * 0.5
-            self.addItem(pg.ScatterPlotItem(
-                (x[:, None] + jitter).ravel(), vals.ravel(), size=5,
-                pen=pg.mkPen(theme.foreground(), width=0.8),
-                brush=pg.mkBrush(theme.background())))
-        theme.style_axes(self.plotItem)
-        self.getAxis("bottom").setTicks([[(i, n) for i, n in enumerate(freq.rows)]])
-        self.setLabel("bottom", "Cluster")
-        self.setLabel("left", "% of the sample's events")
-        self.setXRange(-0.6, n_clusters - 0.4, padding=0)
         top = np.nanmax(freq.values) if np.isfinite(freq.values).any() else 1.0
-        self.setYRange(0, top * 1.12, padding=0)
+        values = cluster_stats.ordered(self._facets) if self._facets else [None]
+        for k, value in enumerate(values):
+            plot = self.addPlot(row=0, col=k)
+            plot.setMenuEnabled(False)
+            plot.hideButtons()
+            plot.setMouseEnabled(False, False)
+            theme.style_axes(plot)
+            if value is not None:
+                plot.setTitle(str(value) or "—", color=theme.foreground(), size="10pt")
+            if selected is not None and str(selected) in freq.rows:
+                i = freq.rows.index(str(selected))
+                band = pg.LinearRegionItem((i - 0.48, i + 0.48), movable=False,
+                                           brush=pg.mkBrush(QtGui.QColor(theme.line())),
+                                           pen=pg.mkPen(None))
+                band.setZValue(-10)
+                plot.addItem(band)
+            legend = None
+            if k == len(values) - 1:
+                legend = plot.addLegend(offset=(-8, 8))
+                legend.setBrush(theme.legend_brush())
+                legend.setPen(theme.legend_pen())
+                legend.setLabelTextColor(theme.foreground())
+            rng = np.random.default_rng(0)
+            for j, (g, color) in enumerate(zip(names, colors)):
+                cols = [c for c, x in enumerate(groups)
+                        if x == g and (value is None or self._facets[c] == value)]
+                vals = freq.values[:, cols]
+                vals = vals[:, ~np.isnan(vals).all(axis=0)] if vals.size else vals
+                fill = QtGui.QColor(color)
+                fill.setAlpha(150)
+                if vals.shape[1] == 0:
+                    if legend is not None:
+                        ghost = pg.BarGraphItem(x=[0], height=[0], width=0,
+                                                brush=pg.mkBrush(fill), pen=pg.mkPen(color))
+                        legend.addItem(ghost, f"{g or '—'} (n=0)")
+                    continue
+                x = np.arange(n_clusters) - 0.4 + width * (j + 0.5)
+                mean = vals.mean(axis=1)
+                bars = pg.BarGraphItem(x=x, height=mean, width=width * 0.9,
+                                       brush=pg.mkBrush(fill), pen=pg.mkPen(color))
+                plot.addItem(bars)
+                if legend is not None:
+                    legend.addItem(bars, f"{g or '—'} (n={vals.shape[1]})")
+                if vals.shape[1] > 1:
+                    sd = vals.std(axis=1, ddof=1)
+                    plot.addItem(pg.ErrorBarItem(x=x, y=mean, top=sd, bottom=sd,
+                                                 beam=width * 0.3,
+                                                 pen=pg.mkPen(theme.foreground(), width=1)))
+                jitter = (rng.random(vals.shape) - 0.5) * width * 0.5
+                plot.addItem(pg.ScatterPlotItem(
+                    (x[:, None] + jitter).ravel(), vals.ravel(), size=5,
+                    pen=pg.mkPen(theme.foreground(), width=0.8),
+                    brush=pg.mkBrush(theme.background())))
+            plot.getAxis("bottom").setTicks([[(i, n) for i, n in enumerate(freq.rows)]])
+            plot.setLabel("bottom", "Cluster")
+            if k == 0:
+                plot.setLabel("left", "% of the sample's events")
+            plot.setXRange(-0.6, n_clusters - 0.4, padding=0)
+            plot.setYRange(0, top * 1.12, padding=0)
+            if self.panels:
+                plot.setYLink(self.panels[0])
+            self.panels.append(plot)
 
-    def content(self):
-        return FrequencyContent(self.freq, self._groups) if self.freq is not None else None
+    def _clicked(self, ev) -> None:
+        if ev.button() != QtCore.Qt.MouseButton.LeftButton or self.freq is None:
+            return
+        for plot in self.panels:
+            if plot.vb.sceneBoundingRect().contains(ev.scenePos()):
+                cluster = self.cluster_at(plot.vb.mapSceneToView(ev.scenePos()).x())
+                if cluster is not None:
+                    self.sigCluster.emit(int(cluster))
+                return
 
-    def cluster_at(self, x, y):
+    def cluster_at(self, x, y=0.0):
         if self.freq is None:
             return None
         i = int(round(x))

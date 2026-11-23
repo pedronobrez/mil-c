@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .. import figures
 from ..session import Session
 from ..transforms import Biex, decade_ticks
 from . import palette, style, worker
@@ -121,6 +122,9 @@ class ExploreTab(QtWidgets.QWidget):
         self.y_axis = QtWidgets.QComboBox()
         self.color_by = QtWidgets.QComboBox()
         self.split_by = QtWidgets.QComboBox()
+        self.split_by2 = QtWidgets.QComboBox()
+        self.split_by2.setToolTip("A second subdivision: one panel for every "
+                                  "combination, Case · 3, Case · 7…")
         self.size = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.size.setRange(1, 14)
         self.size.setValue(4)
@@ -140,6 +144,7 @@ class ExploreTab(QtWidgets.QWidget):
         right_form.addRow(self._eyebrow("Colour"))
         right_form.addRow("Colour by", self.color_by)
         right_form.addRow("Split by", self.split_by)
+        right_form.addRow("and by", self.split_by2)
         self.ramp = RampPicker()
         right_form.addRow("Ramp", self.ramp)
         right_form.addRow("Point size", self.size)
@@ -165,7 +170,7 @@ class ExploreTab(QtWidgets.QWidget):
         for name, button in self.run_buttons.items():
             button.clicked.connect(lambda _=False, n=name: self.run([n]))
         self.run_all.clicked.connect(lambda: self.run(["UMAP", "tSNE", "FlowSOM"]))
-        for combo in (self.x_axis, self.y_axis, self.color_by, self.split_by):
+        for combo in (self.x_axis, self.y_axis, self.color_by, self.split_by, self.split_by2):
             combo.currentIndexChanged.connect(self._draw)
         self.size.valueChanged.connect(lambda v: self.view.set_point_size(v))
         self.figure_button.clicked.connect(self.make_figure)
@@ -223,7 +228,7 @@ class ExploreTab(QtWidgets.QWidget):
         exists; `prefer` is the map that has just been computed."""
         ds = self.session.dataset
         keep = {c: c.currentData() for c in
-                (self.x_axis, self.y_axis, self.color_by, self.split_by)}
+                (self.x_axis, self.y_axis, self.color_by, self.split_by, self.split_by2)}
         self._filling = True
         for c in keep:
             c.clear()
@@ -236,13 +241,13 @@ class ExploreTab(QtWidgets.QWidget):
                     combo.addItem(ds.label(ch), _spec("channel", ch))
             self.color_by.addItem("One colour", "")
             self.split_by.addItem("One panel", "")
+            self.split_by2.addItem("—", "")
             keys = self._annotation_keys()
-            for combo in (self.color_by, self.split_by):
-                if len(self.session.group_by) > 1:
-                    combo.addItem(" + ".join(k.capitalize() for k in self.session.group_by),
-                                  _spec("group", ""))
+            for combo in (self.color_by, self.split_by, self.split_by2):
+                if len(self.session.group_by) > 1 and combo is not self.split_by2:
+                    combo.addItem(" + ".join(self.session.group_by), _spec("group", ""))
                 for k in keys:
-                    combo.addItem(k.capitalize(), _spec("meta", k))
+                    combo.addItem(k, _spec("meta", k))
                 combo.addItem("Sample", _spec("sample", ""))
                 if "FlowSOM" in ds.derived:
                     combo.addItem("FlowSOM cluster", _spec("cluster", "FlowSOM"))
@@ -314,7 +319,7 @@ class ExploreTab(QtWidgets.QWidget):
         if kind == "sample":
             return categories_of(ds.obs("sample"), "Sample", order=ds.samples)
         if kind == "meta":
-            return categories_of(ds.obs(key), key.capitalize())
+            return categories_of(ds.obs(key), key)
         if kind == "group":
             groups = np.array([self.session.group_of(m) for m in ds.meta],
                               dtype=object)[ds.sample_index]
@@ -345,9 +350,14 @@ class ExploreTab(QtWidgets.QWidget):
                            title=ds.label(ch), ticks=decade_ticks(Biex()))
         else:
             color = self._labels(spec)
-        split_spec = self.split_by.currentData()
-        split = self._labels(split_spec) if split_spec else None
-        self.view.show_points(x, y, xlabel, ylabel, color, split, xticks, yticks)
+        split_spec, second = self.split_by.currentData(), self.split_by2.currentData()
+        first = self._labels(split_spec) if split_spec else None
+        then = self._labels(second) if second and second != split_spec else None
+        split = figures.combine(first, then)
+        # split twice, a row is one value of the first column and the
+        # columns line up the values of the second
+        columns = len(then.names) if first is not None and then is not None else None
+        self.view.show_points(x, y, xlabel, ylabel, color, split, xticks, yticks, columns)
         if isinstance(color, Categories):
             for name, hexa, n in zip(color.names, color.colors, color.counts()):
                 pix = QtGui.QPixmap(12, 12)

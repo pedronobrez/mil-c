@@ -12,7 +12,7 @@ import re
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from .. import sampling
-from ..session import ALL_EVENTS, Session
+from ..session import ALL_EVENTS, Session, suggest_pattern
 from . import style, worker
 
 MODES = [
@@ -29,6 +29,8 @@ class SamplesTab(QtWidgets.QWidget):
     #: a dataset was built
     sigConcatenated = QtCore.pyqtSignal()
     sigStatus = QtCore.pyqtSignal(str)
+    #: a column was added, removed, renamed or chosen to group by
+    sigColumnsChanged = QtCore.pyqtSignal()
     #: the workspace's gates were extended to the other files, or taken back
     sigGatesChanged = QtCore.pyqtSignal()
 
@@ -42,6 +44,13 @@ class SamplesTab(QtWidgets.QWidget):
         self.folder_label.setProperty("role", "strong")
         self.wsp_label = QtWidgets.QLabel("")
         self.wsp_label.setProperty("role", "caption")
+        self.add_column_button = QtWidgets.QPushButton("Add column…")
+        self.add_column_button.setToolTip(
+            "A column of your own — day, tissue, donor, treatment — to balance, "
+            "colour and split by. Type in its cells; with several rows selected, "
+            "what you type goes into all of them.")
+        self.fill_button = QtWidgets.QPushButton("Fill from file names…")
+        self.fill_button.setToolTip("Read columns out of the file names with a pattern")
         self.open_button = QtWidgets.QPushButton("Open folder…")
         self.wsp_button = QtWidgets.QPushButton("Workspace…")
         self.wsp_button.setToolTip("A FlowJo .wsp: its gates and its "
@@ -52,13 +61,26 @@ class SamplesTab(QtWidgets.QWidget):
         names.addWidget(self.folder_label)
         names.addWidget(self.wsp_label)
         top.addLayout(names, 1)
+        top.addWidget(self.add_column_button)
+        top.addWidget(self.fill_button)
         top.addWidget(self.wsp_button)
         top.addWidget(self.open_button)
 
         self.table = QtWidgets.QTableWidget()
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        # the columns of annotations are typed into; the rest is read
+        self.table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked
+            | QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed
+            | QtWidgets.QAbstractItemView.EditTrigger.AnyKeyPressed)
+        header = self.table.horizontalHeader()
+        header.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._header_menu)
+        header.sectionDoubleClicked.connect(self._rename_column)
+        header.setToolTip("Double-click a column of yours to rename it; right-click to remove it")
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemChanged.connect(self._ticked)
@@ -74,14 +96,12 @@ class SamplesTab(QtWidgets.QWidget):
             "compensation matrix. Ticked, the files it does not list are given "
             "those too — what FlowJo does when a file is dropped into the group. "
             "Nobody has looked at those gates on those files: check them.")
-        self.pattern = QtWidgets.QLineEdit(session.pattern)
-        self.pattern.setToolTip(
-            "A regular expression read from each file name. Every named "
-            "group, (?P<name>…), becomes a column the samples can be "
-            "grouped and coloured by.")
-        self.group_by = QtWidgets.QLineEdit(",".join(session.group_by))
-        self.group_by.setToolTip("Annotation(s) that make a group, "
-                                 "comma-separated: group, or day,group")
+        self.group_by = QtWidgets.QPushButton()
+        self.group_by.setMenu(QtWidgets.QMenu(self.group_by))
+        self.group_by.setToolTip(
+            "Which column — or columns together — make a group, for balancing "
+            "\"the same total from every group\" and for comparing later. Tick "
+            "two and a group is each combination: Case · 3, Case · 7…")
         self.mode = QtWidgets.QComboBox()
         for key, text in MODES:
             self.mode.addItem(text, key)
@@ -110,7 +130,6 @@ class SamplesTab(QtWidgets.QWidget):
         form.addRow(self._eyebrow("Samples"))
         form.addRow("Population", self.population)
         form.addRow(self.extend)
-        form.addRow("Name pattern", self.pattern)
         form.addRow("Group by", self.group_by)
         form.addRow(self._eyebrow("Downsampling"))
         form.addRow("Balance", self.mode)
@@ -126,7 +145,7 @@ class SamplesTab(QtWidgets.QWidget):
         side.addWidget(self.build_button)
         panel = QtWidgets.QWidget()
         panel.setLayout(side)
-        panel.setFixedWidth(360)
+        panel.setFixedWidth(390)
 
         body = QtWidgets.QHBoxLayout()
         body.addWidget(self.table, 1)
@@ -138,8 +157,8 @@ class SamplesTab(QtWidgets.QWidget):
 
         self.population.currentIndexChanged.connect(self._population_changed)
         self.extend.toggled.connect(self._extend_changed)
-        self.pattern.editingFinished.connect(self._pattern_changed)
-        self.group_by.editingFinished.connect(self._settings_changed)
+        self.add_column_button.clicked.connect(self._ask_new_column)
+        self.fill_button.clicked.connect(self._ask_pattern)
         self.mode.currentIndexChanged.connect(self._settings_changed)
         self.n.valueChanged.connect(self._settings_changed)
         self.min_events.valueChanged.connect(self._settings_changed)
@@ -180,7 +199,9 @@ class SamplesTab(QtWidgets.QWidget):
         self.extend.setVisible(s.can_extend()
                                and any(e.wsp is None and not e.problem for e in s.entries))
         self.extend.setChecked(s.extend_gates)
-        self.pattern.setText(s.pattern)
+        self._fill_group_menu()
+        for b in (self.add_column_button, self.fill_button):
+            b.setEnabled(bool(s.entries))
         self._filling = False
         self._fill_table()
         self._count()
@@ -193,8 +214,7 @@ class SamplesTab(QtWidgets.QWidget):
         self._filling = True
         cols = self._columns()
         self.table.setColumnCount(len(cols))
-        self.table.setHorizontalHeaderLabels([c.capitalize() if c in s.meta_keys() else c
-                                              for c in cols])
+        self.table.setHorizontalHeaderLabels(cols)
         self.table.setRowCount(len(s.entries))
         for r, e in enumerate(s.entries):
             tick = QtWidgets.QTableWidgetItem()
@@ -203,18 +223,27 @@ class SamplesTab(QtWidgets.QWidget):
             tick.setCheckState(QtCore.Qt.CheckState.Checked if e.include and not e.problem
                                else QtCore.Qt.CheckState.Unchecked)
             self.table.setItem(r, 0, tick)
-            self.table.setItem(r, 1, QtWidgets.QTableWidgetItem(e.name))
-            for k in s.meta_keys():
-                self.table.setItem(r, cols.index(k),
-                                   QtWidgets.QTableWidgetItem(e.meta.get(k, "")))
+            self.table.setItem(r, 1, self._fixed(e.name))
+            for k in s.columns:
+                cell = QtWidgets.QTableWidgetItem(e.meta.get(k, ""))
+                if e.problem:
+                    cell.setFlags(QtCore.Qt.ItemFlag.NoItemFlags)
+                self.table.setItem(r, cols.index(k), cell)
             self._number(r, cols.index("Events"), e.events)
         self._filling = False
         self._update_plan()
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 30)
 
+    @staticmethod
+    def _fixed(text: str = "") -> QtWidgets.QTableWidgetItem:
+        """A cell to read and to select, not to type into."""
+        item = QtWidgets.QTableWidgetItem(text)
+        item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsSelectable)
+        return item
+
     def _number(self, row: int, col: int, value, muted: bool = False) -> None:
-        item = QtWidgets.QTableWidgetItem("" if value is None else f"{value:,d}")
+        item = self._fixed("" if value is None else f"{value:,d}")
         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignRight
                               | QtCore.Qt.AlignmentFlag.AlignVCenter)
         if muted:
@@ -249,7 +278,7 @@ class SamplesTab(QtWidgets.QWidget):
                 note = "your gates"
             else:
                 note = ""
-            item = QtWidgets.QTableWidgetItem(note)
+            item = self._fixed(note)
             quiet = note in ("", "counting…", "gates from the group", "your gates",
                              "sets the limit")
             item.setForeground(QtGui.QBrush(QtGui.QColor(style.token(
@@ -286,11 +315,116 @@ class SamplesTab(QtWidgets.QWidget):
     # --- from the person -------------------------------------------------------
 
     def _ticked(self, item) -> None:
-        if self._filling or item.column() != 0:
+        """A box was ticked, or a cell of a column was typed into."""
+        if self._filling:
             return
-        self.session.entries[item.row()].include = (
-            item.checkState() == QtCore.Qt.CheckState.Checked)
+        s = self.session
+        col = self._columns()[item.column()]
+        if item.column() == 0:
+            s.entries[item.row()].include = (
+                item.checkState() == QtCore.Qt.CheckState.Checked)
+        elif col in s.columns:
+            # with several rows selected, what is typed in one goes into
+            # all of them: ten samples of one group are one entry, not ten
+            rows = {i.row() for i in self.table.selectedIndexes()}
+            rows = rows if item.row() in rows else {item.row()}
+            targets = [s.entries[r] for r in rows if not s.entries[r].problem]
+            s.set_value(targets, col, item.text())
+            self._filling = True
+            for r in rows:
+                if not s.entries[r].problem:
+                    self.table.item(r, item.column()).setText(item.text().strip())
+            self._filling = False
+        else:
+            return
+        s.save_project()
         self._update_plan()
+
+    # --- columns --------------------------------------------------------------------
+
+    def _fill_group_menu(self) -> None:
+        s = self.session
+        menu = self.group_by.menu()
+        menu.clear()
+        for c in s.columns:
+            action = menu.addAction(c)
+            action.setCheckable(True)
+            action.setChecked(c in s.group_by)
+            action.toggled.connect(lambda on, name=c: self.set_group_by(name, on))
+        self.group_by.setText(" + ".join(s.group_by) if s.group_by else "Nothing: one group")
+
+    def set_group_by(self, column: str, on: bool) -> None:
+        s = self.session
+        chosen = [c for c in s.group_by if c != column] + ([column] if on else [])
+        s.group_by = [c for c in s.columns if c in chosen]   # in the table's order
+        self.group_by.setText(" + ".join(s.group_by) if s.group_by else "Nothing: one group")
+        s.save_project()
+        self._update_plan()
+        self.sigColumnsChanged.emit()
+
+    def _columns_changed(self) -> None:
+        self.session.save_project()
+        self._fill_group_menu()
+        self._fill_table()
+        self.sigColumnsChanged.emit()
+
+    def add_column(self, name: str) -> None:
+        try:
+            self.session.add_column(name)
+        except ValueError as exc:
+            self.sigStatus.emit(str(exc).capitalize())
+            return
+        self._columns_changed()
+
+    def _ask_new_column(self) -> None:
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Add a column", "Name (Day, Tissue, Donor, Treatment…)")
+        if ok and name.strip():
+            self.add_column(name)
+
+    def remove_column(self, name: str) -> None:
+        self.session.remove_column(name)
+        self._columns_changed()
+
+    def rename_column(self, old: str, new: str) -> None:
+        try:
+            self.session.rename_column(old, new)
+        except ValueError as exc:
+            self.sigStatus.emit(str(exc).capitalize())
+            return
+        self._columns_changed()
+
+    def _rename_column(self, index: int) -> None:
+        name = self._columns()[index]
+        if name not in self.session.columns:
+            return
+        new, ok = QtWidgets.QInputDialog.getText(self, "Rename the column", "Name", text=name)
+        if ok and new.strip() and new.strip() != name:
+            self.rename_column(name, new)
+
+    def _header_menu(self, pos) -> None:
+        index = self.table.horizontalHeader().logicalIndexAt(pos)
+        name = self._columns()[index] if index >= 0 else ""
+        if name not in self.session.columns:
+            return
+        menu = QtWidgets.QMenu(self)
+        rename = menu.addAction(f"Rename \"{name}\"…")
+        remove = menu.addAction(f"Remove \"{name}\"")
+        chosen = menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
+        if chosen is rename:
+            self._rename_column(index)
+        elif chosen is remove:
+            self.remove_column(name)
+
+    def fill_from_names(self, pattern: str) -> list[str]:
+        filled = self.session.annotate(pattern)
+        self._columns_changed()
+        return filled
+
+    def _ask_pattern(self) -> None:
+        dialog = PatternDialog(self.session, self)
+        if dialog.exec():
+            self.fill_from_names(dialog.pattern.text())
 
     def _population_changed(self) -> None:
         if self._filling:
@@ -306,22 +440,10 @@ class SamplesTab(QtWidgets.QWidget):
         self.refresh()
         self.sigGatesChanged.emit()
 
-    def _pattern_changed(self) -> None:
-        text = self.pattern.text()
-        try:
-            re.compile(text)
-        except re.error as exc:
-            self.sigStatus.emit(f"Name pattern: {exc}")
-            return
-        if text != self.session.pattern:
-            self.session.annotate(text)
-            self._fill_table()
-
     def _settings_changed(self) -> None:
         if self._filling:
             return
         s = self.session
-        s.group_by = [k.strip() for k in self.group_by.text().split(",") if k.strip()]
         s.mode = self.mode.currentData()
         s.n = self.n.value() or None
         s.min_events = self.min_events.value()
@@ -367,3 +489,67 @@ class SamplesTab(QtWidgets.QWidget):
         worker.run(self.session.build, on_done=done, on_failed=failed,
                    on_progress=lambda d, t, n: self.sigStatus.emit(
                        f"Reading {n} ({d}/{t})"))
+
+
+class PatternDialog(QtWidgets.QDialog):
+    """Columns read out of the file names: a pattern in which every named
+    group is a column, and what it finds in the first few names, live."""
+
+    def __init__(self, session: Session, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Fill columns from the file names")
+        self.session = session
+        names = [e.name for e in session.usable()]
+        self.pattern = QtWidgets.QLineEdit(suggest_pattern(names[0]) if names else "")
+        self.help = QtWidgets.QLabel(
+            "Each <b>(?P&lt;Name&gt;…)</b> is a column called Name, filled with what the "
+            "part in its brackets matches: <b>\\d+</b> a number, <b>[A-Za-z]+</b> letters. "
+            "Rename the groups to what they are — Day, Group, Animal — and delete the "
+            "ones you do not want as columns.")
+        self.help.setWordWrap(True)
+        self.help.setProperty("role", "caption")
+        self.preview = QtWidgets.QTableWidget()
+        self.preview.verticalHeader().setVisible(False)
+        self.preview.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.state = QtWidgets.QLabel("")
+        self.state.setProperty("role", "warning")
+        self.box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                              | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        self.box.accepted.connect(self.accept)
+        self.box.rejected.connect(self.reject)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.pattern)
+        layout.addWidget(self.help)
+        layout.addWidget(self.preview, 1)
+        layout.addWidget(self.state)
+        layout.addWidget(self.box)
+        self.resize(620, 420)
+        self._names = names
+        self.pattern.textChanged.connect(self._show)
+        self._show()
+
+    def _show(self) -> None:
+        ok = self.box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        try:
+            rx = re.compile(self.pattern.text())
+        except re.error as exc:
+            self.state.setText(f"Not a pattern yet: {exc}")
+            ok.setEnabled(False)
+            return
+        groups = list(rx.groupindex)
+        shown = self._names[:8]
+        self.preview.setColumnCount(1 + len(groups))
+        self.preview.setHorizontalHeaderLabels(["File"] + groups)
+        self.preview.setRowCount(len(shown))
+        for r, name in enumerate(shown):
+            m = rx.match(name)
+            self.preview.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
+            for k, g in enumerate(groups):
+                self.preview.setItem(r, 1 + k, QtWidgets.QTableWidgetItem(
+                    (m.group(g) or "") if m else "—"))
+        matched = sum(1 for n in self._names if rx.match(n))
+        self.state.setText("" if matched == len(self._names) and groups else
+                           "No named group: nothing would be filled" if not groups else
+                           f"Matches {matched} of {len(self._names)} file names; "
+                           "the others keep what they have")
+        ok.setEnabled(bool(groups) and matched > 0)
