@@ -38,21 +38,21 @@ points of a phase:
   S spread evenly, or leaning to one side (what a polynomial can follow):
       Dean-Jett-Fox is unbiased (under 0.3) at a CV of 3 to 5% and varies
       by 0.5 to 1.5 from one acquisition to the next. At a CV of 8% the
-      peaks run into S: the bias stays about 1 but S and G2 trade 3 to 5
+      peaks run into S: the bias stays about 1 but S and G2 trade 2 to 5
       points between them from one acquisition to the next.
       Watson is within 1 of the truth on average at any of those CVs
       where S is even (1.5 where most cells are in G2), and noisier: 1.5
       to 3 points, since it uses half of each peak.
   S piled up against one of the peaks:
-      Watson moves 1 to 2 points from S to that peak at a CV of 5%, and
-      4 to 5 at 8%: it takes S to be level under the side of the peak.
+      Watson is off by up to 2 points at a CV of 5% and up to 5 at 8%,
+      between S and G2: it takes S to be level under the side of a peak.
       Dean-Jett-Fox stays within 0.5 at 5% and within 3 at 8%.
   S with a shape no parabola has (a fifth of the cells held at one point
   of S):
       held in the middle of S, both stay within 1 point at a CV of 3% and
-      2.5 at 5%. Held a quarter of the way from G1, Dean-Jett-Fox takes
-      6 points from G1 at a CV of 3% and 12 at 5%; Watson 1 and 4. The
-      chi-square of Dean-Jett-Fox is then 10 to 30 instead of 1, which
+      within 3 at 5%. Held a quarter of the way from G1, Dean-Jett-Fox
+      takes 6 points from G1 at a CV of 3% and 12 at 5%; Watson 1 and 5.
+      The chi-square of Dean-Jett-Fox is then 9 to 30 instead of 1, which
       is how it is known; Watson's stays at 1 whatever S is.
 
 Each number comes with a standard error; see `modelfit` for what it does
