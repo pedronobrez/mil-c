@@ -201,6 +201,31 @@ def cmd_analyze(a) -> int:
             mean.to_csv(a.out + "_freq_mean.csv", "cluster")
             sd.to_csv(a.out + "_freq_sd.csv", "cluster")
 
+    if a.phenograph:
+        from . import graphcluster
+        found = graphcluster.phenograph(X, a.k, a.resolution, a.seed)
+        ds.derived["PhenoGraph"] = found.labels.astype(np.int32)
+        ds.runs["PhenoGraph"] = {**base, "k": found.k, "resolution": a.resolution,
+                                 "n_clusters": found.n_clusters,
+                                 "modularity": found.modularity}
+        print(f"PhenoGraph: {found.n_clusters} clusters, modularity "
+              f"{found.modularity:.3f}; the largest holds "
+              f"{np.mean(found.labels == 1):.1%} of the events")
+        _cluster_tables(ds, X, found.labels, channels, a.group_by,
+                        a.out + "_phenograph")
+    if a.pca:
+        found = embed.pca(X, 2)
+        ds.derived["PCA1"], ds.derived["PCA2"] = found.scores[:, 0], found.scores[:, 1]
+        ds.runs["PCA"] = {"channels": channels, "transform": a.transform,
+                          "explained": [float(v) for v in found.explained],
+                          "loadings": [[float(v) for v in row] for row in found.loadings]}
+        print("PCA: " + ", ".join(f"PCA{i + 1} holds {v:.1%} of the variance"
+                                  for i, v in enumerate(found.explained)))
+        cluster_stats.Table(
+            [f"PCA{i + 1}" for i in range(len(found.loadings))],
+            [ds.label(c) for c in channels], found.loadings,
+        ).to_csv(a.out + "_pca_loadings.csv", "component")
+
     ds.save(a.out + ".npz")
     keys = list(ds.derived)
     with open(a.out + "_events.csv", "w", encoding=cluster_stats.CSV_ENCODING) as f:
@@ -210,8 +235,23 @@ def cmd_analyze(a) -> int:
             f.write(",".join([ds.samples[ds.sample_index[i]], str(ds.event_index[i] + 1)]
                              + [f"{c[i]:.6g}" for c in cols]) + "\n")
     print(f"wrote {a.out}.npz, {a.out}_events.csv"
-          + (" and the cluster tables" if a.flowsom else ""))
+          + (" and the cluster tables" if a.flowsom or a.phenograph else ""))
     return 0
+
+
+def _cluster_tables(ds, X, labels, channels, group_by: str, stem: str) -> None:
+    """What FlowSOM's clusters are written as above, for another
+    clustering: medians, frequencies per sample, and their mean and SD
+    per group when there are groups."""
+    names = [ds.label(c) for c in channels]
+    cluster_stats.expression(X, labels, names).to_csv(stem + "_mfi.csv", "cluster")
+    freq = cluster_stats.frequencies(labels, ds.sample_index, ds.samples)
+    freq.to_csv(stem + "_freq.csv", "cluster")
+    groups = ["/".join(m.get(k, "") for k in group_by.split(",")) for m in ds.meta]
+    if len(set(groups)) > 1:
+        mean, sd, _ = cluster_stats.by_group(freq, groups)
+        mean.to_csv(stem + "_freq_mean.csv", "cluster")
+        sd.to_csv(stem + "_freq_sd.csv", "cluster")
 
 
 def cmd_selftest(a) -> int:
@@ -449,6 +489,12 @@ def main(argv=None) -> int:
     s.add_argument("--flowsom", action="store_true")
     s.add_argument("--clusters", type=int, default=5)
     s.add_argument("--grid", type=int, default=10)
+    s.add_argument("--phenograph", action="store_true",
+                   help="clusters without choosing how many")
+    s.add_argument("--k", type=int, default=30, help="PhenoGraph's neighbours")
+    s.add_argument("--resolution", type=float, default=1.0,
+                   help="above 1, more and smaller clusters")
+    s.add_argument("--pca", action="store_true")
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--group-by", default="Group")
     s.add_argument("--sample-column", default="SampleID",

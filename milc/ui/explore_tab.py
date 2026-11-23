@@ -71,11 +71,25 @@ class ExploreTab(QtWidgets.QWidget):
         self.grid.setRange(2, 30)
         self.grid.setValue(10)
         self.grid.setToolTip("The map is this many nodes on each side")
+        self.k = QtWidgets.QSpinBox()
+        self.k.setRange(2, 500)
+        self.k.setValue(30)
+        self.k.setToolTip("Each event is joined to this many nearest "
+                          "neighbours: fewer finds smaller clusters")
+        self.resolution = QtWidgets.QDoubleSpinBox()
+        self.resolution.setRange(0.05, 10.0)
+        self.resolution.setSingleStep(0.1)
+        self.resolution.setValue(1.0)
+        self.resolution.setToolTip("Above 1, more and smaller clusters; below, "
+                                   "fewer and larger — lower it when one "
+                                   "population comes out in pieces")
 
         self.run_buttons = {
             "UMAP": QtWidgets.QPushButton("Run UMAP"),
             "tSNE": QtWidgets.QPushButton("Run tSNE"),
             "FlowSOM": QtWidgets.QPushButton("Run FlowSOM"),
+            "PhenoGraph": QtWidgets.QPushButton("Run PhenoGraph"),
+            "PCA": QtWidgets.QPushButton("Run PCA"),
         }
         self.run_all = QtWidgets.QPushButton("Run all three")
         self.run_all.setProperty("primary", True)
@@ -100,13 +114,35 @@ class ExploreTab(QtWidgets.QWidget):
         form.addRow("Clusters", self.clusters)
         form.addRow("Grid", self.grid)
         form.addRow(self.run_buttons["FlowSOM"])
+        form.addRow(self._eyebrow("PhenoGraph"))
+        form.addRow("Neighbours", self.k)
+        form.addRow("Resolution", self.resolution)
+        form.addRow(self.run_buttons["PhenoGraph"])
+        form.addRow(self._eyebrow("PCA"))
+        form.addRow(self.run_buttons["PCA"])
         left.addLayout(form)
+        # the settings are taller than a laptop's screen now: they scroll,
+        # sooner than squeeze the list of markers to nothing
+        self.markers.setMinimumHeight(120)
+        left.setContentsMargins(0, 0, 0, 0)
+        settings = QtWidgets.QWidget()
+        settings.setLayout(left)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidget(settings)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # room for the bar beside the fields, not over them
+        scroll.setMinimumWidth(settings.minimumSizeHint().width()
+                               + scroll.verticalScrollBar().sizeHint().width())
+        left = QtWidgets.QVBoxLayout()
+        left.addWidget(scroll, 1)
         left.addSpacing(6)
         left.addWidget(self.run_all)
         left.addWidget(self.result)
         left_panel = QtWidgets.QWidget()
         left_panel.setLayout(left)
-        left_panel.setFixedWidth(280)
+        left_panel.setFixedWidth(max(280, left_panel.minimumSizeHint().width()))
 
         # --- middle: the plot --------------------------------------------------
         self.view = MapView()
@@ -252,6 +288,8 @@ class ExploreTab(QtWidgets.QWidget):
                 combo.addItem("Sample", _spec("sample", ""))
                 if "FlowSOM" in ds.derived:
                     combo.addItem("FlowSOM cluster", _spec("cluster", "FlowSOM"))
+                if "PhenoGraph" in ds.derived:
+                    combo.addItem("PhenoGraph cluster", _spec("cluster", "PhenoGraph"))
             self.color_by.insertSeparator(self.color_by.count())
             for ch, m, comp in zip(ds.channels, ds.markers, ds.compensated):
                 if comp:
@@ -262,11 +300,11 @@ class ExploreTab(QtWidgets.QWidget):
                     combo.setCurrentIndex(i)
             if self.y_axis.currentIndex() == self.x_axis.currentIndex() and self.y_axis.count() > 1:
                 self.y_axis.setCurrentIndex(self.x_axis.currentIndex() + 1)
-            if prefer in ("UMAP", "tSNE"):
+            if prefer in ("UMAP", "tSNE", "PCA"):
                 self.x_axis.setCurrentIndex(self.x_axis.findData(_spec("derived", prefer + "1")))
                 self.y_axis.setCurrentIndex(self.y_axis.findData(_spec("derived", prefer + "2")))
-            if prefer == "FlowSOM":
-                self.color_by.setCurrentIndex(self.color_by.findData(_spec("cluster", "FlowSOM")))
+            if prefer in ("FlowSOM", "PhenoGraph"):
+                self.color_by.setCurrentIndex(self.color_by.findData(_spec("cluster", prefer)))
             elif not self.color_by.currentData() and keys:
                 i = self.color_by.findData(_spec("meta", self.session.group_by[0]
                                             if self.session.group_by else keys[0]))
@@ -296,7 +334,34 @@ class ExploreTab(QtWidgets.QWidget):
             if run and "neighbours_kept" in run:
                 lines.append(f"{name} keeps {run['neighbours_kept']:.0%} of each "
                              "event's 15 nearest neighbours")
+        run = ds.runs.get("PhenoGraph")
+        if run:
+            lines.append(f"PhenoGraph: {run['n_clusters']} clusters, "
+                         f"modularity {run['modularity']:.2f}")
+        lines += self._components()
         self.result.setText("\n".join(lines))
+
+    def _components(self) -> list[str]:
+        """What each principal component is made of: its share of the
+        variance and the three markers that weigh most in it."""
+        ds = self.session.dataset
+        run = ds.runs.get("PCA")
+        if not run:
+            return []
+        names = [ds.label(c) for c in run["channels"]]
+        lines = []
+        for i, (share, row) in enumerate(zip(run["explained"], run["loadings"]), 1):
+            heaviest = sorted(zip(row, names), key=lambda t: -abs(t[0]))[:3]
+            lines.append(f"PCA{i}, {share:.0%}: " + ", ".join(
+                f"{'+' if w >= 0 else '−'}{abs(w):.2f} {name}" for w, name in heaviest))
+        return lines
+
+    def _derived_label(self, key: str) -> str:
+        """A principal component says how much of the variance it holds."""
+        run = self.session.dataset.runs.get("PCA")
+        if run and key.startswith("PCA"):
+            return f"{key} ({run['explained'][int(key[3:]) - 1]:.0%})"
+        return key
 
     # --- drawing -------------------------------------------------------------
 
@@ -307,7 +372,7 @@ class ExploreTab(QtWidgets.QWidget):
         ds = self.session.dataset
         kind, key = _parse(spec)
         if kind == "derived":
-            return ds.derived[key], key, None
+            return ds.derived[key], self._derived_label(key), None
         x = ds.column(key).astype(np.float64)
         t = self._scale(key)
         if t is not None:
@@ -404,6 +469,10 @@ class ExploreTab(QtWidgets.QWidget):
             "tSNE": lambda: s.run_tsne(perplexity=self.perplexity.value(), **common),
             "FlowSOM": lambda: s.run_flowsom(n_clusters=self.clusters.value(),
                                              grid=self.grid.value(), **common),
+            "PhenoGraph": lambda: s.run_phenograph(k=self.k.value(),
+                                                   resolution=self.resolution.value(),
+                                                   **common),
+            "PCA": lambda: s.run_pca(channels, common["transform"]),
         }
         # the settings are read now, on this thread, not when the work starts
         for name in names:

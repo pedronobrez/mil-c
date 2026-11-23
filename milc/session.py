@@ -963,6 +963,28 @@ class Session:
             "n_clusters": n_clusters, "grid": grid}
         self.flowsom = fs
 
+    def run_phenograph(self, channels, transform="biex", cofactor=150.0,
+                       k=30, resolution=1.0, seed=0) -> None:
+        from . import graphcluster
+        X = self.features(channels, transform, cofactor)
+        found = graphcluster.phenograph(X, k, resolution, seed)
+        ds = self.dataset
+        ds.derived["PhenoGraph"] = found.labels.astype(np.int32)
+        ds.runs["PhenoGraph"] = {
+            "channels": list(channels), "transform": transform, "seed": seed,
+            "k": found.k, "resolution": resolution,
+            "n_clusters": found.n_clusters, "modularity": found.modularity}
+
+    def run_pca(self, channels, transform="biex", cofactor=150.0) -> None:
+        from . import embed
+        found = embed.pca(self.features(channels, transform, cofactor), 2)
+        ds = self.dataset
+        ds.derived["PCA1"], ds.derived["PCA2"] = found.scores[:, 0], found.scores[:, 1]
+        ds.runs["PCA"] = {
+            "channels": list(channels), "transform": transform,
+            "explained": [float(v) for v in found.explained],
+            "loadings": [[float(v) for v in row] for row in found.loadings]}
+
     def clusters(self, key: str = FLOWSOM) -> Clustering | None:
         """The clusters as the user now has them — merged, named, with the
         ones drawn by hand — for the clustering `key` of the dataset, or
