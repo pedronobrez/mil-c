@@ -17,7 +17,9 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from .. import figures
 from ..figures import FigureStyle
+from . import palette
 from . import style as ui_style
+from .ramp_picker import RampPicker
 from .settings import settings
 
 SETTING_LAST = "figure/last"
@@ -56,6 +58,10 @@ class FigureDialog(QtWidgets.QDialog):
         # the look is remembered; this figure's own words are not
         self.style.title, self.style.xlabel, self.style.ylabel = "", None, None
         self.style.legend_title = None
+        # a figure starts from the ramp on the screen: what was being looked
+        # at is what is expected on paper
+        self.style.colormap = palette.ramp_name()
+        self.style.colormap_colors = palette.custom_colors()
         self._filling = False
         self._timer = QtCore.QTimer(self)
         self._timer.setSingleShot(True)
@@ -105,8 +111,7 @@ class FigureDialog(QtWidgets.QDialog):
         self.legend_title = QtWidgets.QLineEdit()
         self.legend_title.setPlaceholderText("as on the plot")
         self.legend_counts = QtWidgets.QCheckBox("Counts")
-        self.colormap = QtWidgets.QComboBox()
-        self.colormap.addItems(figures.COLORMAPS)
+        self.colormap = RampPicker(follow=False)
         self.annotate = QtWidgets.QCheckBox("Numbers in the cells")
         self.transparent = QtWidgets.QCheckBox("Transparent background")
         self.categories = QtWidgets.QTableWidget(0, 2)
@@ -114,9 +119,14 @@ class FigureDialog(QtWidgets.QDialog):
         self.categories.verticalHeader().setVisible(False)
         self.categories.horizontalHeader().setStretchLastSection(True)
         self.categories.setColumnWidth(0, 70)
+        self.categories.setIconSize(QtCore.QSize(44, 18))
         self.categories.setToolTip("Double-click a colour to change it; type over a label")
+        self.categories_title = self._eyebrow("Categories — double-click a colour, type over a label")
 
         form = QtWidgets.QFormLayout()
+        form.setFieldGrowthPolicy(
+            QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setContentsMargins(0, 0, 14, 0)   # clear of the scroll bar
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self.preset, 1)
         row.addWidget(self.save_preset)
@@ -163,20 +173,35 @@ class FigureDialog(QtWidgets.QDialog):
         buttons.addWidget(self.close_button)
         buttons.addWidget(self.export_button)
 
+        # everything but the buttons scrolls: on a laptop screen the list of
+        # categories was squeezed to one row under the form and could not be
+        # reached at all
+        inner = QtWidgets.QVBoxLayout()
+        inner.addLayout(form)
+        inner.addWidget(self.categories_title)
+        inner.addWidget(self.categories)
+        inner.addStretch(1)
+        body = QtWidgets.QWidget()
+        body.setLayout(inner)
+        side_scroll = QtWidgets.QScrollArea()
+        side_scroll.setWidget(body)
+        side_scroll.setWidgetResizable(True)
+        side_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        side_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         side = QtWidgets.QVBoxLayout()
-        side.addLayout(form)
-        side.addWidget(self.categories, 1)
+        side.setContentsMargins(0, 0, 0, 0)
+        side.addWidget(side_scroll, 1)
         side.addLayout(buttons)
         panel = QtWidgets.QWidget()
         panel.setLayout(side)
-        panel.setFixedWidth(390)
+        panel.setFixedWidth(480)
         left = QtWidgets.QVBoxLayout()
         left.addWidget(scroll, 1)
         left.addWidget(self.note)
         layout = QtWidgets.QHBoxLayout(self)
         layout.addLayout(left, 1)
         layout.addWidget(panel)
-        self.resize(1080, 760)
+        self.resize(1220, 800)
 
         # what this content has no use for is not offered
         is_map = isinstance(content, figures.MapContent)
@@ -191,15 +216,18 @@ class FigureDialog(QtWidgets.QDialog):
         self._visible(self._row_y, not is_tree)
         self.grid.setVisible(not (is_tree or is_heat))
         self.ticks.setVisible(not (is_tree or is_heat))
-        self.categories.setVisible(bool(figures.category_names(content)))
+        has_categories = bool(figures.category_names(content))
+        self.categories.setVisible(has_categories)
+        self.categories_title.setVisible(has_categories)
 
         self._fill_presets()
         self._to_widgets()
         for w in (self.width, self.height, self.font_size, self.point_size, self.opacity):
             w.valueChanged.connect(self._changed)
         self.dpi.valueChanged.connect(self._changed)
-        for w in (self.font, self.frame, self.legend, self.colormap):
+        for w in (self.font, self.frame, self.legend):
             w.currentIndexChanged.connect(self._changed)
+        self.colormap.sigChosen.connect(self._changed)
         for w in (self.title, self.xlabel, self.ylabel, self.legend_title):
             w.textEdited.connect(self._changed)
         for w in (self.ticks, self.grid, self.rasterize, self.legend_counts,
@@ -275,7 +303,7 @@ class FigureDialog(QtWidgets.QDialog):
         self.legend.setCurrentIndex(max(self.legend.findData(s.legend), 0))
         self.legend_title.setText(s.legend_title or "")
         self.legend_counts.setChecked(s.legend_counts)
-        self.colormap.setCurrentIndex(max(self.colormap.findText(s.colormap), 0))
+        self.colormap.set_choice(s.colormap, s.colormap_colors)
         self.annotate.setChecked(s.annotate)
         self.transparent.setChecked(s.transparent)
         names = figures.category_names(self.content)
@@ -283,10 +311,19 @@ class FigureDialog(QtWidgets.QDialog):
         for r, (name, default) in enumerate(names):
             swatch = QtWidgets.QTableWidgetItem()
             swatch.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
-            swatch.setBackground(QtGui.QColor(s.color(name, default)))
+            # as a picture, not as the cell's background: the stylesheet
+            # paints every cell itself and the colours never showed
+            colour = s.color(name, default)
+            pix = QtGui.QPixmap(44, 18)
+            pix.fill(QtGui.QColor(colour))
+            swatch.setIcon(QtGui.QIcon(pix))
             swatch.setData(QtCore.Qt.ItemDataRole.UserRole, name)
+            swatch.setData(QtCore.Qt.ItemDataRole.UserRole + 1, colour)
             self.categories.setItem(r, 0, swatch)
             self.categories.setItem(r, 1, QtWidgets.QTableWidgetItem(s.label(name)))
+        # as tall as its rows, up to a point: every category in sight
+        rows = self.categories.rowCount()
+        self.categories.setFixedHeight(min(34 + 30 * max(rows, 1), 34 + 30 * 12))
         self._filling = False
 
     def _from_widgets(self) -> None:
@@ -304,7 +341,8 @@ class FigureDialog(QtWidgets.QDialog):
         s.legend = self.legend.currentData()
         s.legend_title = self.legend_title.text() or None
         s.legend_counts = self.legend_counts.isChecked()
-        s.colormap = self.colormap.currentText()
+        s.colormap = self.colormap.name()
+        s.colormap_colors = list(self.colormap.colors)
         s.annotate = self.annotate.isChecked()
         s.transparent = self.transparent.isChecked()
 
@@ -340,7 +378,8 @@ class FigureDialog(QtWidgets.QDialog):
         if col != 0:
             return
         item = self.categories.item(row, 0)
-        chosen = QtWidgets.QColorDialog.getColor(item.background().color(), self, "Colour")
+        current = QtGui.QColor(item.data(QtCore.Qt.ItemDataRole.UserRole + 1))
+        chosen = QtWidgets.QColorDialog.getColor(current, self, "Colour")
         if chosen.isValid():
             self.set_colour(item.data(QtCore.Qt.ItemDataRole.UserRole), chosen.name())
 

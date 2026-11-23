@@ -40,13 +40,26 @@ class RectangleGate:
 @dataclass
 class PolygonGate:
     dims: list[str]
-    #: n x 2, in the order of `dims`
+    #: n x 2, in the order of `dims`, in the units the file stores
     vertices: np.ndarray
     inside: bool = True
+    #: per dimension, the scale the polygon was drawn on (a transform, or
+    #: None for the values as they are). A side drawn straight on a
+    #: biexponential axis is a curve in stored units, so the test is made
+    #: where the polygon was drawn — which is also what FlowJo does.
+    scales: list | None = None
 
     def contains(self, column: Column) -> np.ndarray:
-        mask = points_in_polygon(column(self.dims[0]), column(self.dims[1]),
-                                 np.asarray(self.vertices, dtype=np.float64))
+        x, y = column(self.dims[0]), column(self.dims[1])
+        poly = np.array(self.vertices, dtype=np.float64)
+        for k, scale in enumerate(self.scales or ()):
+            if scale is not None:
+                poly[:, k] = scale(poly[:, k])
+                if k == 0:
+                    x = scale(x)
+                else:
+                    y = scale(y)
+        mask = points_in_polygon(x, y, poly)
         return mask if self.inside else ~mask
 
 
@@ -128,3 +141,64 @@ class GateNode:
 
         run(self, np.ones(n_events, dtype=bool))
         return out
+
+
+# --- copies and files --------------------------------------------------------
+
+def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
+    """An independent copy: editing it leaves the original alone."""
+    def clone(node: GateNode) -> GateNode:
+        g = node.gate
+        if isinstance(g, RectangleGate):
+            g = RectangleGate(list(g.dims), list(g.mins), list(g.maxs), g.inside)
+        elif isinstance(g, PolygonGate):
+            g = PolygonGate(list(g.dims), np.array(g.vertices, dtype=np.float64),
+                            g.inside, list(g.scales) if g.scales else None)
+        out = GateNode(node.name, g,
+                       reference_count=node.reference_count if keep_counts else None)
+        for child in node.children:
+            out.add(clone(child))
+        return out
+    return clone(tree)
+
+
+def _scale_out(scale):
+    from .transforms import Biex
+    if isinstance(scale, Biex):
+        return {"biex": [scale.length, scale.max_range, scale.neg, scale.width, scale.pos]}
+    return None
+
+
+def _scale_in(spec):
+    from .transforms import Biex
+    return Biex(*spec["biex"]) if isinstance(spec, dict) and "biex" in spec else None
+
+
+def tree_to_dict(tree: GateNode) -> dict:
+    out: dict = {"name": tree.name, "children": [tree_to_dict(c) for c in tree.children]}
+    g = tree.gate
+    if isinstance(g, RectangleGate):
+        out["gate"] = {"type": "rectangle", "dims": g.dims, "mins": g.mins,
+                       "maxs": g.maxs, "inside": g.inside}
+    elif isinstance(g, PolygonGate):
+        out["gate"] = {"type": "polygon", "dims": g.dims, "inside": g.inside,
+                       "vertices": np.asarray(g.vertices, dtype=float).tolist(),
+                       "scales": [_scale_out(s) for s in (g.scales or [None, None])]}
+    return out
+
+
+def tree_from_dict(d: dict) -> GateNode:
+    g = d.get("gate")
+    gate = None
+    if g and g["type"] == "rectangle":
+        gate = RectangleGate(list(g["dims"]), list(g["mins"]), list(g["maxs"]),
+                             g.get("inside", True))
+    elif g and g["type"] == "polygon":
+        scales = [_scale_in(s) for s in g.get("scales") or []]
+        gate = PolygonGate(list(g["dims"]), np.array(g["vertices"], dtype=np.float64),
+                           g.get("inside", True),
+                           scales if any(s is not None for s in scales) else None)
+    node = GateNode(d.get("name", ""), gate)
+    for child in d.get("children", []):
+        node.add(tree_from_dict(child))
+    return node

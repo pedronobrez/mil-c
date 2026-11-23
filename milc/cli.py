@@ -261,11 +261,9 @@ def _selftest(a, print) -> int:
             os.environ.setdefault("MILC_SETTINGS", os.path.join(folder, "settings.ini"))
             from PyQt6 import QtWidgets
 
-            from .ui import style, worker
-            from .ui.theme import apply_defaults
+            from .ui import prepare, worker
             app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-            style.apply(app)
-            apply_defaults()
+            prepare(app)
             from .ui.shell import MainShell
             window = MainShell()
             window.open_folder(folder)

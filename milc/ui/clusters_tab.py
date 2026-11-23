@@ -13,7 +13,8 @@ from PyQt6 import QtCore, QtWidgets
 
 from .. import cluster_stats
 from ..session import Session
-from . import style, theme
+from . import palette, style, theme
+from .ramp_picker import RampPicker
 from .cluster_views import FrequencyView, HeatmapView, TreeView
 from .scatter import Categories, MapView, categories_of
 
@@ -32,8 +33,10 @@ class ClustersTab(QtWidgets.QWidget):
         self._tree = None
 
         self.embedding = QtWidgets.QComboBox()
-        self.all_markers = QtWidgets.QCheckBox("All markers")
-        self.all_markers.setToolTip("Also the markers FlowSOM was not run on")
+        self.all_markers = QtWidgets.QCheckBox("Other markers too")
+        self.ramp = RampPicker()
+        self.ramp.setToolTip("The colours of the heatmap, of a tree coloured by a marker "
+                             "and of expression on the maps")
         self.stat = QtWidgets.QComboBox()
         self.stat.addItem("Median", "median")
         self.stat.addItem("Mean", "mean")
@@ -48,6 +51,7 @@ class ClustersTab(QtWidgets.QWidget):
 
         bar = QtWidgets.QHBoxLayout()
         for label, widget in (("Map", self.embedding), ("Heatmap", self.stat),
+                              ("Colours", self.ramp),
                               (None, self.per_marker), (None, self.all_markers),
                               ("Groups", self.group_by), ("Tree", self.tree_color)):
             if label:
@@ -105,6 +109,7 @@ class ClustersTab(QtWidgets.QWidget):
         self.all_markers.toggled.connect(self._draw_tables)
         self.group_by.currentIndexChanged.connect(self._draw_tables)
         self.tree_color.currentIndexChanged.connect(self._draw_tree)
+        palette.notifier.changed.connect(self._recolour)
         self.refresh()
 
     def _titled(self, title: str, widget: QtWidgets.QWidget, name: str) -> QtWidgets.QWidget:
@@ -149,6 +154,19 @@ class ClustersTab(QtWidgets.QWidget):
             self._lasso = None
         self._tree = self.session.flowsom_tree()
 
+        # the box used to do nothing whenever FlowSOM had been run on every
+        # marker, which is what the Explore tab ticks to begin with; now it
+        # says how many there are to add, or that there are none
+        others = self._other_markers()
+        self.all_markers.setEnabled(bool(others))
+        self.all_markers.setText(f"Other markers too ({len(others)})" if others
+                                 else "Other markers too (none)")
+        self.all_markers.setToolTip(
+            "Also show " + ", ".join(ds.label(c).split()[0] for c in others)
+            + ": stained, but not used to build the clusters" if others else
+            "FlowSOM was run on every stained marker, so there is nothing to add. "
+            "Untick the lineage and viability markers in Explore and run it again "
+            "to cluster on fewer.")
         self._filling = True
         keep = {c: c.currentData() for c in (self.embedding, self.group_by, self.tree_color)}
         self.embedding.clear()
@@ -182,6 +200,17 @@ class ClustersTab(QtWidgets.QWidget):
                 combo.setCurrentIndex(i)
         self._filling = False
         self._draw_all()
+
+    def _recolour(self) -> None:
+        if self.stack.currentIndex() == 1:
+            self._draw_all()
+
+    def _other_markers(self) -> list[str]:
+        """Stained markers FlowSOM was not run on."""
+        ds = self.session.dataset
+        used = set(ds.runs.get("FlowSOM", {}).get("channels") or [])
+        return [c for c, m, comp in zip(ds.channels, ds.markers, ds.compensated)
+                if comp and m and c not in used]
 
     def _groups(self) -> list[str]:
         ds = self.session.dataset
@@ -253,8 +282,9 @@ class ClustersTab(QtWidgets.QWidget):
         if self._filling or self.session.dataset is None:
             return
         ds = self.session.dataset
-        channels = ([c for c, m, comp in zip(ds.channels, ds.markers, ds.compensated)
-                     if comp and m] if self.all_markers.isChecked() else None)
+        used = ds.runs.get("FlowSOM", {}).get("channels") or self.session.default_channels()
+        show_others = self.all_markers.isChecked() and self.all_markers.isEnabled()
+        channels = list(used) + self._other_markers() if show_others else None
         tables = self.session.cluster_tables(channels, self.stat.currentData())
         if tables is None:
             return

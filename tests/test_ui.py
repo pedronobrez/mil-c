@@ -17,11 +17,9 @@ from milc.fcs import write_fcs  # noqa: E402
 @pytest.fixture(scope="module")
 def app(tmp_path_factory):
     os.environ["MILC_SETTINGS"] = str(tmp_path_factory.mktemp("settings") / "s.ini")
-    from milc.ui import style
-    from milc.ui.theme import apply_defaults
+    from milc.ui import prepare
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    style.apply(app)
-    apply_defaults()
+    prepare(app)
     return app
 
 
@@ -148,4 +146,128 @@ def test_folder_to_map(app, folder):
     w.samples.concatenate()
     settle()
     assert c.stack.currentIndex() == 0
+    w.close()
+
+
+def test_gates_by_hand(app, folder):
+    """Open a sample, look at it, gate it: a rectangle, a polygon on a
+    biexponential axis, a range on a histogram — and every sample gets
+    them, and they are still there when the folder is opened again."""
+    from milc.session import GATES_FILE
+    from milc.transforms import Biex
+    from milc.ui import worker
+    from milc.ui.gates_tab import HISTOGRAM
+    from milc.ui.shell import MainShell
+
+    def settle():
+        for _ in range(3):
+            worker.wait_all()
+            app.processEvents()
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    settle()
+    assert g.entry.name == "3Case1" and g.node.path == "" and g.tree.topLevelItemCount() == 1
+    s = g.sample
+    assert g.x_axis.findData("Comp-FITC-A") >= 0 and g.x_axis.findData("FSC-A") >= 0
+
+    # a rectangle on scatter, in the file's own units
+    g.set_axes("FSC-A", "Comp-PE-A")
+    cells = g.add_rectangle(80000, 0.0, 100000, 1.0, "Cells")
+    fsc = s.column("FSC-A")
+    assert s.count("Cells") == int(((fsc >= 80000) & (fsc < 100000)).sum())
+    assert cells.gate.mins[1] < 0 and cells.gate.maxs[1] == pytest.approx(262144, rel=1e-2)
+
+    # inside it, a polygon drawn on two biexponential axes: tested where drawn
+    g.select("Cells")
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    assert g.node.path == "Cells"
+    box = np.array([[0.5, 0.0], [1.0, 0.0], [1.0, 0.45], [0.5, 0.45]])
+    cd4 = g.add_polygon(box, "CD4")
+    t = Biex()
+    pe, fitc = t(s.column("Comp-PE-A")), t(s.column("Comp-FITC-A"))
+    expected = (s.mask("Cells") & (pe > 0.5) & (pe < 1.0) & (fitc > 0.0) & (fitc < 0.45)).sum()
+    assert s.count("Cells/CD4") == expected > 20
+    assert cd4.gate.scales is not None and len(g._overlays) == 1
+    assert g.x_axis.currentData() == "Comp-PE-A"   # the view did not jump away
+
+    # a range on a histogram is a gate of one parameter
+    g.set_axes("Comp-APC-A", HISTOGRAM)
+    foxp3 = g.add_rectangle(0.6, 0, 1.0, 0, "Foxp3+")
+    assert foxp3.gate.dims == ["Comp-APC-A"] and 0 < s.count("Cells/Foxp3+") < s.count("Cells")
+    assert g.add_rectangle(0.6, 0, 1.0, 0, "Foxp3+").name == "Foxp3+ 2"   # names stay apart
+
+    # every sample has them, the Samples tab can now ask for them, and they are on disk
+    assert all(e.edited and e.gates.find("Cells/CD4") for e in w.session.usable())
+    assert "Cells/CD4" in w.session.populations()
+    assert w.samples.population.findData("Cells/CD4") >= 0
+    assert os.path.exists(os.path.join(folder, GATES_FILE))
+
+    # dragging an outline moves the gate: the count follows
+    g.select("Cells")
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    before = s.count("Cells/CD4")
+    child, roi, label = next(o for o in g._overlays if o[0].name == "CD4")
+    roi.setPos(roi.pos().x() + 0.3, roi.pos().y())
+    g._gate_moved(child, roi)
+    assert g.sample.count("Cells/CD4") < before and label.toPlainText().startswith("CD4")
+
+    # renaming and deleting, with what is gated inside
+    g.select("Cells/Foxp3+ 2")
+    g.delete_selected()
+    assert g.node.path == "Cells" and "Cells/Foxp3+ 2" not in w.session.populations()
+    g.select("Cells/CD4")
+    g.rename("T helper")
+    assert "Cells/T helper" in w.session.populations()
+
+    # only this sample, when asked
+    g.everyone.setChecked(False)
+    g.select("Cells")
+    g.add_rectangle(0.0, 0.0, 0.2, 0.2, "Just here")
+    assert "Cells/Just here" not in w.session.populations()   # not common to all
+    g.everyone.setChecked(True)
+    w.close()
+
+    # opened again, the gates are the ones that were drawn
+    from milc.session import Session
+    again = Session()
+    again.open_folder(folder)
+    assert again.populations() == ["Cells", "Cells/T helper", "Cells/Foxp3+"]
+    again.population = "Cells/T helper"
+    first = again.usable()[0]
+    assert again.count(first) == again.load(first).count("Cells/T helper")
+    assert again.load(first).count("Cells") > 0 and first.edited
+    again.discard_gates()
+    assert again.populations() == [] and not os.path.exists(os.path.join(folder, GATES_FILE))
+
+
+def test_ramp_and_appearance(app, folder):
+    from milc import figures
+    from milc.ui import palette, style
+    from milc.ui.shell import MainShell
+    w = MainShell()
+    w.clusters.ramp.set_choice("magma")
+    w.clusters.ramp._publish()
+    assert palette.ramp_name() == "magma" and w.explore.ramp.name() == "magma"
+    assert palette.ramp(2)[0].tolist() == figures.lookup_table("magma", steps=2)[0].tolist()
+    w.explore.ramp.choose_custom(["#000000", "#ff0000"])
+    assert palette.ramp_name() == "custom" and palette.ramp(2)[-1].tolist() == [255, 0, 0, 255]
+    assert w.clusters.ramp.name() == "custom"
+    # a figure starts from what is on the screen
+    from milc.ui.figure_dialog import FigureDialog
+    d = FigureDialog(figures.HeatmapContent(
+        __import__("milc.cluster_stats", fromlist=["Table"]).Table(
+            ["1", "2"], ["a", "b"], np.array([[0.0, 1], [2, 3]]))), w)
+    assert d.style.colormap == "custom" and d.style.colormap_colors == ["#000000", "#ff0000"]
+    assert figures.preview_png(d.content, d.style, dpi=30)[:4] == b"\x89PNG"
+    d.close()
+    w.set_appearance("dark")
+    assert style.is_dark() and w._appearance["dark"].isChecked()
+    w.set_appearance("light")
+    assert not style.is_dark()
+    w.set_appearance("")
+    palette.set_ramp("viridis")
     w.close()

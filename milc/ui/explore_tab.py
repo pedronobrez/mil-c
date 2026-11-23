@@ -11,7 +11,8 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from ..session import Session
 from ..transforms import Biex, decade_ticks
-from . import style, worker
+from . import palette, style, worker
+from .ramp_picker import RampPicker
 from .scatter import Categories, MapView, Values, categories_of
 
 
@@ -139,6 +140,8 @@ class ExploreTab(QtWidgets.QWidget):
         right_form.addRow(self._eyebrow("Colour"))
         right_form.addRow("Colour by", self.color_by)
         right_form.addRow("Split by", self.split_by)
+        self.ramp = RampPicker()
+        right_form.addRow("Ramp", self.ramp)
         right_form.addRow("Point size", self.size)
         right_form.addRow("Opacity", self.alpha)
         right = QtWidgets.QVBoxLayout()
@@ -166,6 +169,7 @@ class ExploreTab(QtWidgets.QWidget):
             combo.currentIndexChanged.connect(self._draw)
         self.size.valueChanged.connect(lambda v: self.view.set_point_size(v))
         self.figure_button.clicked.connect(self.make_figure)
+        palette.notifier.changed.connect(self._draw)
         self.alpha.valueChanged.connect(lambda v: self.view.set_opacity(v / 100))
         self.dataset_changed()
 

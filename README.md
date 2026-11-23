@@ -40,6 +40,14 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   a ceiling per sample; and a minimum below which a sample is left out rather than allowed to
   drag every other down.
 
+**Gates** — open one sample and look at it.
+- Any two parameters as a pseudocolour plot, or one as a histogram; markers on FlowJo's
+  biexponential scale.
+- The gating tree with events and percent of parent; choose a population to see it.
+- Draw a rectangle, a polygon or a range; drag its handles to move it; rename; delete.
+- A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
+- What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
+
 **Explore** — UMAP, tSNE and FlowSOM, run in the background with FlowJo's defaults.
 - Any two axes: an embedding, or two markers on a biexponential scale ticked in decades.
 - Colour by group, day, animal, sample, cluster, or the expression of a marker.
@@ -49,6 +57,7 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - The map, the heatmap of expression, the FlowSOM tree and the frequency of each cluster by group
   (mean, standard deviation and every sample as a dot).
 - Click a cluster in any of the four and it is marked in the other three.
+- The colour ramp is yours to choose: a named one, or two or three colours of your own.
 - Shift+drag on the map outlines any set of events and reports the same numbers for it.
 
 **Figure…** — on every plot.
@@ -60,8 +69,9 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 
 ## What it does not do
 
-- **It does not replace gating in FlowJo.** Gates are imported, not drawn. Rectangles and
-  polygons are read; ellipses, quadrants and boolean gates are not yet.
+- **Gating is the basics.** Rectangles, polygons and ranges, drawn here or read from a FlowJo
+  workspace. No ellipses, quadrants or boolean gates, no compensation editor, no overlays of
+  several samples on one plot.
 - **No statistics between groups.** Means and standard deviations, no test.
 - **One figure at a time.** No multi-panel plates.
 - **Its maps are not FlowJo's maps point for point.** See below.

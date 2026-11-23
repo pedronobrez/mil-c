@@ -8,6 +8,7 @@ it never imports Qt.
 from __future__ import annotations
 
 import glob
+import json
 import os
 from collections import Counter
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ import numpy as np
 from . import cluster_stats, sampling
 from .dataset import Dataset, concatenate
 from .fcs import read_header
+from .gating import GateNode, copy_tree, tree_from_dict, tree_to_dict
 from .sample import Sample, annotate
 from .transforms import Arcsinh, Biex
 from .wsp import Workspace, WspSample, read_wsp
@@ -26,6 +28,9 @@ DEFAULT_PATTERN = r"(?P<day>\d+)(?P<group>[A-Za-z]+)(?P<animal>\d+)(?P<rerun>`)?
 
 #: every event of the file, no gate
 ALL_EVENTS = ""
+
+#: where gates drawn here are kept: beside the files they gate
+GATES_FILE = "MIL-C gates.json"
 
 
 @dataclass
@@ -38,9 +43,14 @@ class Entry:
     meta: dict[str, str] = field(default_factory=dict)
     include: bool = True
     wsp: WspSample | None = None
-    #: the workspace does not list this file; it is given the gates and
+    #: this file's own gating tree, to look at and to edit: a copy of the
+    #: workspace's, of the group's, of what was saved — or empty
+    gates: GateNode = field(default_factory=lambda: GateNode(""))
+    #: the workspace does not list this file; it was given the gates and
     #: the matrix all the listed ones share
     borrowed: bool = False
+    #: the gates are the user's own, saved beside the files
+    edited: bool = False
     #: set when the file cannot go in with the others, and why
     problem: str = ""
     sample: Sample | None = field(default=None, repr=False)
@@ -51,7 +61,7 @@ class Entry:
 
     @property
     def gated(self) -> bool:
-        return self.borrowed or (self.wsp is not None and bool(self.wsp.gates.children))
+        return bool(self.gates.children)
 
 
 class Session:
@@ -101,10 +111,8 @@ class Session:
                 if e.channels and tuple(e.channels) != common:
                     e.problem, e.include = "different channels from the others", False
         self.annotate()
-        self.workspace = None
         found = sorted(glob.glob(os.path.join(folder, "*.wsp")))
-        if found:
-            self.set_workspace(found[0])
+        self.set_workspace(found[0] if found else None)
 
     def set_workspace(self, path: str | None) -> None:
         self.workspace = read_wsp(path) if path else None
@@ -120,11 +128,22 @@ class Session:
         self.population = paths[-1] if paths else ALL_EVENTS
 
     def _borrow(self) -> None:
+        """Every file its own gating tree: what was saved beside the files
+        if anything was, else the workspace's, else the group's, else none."""
+        saved = self._read_saved()
         for e in self.entries:
-            e.borrowed = bool(self.extend_gates and self._shared is not None
-                              and e.wsp is None and not e.problem)
-            if e.wsp is None:
-                e.sample = None
+            e.sample = None
+            e.borrowed = e.edited = False
+            if e.problem:
+                e.gates = GateNode(e.name)
+            elif os.path.basename(e.path) in saved:
+                e.gates, e.edited = saved[os.path.basename(e.path)], True
+            elif e.wsp is not None and e.wsp.gates.children:
+                e.gates = copy_tree(e.wsp.gates)
+            elif self.extend_gates and self._shared is not None and e.wsp is None:
+                e.gates, e.borrowed = copy_tree(self._shared[0], keep_counts=False), True
+            else:
+                e.gates = GateNode(e.name)
         self._counts.clear()
 
     def can_extend(self) -> bool:
@@ -134,14 +153,74 @@ class Session:
     def set_extend_gates(self, on: bool) -> None:
         self.extend_gates = bool(on)
         self._borrow()
+        self._keep_population()
+
+    def _keep_population(self) -> None:
         paths = self.populations()
-        if self.population not in paths:
+        if self.population != ALL_EVENTS and self.population not in paths:
             self.population = paths[-1] if paths else ALL_EVENTS
 
-    def gates_of(self, e: Entry):
-        if e.borrowed:
-            return self._shared[0]
-        return e.wsp.gates if e.wsp is not None else None
+    def gates_of(self, e: Entry) -> GateNode:
+        return e.gates
+
+    def matrix_of(self, e: Entry):
+        """The compensation this file is given: the workspace's for it,
+        the one the workspace's samples share where it lists none, and
+        otherwise None — the file's own."""
+        if e.wsp is not None and e.wsp.compensation is not None:
+            return e.wsp.compensation
+        if self._shared is not None and self.extend_gates:
+            return self._shared[1]
+        return None
+
+    # --- gates of the user's own ---------------------------------------------
+
+    def gates_file(self) -> str:
+        return os.path.join(self.folder, GATES_FILE)
+
+    def _read_saved(self) -> dict[str, GateNode]:
+        try:
+            with open(self.gates_file(), encoding="utf-8") as f:
+                data = json.load(f)
+            return {name: tree_from_dict(tree)
+                    for name, tree in data.get("samples", {}).items()}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
+
+    def gates_changed(self, e: Entry, everyone: bool = True) -> None:
+        """`e`'s tree was edited. With `everyone`, the other files get a
+        copy — FlowJo's group, where one gate is every sample's gate.
+        Counts are forgotten and the trees saved beside the files."""
+        changed = [e]
+        if everyone:
+            for other in self.usable():
+                if other is not e:
+                    other.gates = copy_tree(e.gates, keep_counts=False)
+                    changed.append(other)
+        for node in e.gates.walk():
+            node.reference_count = None   # no longer what another program counted
+        for c in changed:
+            c.edited, c.borrowed = True, False
+            if c.sample is not None:
+                c.sample.gates, c.sample._masks = c.gates, None
+        self._counts.clear()
+        self._keep_population()
+        self.save_gates()
+
+    def save_gates(self) -> None:
+        trees = {os.path.basename(e.path): tree_to_dict(e.gates)
+                 for e in self.usable() if e.edited}
+        with open(self.gates_file(), "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "samples": trees}, f, indent=1)
+
+    def discard_gates(self) -> None:
+        """Back to the workspace's gates: the saved ones are deleted."""
+        try:
+            os.remove(self.gates_file())
+        except OSError:
+            pass
+        self._borrow()
+        self._keep_population()
 
     def annotate(self, pattern: str | None = None) -> None:
         if pattern is not None:
@@ -180,7 +259,7 @@ class Session:
         gated = [e for e in self.usable() if e.gated]
         if not gated:
             return []
-        sets = [[n.path for n in self.gates_of(e).walk() if n.gate is not None]
+        sets = [[n.path for n in e.gates.walk() if n.gate is not None]
                 for e in gated]
         return [p for p in sets[0] if all(p in s for s in sets[1:])]
 
@@ -195,14 +274,9 @@ class Session:
 
     def load(self, e: Entry) -> Sample:
         if e.sample is None:
-            if e.borrowed:
-                gates, matrix = self._shared
-                e.sample = Sample.open(e.path, compensation=matrix, gates=gates)
-            elif e.wsp is not None and e.wsp.compensation is not None:
-                e.sample = Sample.open(e.path, compensation=e.wsp.compensation,
-                                       gates=e.wsp.gates, transforms=e.wsp.transforms)
-            else:
-                e.sample = Sample.open(e.path)
+            matrix = self.matrix_of(e)
+            e.sample = (Sample.open(e.path, compensation=matrix, gates=e.gates)
+                        if matrix is not None else Sample.open(e.path, gates=e.gates))
             e.sample.meta = dict(e.meta)
         return e.sample
 

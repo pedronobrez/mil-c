@@ -129,8 +129,12 @@ class FrequencyView(_Clickable):
             return
         names = cluster_stats.ordered(groups)
         colors = palette.categorical(len(names))
-        legend = self.plotItem.addLegend(offset=(-8, 8), labelTextColor=theme.foreground(),
-                                         brush=theme.legend_brush(), pen=theme.legend_pen())
+        legend = self.plotItem.addLegend(offset=(-8, 8))
+        # the legend outlives a redraw, and a change of theme with it: it is
+        # given its colours every time, or it keeps the first ones it had
+        legend.setBrush(theme.legend_brush())
+        legend.setPen(theme.legend_pen())
+        legend.setLabelTextColor(theme.foreground())
         n_clusters = len(freq.rows)
         width = 0.8 / max(len(names), 1)
         if selected is not None and str(selected) in freq.rows:

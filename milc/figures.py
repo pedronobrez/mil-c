@@ -26,7 +26,32 @@ CATEGORICAL = ["#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377",
                "#EE7733", "#009988", "#882255", "#999933", "#332288", "#BBBBBB"]
 
 COLORMAPS = ["viridis", "magma", "inferno", "plasma", "cividis", "turbo",
-             "Blues", "Reds", "Greys", "coolwarm", "RdBu_r"]
+             "Blues", "Purples", "Greens", "Reds", "Greys", "YlOrRd", "YlGnBu",
+             "coolwarm", "RdBu_r", "PiYG"]
+
+#: a ramp made of the user's own colours, low to high
+CUSTOM = "custom"
+DEFAULT_CUSTOM = ["#f7f7fb", "#8f7fd6", "#2a1a6e"]
+
+
+def colormap(name: str = "viridis", colors: list[str] | None = None):
+    """A matplotlib colour map: one of `COLORMAPS`, or `CUSTOM` running
+    through `colors` (two or more, low to high). An unknown name is
+    viridis, not an error: a preset may outlive the list."""
+    from matplotlib import colormaps
+    from matplotlib.colors import LinearSegmentedColormap
+    if name == CUSTOM:
+        colors = [c for c in (colors or []) if c] or DEFAULT_CUSTOM
+        if len(colors) == 1:
+            colors = ["#ffffff", colors[0]]
+        return LinearSegmentedColormap.from_list("custom", colors)
+    return colormaps[name] if name in colormaps else colormaps["viridis"]
+
+
+def lookup_table(name: str = "viridis", colors: list[str] | None = None,
+                 steps: int = 256) -> np.ndarray:
+    """steps x 4, 0-255: the ramp for anything that is not matplotlib."""
+    return (colormap(name, colors)(np.linspace(0.0, 1.0, steps)) * 255).astype(np.uint8)
 
 FORMATS = {"svg": "SVG, vector (*.svg)", "pdf": "PDF, vector (*.pdf)",
            "png": "PNG (*.png)", "tiff": "TIFF (*.tiff)"}
@@ -175,6 +200,8 @@ class FigureStyle:
     #: category name → what to print instead
     labels: dict[str, str] = field(default_factory=dict)
     colormap: str = "viridis"
+    #: the colours of the ramp when `colormap` is "custom", low to high
+    colormap_colors: list[str] = field(default_factory=list)
     #: numbers in the heatmap's cells
     annotate: bool = True
     transparent: bool = False
@@ -279,7 +306,6 @@ def _dot(color: str, label: str):
 
 
 def _draw_map(fig, c: MapContent, style: FigureStyle) -> None:
-    from matplotlib import colormaps
     from matplotlib.colors import Normalize, to_rgba
 
     n = c.x.size
@@ -302,7 +328,7 @@ def _draw_map(fig, c: MapContent, style: FigureStyle) -> None:
     elif isinstance(c.color, Values):
         lo, hi = c.color.limits()
         norm = Normalize(lo, hi, clip=True)
-        cmap = colormaps[style.colormap]
+        cmap = colormap(style.colormap, style.colormap_colors)
         rgba = cmap(norm(np.nan_to_num(c.color.values, nan=lo)))
         rgba[:, 3] = style.opacity
         from matplotlib.cm import ScalarMappable
@@ -355,11 +381,10 @@ def _draw_map(fig, c: MapContent, style: FigureStyle) -> None:
 
 
 def _draw_heatmap(fig, c: HeatmapContent, style: FigureStyle) -> None:
-    from matplotlib import colormaps
     t = c.table
     shade = cluster_stats.scaled(t, c.per_column)
     ax = fig.subplots()
-    cmap = colormaps[style.colormap]
+    cmap = colormap(style.colormap, style.colormap_colors)
     im = ax.imshow(shade, cmap=cmap, vmin=0, vmax=1, aspect="auto")
     ax.set_xticks(range(len(t.columns)),
                   [style.label(n.split()[0] if n else n) for n in t.columns],
@@ -427,7 +452,6 @@ def _draw_frequencies(fig, c: FrequencyContent, style: FigureStyle) -> None:
 
 
 def _draw_tree(fig, c: TreeContent, style: FigureStyle) -> None:
-    from matplotlib import colormaps
     from matplotlib.cm import ScalarMappable
     from matplotlib.collections import LineCollection
     from matplotlib.colors import Normalize
@@ -442,10 +466,11 @@ def _draw_tree(fig, c: TreeContent, style: FigureStyle) -> None:
     if c.color_by in t["markers"]:
         m = t["medians"][used, t["markers"].index(c.color_by)]
         norm = Normalize(np.nanmin(m), np.nanmax(m))
-        ax.scatter(pos[used, 0], pos[used, 1], s=area, c=m, cmap=style.colormap,
+        cmap = colormap(style.colormap, style.colormap_colors)
+        ax.scatter(pos[used, 0], pos[used, 1], s=area, c=m, cmap=cmap,
                    norm=norm, edgecolors="white", linewidths=0.4, zorder=2)
         if style.legend != "none":
-            bar = fig.colorbar(ScalarMappable(norm, colormaps[style.colormap]), ax=ax,
+            bar = fig.colorbar(ScalarMappable(norm, cmap), ax=ax,
                                shrink=0.6, aspect=22, pad=0.02,
                                location="bottom" if style.legend == "bottom" else "right")
             bar.set_label(style.legend_title if style.legend_title is not None

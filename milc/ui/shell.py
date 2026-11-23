@@ -14,10 +14,12 @@ from ..session import Session
 from . import style, theme
 from .clusters_tab import ClustersTab
 from .explore_tab import ExploreTab
+from .gates_tab import GatesTab
 from .samples_tab import SamplesTab
 from .settings import settings
 
 SETTING_FOLDER = "files/last_folder"
+SETTING_APPEARANCE = "view/appearance"
 
 
 class MainShell(QtWidgets.QMainWindow):
@@ -31,7 +33,9 @@ class MainShell(QtWidgets.QMainWindow):
         self.explore = ExploreTab(self.session)
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.gates = GatesTab(self.session)
         self.tabs.addTab(self.samples, "Samples")
+        self.tabs.addTab(self.gates, "Gates")
         self.clusters = ClustersTab(self.session)
         self.tabs.addTab(self.explore, "Explore")
         self.tabs.addTab(self.clusters, "Clusters")
@@ -41,6 +45,9 @@ class MainShell(QtWidgets.QMainWindow):
         self.samples.open_button.clicked.connect(self.choose_folder)
         self.samples.wsp_button.clicked.connect(self.choose_workspace)
         self.samples.sigStatus.connect(self.status)
+        self.gates.sigStatus.connect(self.status)
+        self.gates.sigGatesChanged.connect(self.samples.refresh)
+        self.samples.sigGatesChanged.connect(self.gates.refresh)
         self.explore.sigStatus.connect(self.status)
         self.explore.sigResults.connect(self.clusters.refresh)
         self.clusters.sigStatus.connect(self.status)
@@ -55,6 +62,19 @@ class MainShell(QtWidgets.QMainWindow):
                      QtGui.QKeySequence.StandardKey.Save)
         self._action(menu, "Export tables…", self.export_tables)
 
+        view = self.menuBar().addMenu("&View")
+        looks = view.addMenu("Appearance")
+        group = QtGui.QActionGroup(self)
+        chosen = settings().value(SETTING_APPEARANCE, "") or ""
+        self._appearance = {}
+        for key, text in (("", "As the system"), ("light", "Light"), ("dark", "Dark")):
+            action = looks.addAction(text)
+            action.setCheckable(True)
+            action.setChecked(key == chosen)
+            action.triggered.connect(lambda _=False, k=key: self.set_appearance(k))
+            group.addAction(action)
+            self._appearance[key] = action
+
         screen = QtWidgets.QApplication.primaryScreen()
         room = screen.availableGeometry() if screen else QtCore.QRect(0, 0, 1280, 800)
         self.resize(min(self.WANTED_SIZE[0], room.width() - 40),
@@ -63,6 +83,8 @@ class MainShell(QtWidgets.QMainWindow):
         app = QtWidgets.QApplication.instance()
         self._watcher = style.ThemeWatcher(app, self)
         self._watcher.sigThemeChanged.connect(self._retheme)
+        if chosen:
+            self.set_appearance(chosen)
 
     def _action(self, menu, text, slot, shortcut=None):
         action = menu.addAction(text)
@@ -74,10 +96,20 @@ class MainShell(QtWidgets.QMainWindow):
     def status(self, text: str) -> None:
         self.statusBar().showMessage(text)
 
+    def set_appearance(self, scheme: str) -> None:
+        """Light, dark, or "" for whatever the system is in."""
+        style.set_appearance(scheme or None)
+        settings().setValue(SETTING_APPEARANCE, scheme)
+        self._appearance[scheme if scheme in self._appearance else ""].setChecked(True)
+        style.apply(QtWidgets.QApplication.instance())
+        if hasattr(self, "_watcher"):
+            self._retheme()
+
     def _retheme(self) -> None:
         theme.apply_defaults()
         self.explore.view.retheme()
         self.clusters.map.setBackground(theme.background())
+        self.gates._draw()
         self.clusters.refresh()
         self.samples.refresh()
 
@@ -87,6 +119,7 @@ class MainShell(QtWidgets.QMainWindow):
         self.session.open_folder(folder)
         settings().setValue(SETTING_FOLDER, folder)
         self.samples.refresh()
+        self.gates.refresh()
         self.explore.dataset_changed()
         self.clusters.refresh()
         self.tabs.setCurrentWidget(self.samples)
@@ -113,6 +146,7 @@ class MainShell(QtWidgets.QMainWindow):
                 self.status(f"{os.path.basename(path)}: {exc}")
                 return
             self.samples.refresh()
+            self.gates.refresh()
 
     def open_dataset(self, path: str) -> None:
         self.session.dataset = (Dataset.load(path) if path.endswith(".npz")

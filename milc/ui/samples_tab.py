@@ -29,6 +29,8 @@ class SamplesTab(QtWidgets.QWidget):
     #: a dataset was built
     sigConcatenated = QtCore.pyqtSignal()
     sigStatus = QtCore.pyqtSignal(str)
+    #: the workspace's gates were extended to the other files, or taken back
+    sigGatesChanged = QtCore.pyqtSignal()
 
     def __init__(self, session: Session, parent=None):
         super().__init__(parent)
@@ -243,10 +245,13 @@ class SamplesTab(QtWidgets.QWidget):
                 note = "sets the limit"
             elif e.borrowed and s.population != ALL_EVENTS:
                 note = "gates from the group"
+            elif e.edited and s.population != ALL_EVENTS:
+                note = "your gates"
             else:
                 note = ""
             item = QtWidgets.QTableWidgetItem(note)
-            quiet = note in ("", "counting…", "gates from the group", "sets the limit")
+            quiet = note in ("", "counting…", "gates from the group", "your gates",
+                             "sets the limit")
             item.setForeground(QtGui.QBrush(QtGui.QColor(style.token(
                 "ink_muted" if quiet else "warning"))))
             self.table.setItem(r, c_note, item)
@@ -299,6 +304,7 @@ class SamplesTab(QtWidgets.QWidget):
             return
         self.session.set_extend_gates(on)
         self.refresh()
+        self.sigGatesChanged.emit()
 
     def _pattern_changed(self) -> None:
         text = self.pattern.text()

@@ -83,6 +83,14 @@ class forced_scheme:
         return False
 
 
+def set_appearance(scheme: str | None) -> None:
+    """`light`, `dark`, or None to follow the system. Unlike
+    `forced_scheme` this stays: it is the person's choice of how the
+    window looks, where that is the look of one export."""
+    global _FORCED
+    _FORCED = scheme if scheme in ("light", "dark") else None
+
+
 def is_dark() -> bool:
     """
     Is the system asking for a dark interface?

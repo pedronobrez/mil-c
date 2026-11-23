@@ -113,13 +113,14 @@ def read_wsp(path: str) -> Workspace:
         keywords = {k.get("name"): k.get("value", "") for k in kw_el} if kw_el is not None else {}
         tree = GateNode(name=node.get("name", ""),
                         reference_count=_int(node.get("count")))
-        _read_populations(node, tree)
+        transforms = _read_transforms(_child(s, "Transformations"))
+        _read_populations(node, tree, transforms)
         samples.append(WspSample(
             name=node.get("name", ""),
             uri=dataset.get("uri", ""),
             sample_id=dataset.get("sampleID", ""),
             compensation=_read_matrix(_child(s, "spilloverMatrix")),
-            transforms=_read_transforms(_child(s, "Transformations")),
+            transforms=transforms,
             gates=tree,
             keywords=keywords,
         ))
@@ -145,7 +146,8 @@ def signature(tree: GateNode) -> list:
         g = node.gate
         if g is None:
             continue
-        shape = (np.asarray(g.vertices).round(6).tolist() if isinstance(g, PolygonGate)
+        shape = ([np.asarray(g.vertices).round(6).tolist(),
+                  [repr(s) for s in (g.scales or [])]] if isinstance(g, PolygonGate)
                  else [g.mins, g.maxs])
         out.append((node.path, type(g).__name__, list(g.dims), g.inside, shape))
     return out
@@ -198,7 +200,7 @@ def _read_transforms(el) -> dict[str, object]:
     return out
 
 
-def _read_gate(el):
+def _read_gate(el, transforms=None):
     shape = next(iter(el), None)
     if shape is None:
         return None
@@ -216,17 +218,22 @@ def _read_gate(el):
     if kind == "PolygonGate":
         verts = [[float(_attrs(c)["value"]) for c in _children(v, "coordinate")]
                  for v in _children(shape, "vertex")]
-        return PolygonGate(dims, np.array(verts), inside)
+        # FlowJo stores the vertices in the file's units and tests the
+        # events where the polygon was drawn: on the axis' own scale
+        scales = [t if isinstance(t, Biex) else None
+                  for t in ((transforms or {}).get(d) for d in dims)]
+        return PolygonGate(dims, np.array(verts), inside,
+                           scales if any(s is not None for s in scales) else None)
     return None  # ellipses, curly quadrants, booleans: not met yet
 
 
-def _read_populations(el, parent: GateNode) -> None:
+def _read_populations(el, parent: GateNode, transforms=None) -> None:
     for sub in _children(el, "Subpopulations"):
         for p in _children(sub, "Population"):
             gate_el = _child(p, "Gate")
-            gate = _read_gate(gate_el) if gate_el is not None else None
+            gate = _read_gate(gate_el, transforms) if gate_el is not None else None
             if gate is None:
                 continue
             node = parent.add(GateNode(name=p.get("name", "").strip(), gate=gate,
                                        reference_count=_int(p.get("count"))))
-            _read_populations(p, node)
+            _read_populations(p, node, transforms)

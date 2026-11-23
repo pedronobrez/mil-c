@@ -10,8 +10,7 @@ def main(folder: str | None = None, quit_after: float | None = None) -> int:
     how a build is asked whether it starts at all."""
     from PyQt6 import QtWidgets
 
-    from .ui import style
-    from .ui.theme import apply_defaults
+    from .ui import prepare
 
     app = QtWidgets.QApplication(sys.argv[:1])
     app.setApplicationName("MIL-C")
@@ -22,8 +21,7 @@ def main(folder: str | None = None, quit_after: float | None = None) -> int:
     icon = Path(__file__).with_name("icon.png")
     if icon.is_file():
         app.setWindowIcon(QtGui.QIcon(str(icon)))
-    style.apply(app)
-    apply_defaults()
+    prepare(app)
 
     from .ui.shell import MainShell
 
