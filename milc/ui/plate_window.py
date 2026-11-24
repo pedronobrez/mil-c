@@ -21,6 +21,7 @@ from dataclasses import replace
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import figures, plate, plate_store
 from . import style as ui_style
 from .figure_dialog import SETTING_FOLDER
@@ -36,6 +37,7 @@ WIDTHS = [("Custom", None), ("Single column, 85 mm", 85), ("1.5 columns, 120 mm"
 class PlateWindow(QtWidgets.QDialog):
     def __init__(self, session, parent=None):
         super().__init__(parent)
+        describe(self, "the-plate")
         self.setWindowTitle("Plate")
         self.session = session
         self._filling = False

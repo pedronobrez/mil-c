@@ -33,7 +33,10 @@ ICON = (str(ICONS / "MIL-C.ico") if WINDOWS else
 VERSION = re.search(r'__version__ = "([^"]+)"',
                     (ROOT / "milc" / "__init__.py").read_text()).group(1)
 
+# the whole tree goes, so the translations (help/pages/pt) travel with the
+# English pages
 datas = [(str(ROOT / "milc" / "icon.png"), "milc"),
+         (str(ROOT / "milc" / "help" / "pages"), "milc/help/pages"),
          (str(ROOT / "LICENSE"), ".")]
 
 hidden = [

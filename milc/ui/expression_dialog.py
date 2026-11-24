@@ -13,6 +13,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import compare, expression, figures
 from ..expression_figures import (DIVERGING, UNTESTED, DifferenceHeatmap, ExpressionVolcano,
                                   short, stars)
@@ -152,6 +153,7 @@ class ExpressionDialog(QtWidgets.QDialog):
                  facets: list[str] | None = None, facet_name: str = "",
                  chosen: list[str] | None = None, reload=None, parent=None):
         super().__init__(parent)
+        describe(self, "differential-expression")
         self.setWindowTitle("Differential expression")
         self.medians, self.groups, self.columns = medians, list(groups), dict(columns or {})
         self.facets, self.facet_name, self._reload = facets, facet_name, reload

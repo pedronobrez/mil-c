@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from PyQt6 import QtCore, QtWidgets
 
+from .help_window import describe
 from .. import clusters
 from . import palette
 from .scatter import Categories
@@ -225,6 +226,7 @@ class MergeDialog(QtWidgets.QDialog):
 
     def __init__(self, now: clusters.Clustering, selected: int, parent=None):
         super().__init__(parent)
+        describe(self, "clusters-tab")
         self.setWindowTitle("Merge clusters")
         head = QtWidgets.QLabel(f"Merge cluster {now.name(selected)} with:")
         self.list = QtWidgets.QListWidget()
@@ -253,6 +255,7 @@ class NamesDialog(QtWidgets.QDialog):
 
     def __init__(self, now: clusters.Clustering, found: dict[int, str], parent=None):
         super().__init__(parent)
+        describe(self, "clusters-tab")
         self.setWindowTitle("Suggested names")
         head = QtWidgets.QLabel(
             "For each marker the clusters are cut in two at the widest gap between "

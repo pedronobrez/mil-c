@@ -2,7 +2,7 @@
 How many events each sample contributes to the concatenated file, decided
 before anything is drawn.
 
-An treated sample usually carries several times the cells of its control, and
+A treated sample usually carries several times the cells of its control, and
 an embedding built on everything is an embedding of the treated group.
 The plan says what each sample gives, which sample set the limit, and what
 was left out — so the cost of balancing is read before it is paid.

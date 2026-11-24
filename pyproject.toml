@@ -30,7 +30,7 @@ version = { attr = "milc.__version__" }
 include = ["milc*"]
 
 [tool.setuptools.package-data]
-milc = ["icon.png"]
+milc = ["help/pages/*.md", "help/pages/*/*.md", "icon.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

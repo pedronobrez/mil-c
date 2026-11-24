@@ -9,6 +9,7 @@ import os
 
 from PyQt6 import QtWidgets
 
+from .help_window import describe
 from ..gate_export import FORMATS, GATINGML, WSP, Report
 
 _EXTENSION = {WSP: ".wsp", GATINGML: ".xml"}
@@ -25,6 +26,7 @@ _ABOUT = {
 class GatesExportDialog(QtWidgets.QDialog):
     def __init__(self, folder: str, gated: int, ticked: int, parent=None):
         super().__init__(parent)
+        describe(self, "workspaces-and-gating-ml")
         self.setWindowTitle("Export gates")
         self.format = QtWidgets.QComboBox()
         for key, name in FORMATS.items():
@@ -82,6 +84,7 @@ class GatesReportDialog(QtWidgets.QDialog):
 
     def __init__(self, report: Report, parent=None):
         super().__init__(parent)
+        describe(self, "workspaces-and-gating-ml")
         self.setWindowTitle("Gates exported")
         self.summary = QtWidgets.QLabel(report.summary())
         self.summary.setWordWrap(True)

@@ -11,6 +11,7 @@ import re
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import order, sampling
 from ..session import ALL_EVENTS, Session, suggest_pattern
 from . import style, worker
@@ -774,6 +775,7 @@ class PatternDialog(QtWidgets.QDialog):
 
     def __init__(self, session: Session, parent=None):
         super().__init__(parent)
+        describe(self, "samples-tab")
         self.setWindowTitle("Fill columns from the file names")
         self.session = session
         names = [e.name for e in session.usable()]

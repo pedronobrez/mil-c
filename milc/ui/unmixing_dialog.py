@@ -20,6 +20,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import unmixing as um
 from . import palette, style, theme, worker
 
@@ -75,6 +76,7 @@ def apply_to_tab(tab, unmixing) -> None:
 class UnmixingDialog(QtWidgets.QDialog):
     def __init__(self, session, on_apply, parent=None):
         super().__init__(parent)
+        describe(self, "spectral-unmixing")
         self.setWindowTitle("Spectral unmixing")
         self.session, self.on_apply = session, on_apply
         #: what Compute or Read CSV gave, not yet applied

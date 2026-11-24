@@ -16,6 +16,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import qc, qc_plots
 from ..gating import time_node
 from . import theme, worker
@@ -39,6 +40,7 @@ def limits_text(settings: dict) -> str:
 class QualityDialog(QtWidgets.QDialog):
     def __init__(self, tab, parent=None):
         super().__init__(parent)
+        describe(self, "quality-control")
         self.tab, self.session, self.entry = tab, tab.session, tab.entry
         self.setWindowTitle(f"Quality of the acquisition: {self.entry.name}")
         self._controls()

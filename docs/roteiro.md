@@ -282,12 +282,13 @@ nada disso foi usado neles.
 
 ### A conferir, antes de qualquer item novo
 
+Conferido à mão em 24 de novembro, antes da 1.0, e tudo funcionou: o workspace escrito pelo
+MIL-C aberto no FlowJo; o `.pzfx` aberto no Prism; o `.msi` instalado num Windows de verdade; o
+instalador de Linux numa máquina com tela; a janela usada com mouse e teclado (gates, laço,
+seleção múltipla, diálogos).
+
 Coisas feitas que ainda dependem de um olhar de fora:
 
-- **Abrir um `.pzfx` no Prism.** É o único jeito de saber se o Prism aceita o arquivo.
-- **Instalar o `.msi` num Windows de verdade.** O executável foi testado; o instalador, não.
-- **Usar a janela com mouse e teclado.** Desenho de gates, laço, seleção múltipla e os diálogos
-  foram testados por código e por capturas, não à mão.
 - **Uma estatística lado a lado com o FlowJo.** As definições são as dele; os números não foram
   comparados.
 - **Um workspace com elipse, quadrante ou booleano.** As regras de leitura vieram do FlowKit e
@@ -316,8 +317,6 @@ Coisas feitas que ainda dependem de um olhar de fora:
   entre os tubos daquele dia. E todos os 8 marcadores entraram no cluster, então o teste é
   circular; o ideal é testar marcadores que não definiram os clusters.
 - **Um workspace que declare escala logicle.** A leitura foi testada só num XML escrito à mão.
-- **Um workspace escrito pelo MIL-C aberto no FlowJo.** Nunca foi aberto lá. Conferir: se abre;
-  se as contagens batem; o gate de tempo (escrito em segundos); elipses; os nós And/Or/Not.
 - **A limpeza com as passadas lenta e curta, nos seus arquivos.** Agora ela tiraria 33,3% da
   `7Ctrl5` e 26,0% da `14Case1` (a curta acrescenta os primeiros 25 s, de partida), e mais de um
   décimo de `14Case3` e `` 14Case4` ``. A calibração mostra que o programa faz com esses arquivos o
@@ -447,15 +446,17 @@ Feito em 23 de novembro, das prioridades da véspera (detalhes nas seções acim
 6. ~~**Modelos**~~ — feito: população aneuploide, debris e agregados no Dean-Jett-Fox,
    conferidos com o BrdU de 223 arquivos públicos (§6).
 
-Antes da 1.0:
+Feito em 24 de novembro, a 1.0:
 
-1. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
-2. **Distribuição.** Número de versão 1.0.0 no programa, nos instaladores e no relatório;
-   notas da versão; assinatura dos instaladores (hoje o macOS e o Windows avisam na primeira
-   abertura).
-3. **Conferências que dependem de você** (lista acima, "A conferir, antes de qualquer item novo"): o
-   workspace escrito pelo MIL-C aberto no FlowJo; o `.pzfx` no Prism; o `.msi` num Windows de
-   verdade; o instalador de Linux numa máquina com tela; uso à mão com mouse.
+1. ~~**Manual embutido**~~ — feito: Help ▸ Manual e F1 (a página do lugar onde se está), 38
+   páginas em inglês e português, com busca, links nos dois sentidos e exportação em PDF, como
+   no MIL-Q.
+2. ~~**Distribuição**~~ — feito em parte: versão 1.0.0 no programa, nos instaladores e no
+   relatório (primeira página e propriedades do PDF); notas da versão em
+   `docs/release-notes/v1.0.0.md`, usadas pelo CI ao criar a release. **Os instaladores
+   continuam sem assinatura**: assinar pede uma conta paga de desenvolvedor da Apple e um
+   certificado de assinatura de código para o Windows.
+3. ~~**Conferências que dependem de você**~~ — feitas (acima).
 
 Depois da 1.0:
 

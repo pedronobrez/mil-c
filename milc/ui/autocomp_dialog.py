@@ -14,6 +14,7 @@ import os
 import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import autocomp
 from . import theme, worker
 
@@ -35,6 +36,7 @@ class ControlsDialog(QtWidgets.QDialog):
     def __init__(self, detectors: list[str], acquisition=None, acquisition_label: str = "",
                  start: str = "", parent=None):
         super().__init__(parent)
+        describe(self, "autocompensation")
         self.setWindowTitle("Compensation from single-stain controls")
         self.detectors = list(detectors)
         self.acquisition = acquisition

@@ -14,6 +14,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import abundance, cluster_stats, clusters, compare
 from ..volcano import COLORS, REST, VolcanoContent
 from . import style, theme
@@ -102,6 +103,7 @@ class AbundanceDialog(QtWidgets.QDialog):
                  columns: dict[str, list[str]] | None = None,
                  facets: list[str] | None = None, facet_name: str = "", parent=None):
         super().__init__(parent)
+        describe(self, "abundance")
         self.setWindowTitle("Differential abundance")
         self.counts, self.groups, self.columns = counts, list(groups), dict(columns or {})
         self.facets, self.facet_name = facets, facet_name

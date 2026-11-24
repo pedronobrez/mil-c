@@ -12,6 +12,7 @@ import os
 import numpy as np
 from PyQt6 import QtCore, QtWidgets
 
+from .help_window import describe
 from .. import compare, stats
 from ..session import Session
 from . import style, worker
@@ -433,6 +434,7 @@ class CompareDialog(QtWidgets.QDialog):
     def __init__(self, values: list[str], columns: list[str], chosen: list[str], parent=None,
                  for_prism: bool = False):
         super().__init__(parent)
+        describe(self, "statistics-tab")
         self.setWindowTitle("A table for Prism" if for_prism else "Compare groups")
         self.value = QtWidgets.QComboBox()
         for v in values:

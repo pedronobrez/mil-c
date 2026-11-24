@@ -271,8 +271,12 @@ jobs:
           # first is the one that creates the release
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             name="$GITHUB_REF_NAME"
-            gh release create "$name" --generate-notes --verify-tag \
-              --title "MIL-C $name" 2>/dev/null || true
+            # the notes written for this version, when there are some:
+            # docs/release-notes/v1.0.0.md for the tag v1.0.0
+            notes="docs/release-notes/$name.md"
+            if [ -f "$notes" ]; then said=(--notes-file "$notes"); else said=(--generate-notes); fi
+            gh release create "$name" "${said[@]}" --verify-tag \
+              --title "MIL-C ${name#v}" 2>/dev/null || true
           else
             name="build-$GITHUB_RUN_NUMBER"
             gh release create "$name" --prerelease --target "$GITHUB_SHA" \

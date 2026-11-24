@@ -4,6 +4,7 @@ legend and table."""
 from __future__ import annotations
 
 from PyQt6 import QtCore, QtWidgets
+from .help_window import describe
 
 
 class OrderDialog(QtWidgets.QDialog):
@@ -14,6 +15,7 @@ class OrderDialog(QtWidgets.QDialog):
 
     def __init__(self, session, parent=None, column: str = ""):
         super().__init__(parent)
+        describe(self, "sample-order")
         self.setWindowTitle("Order of the groups")
         self.session = session
         #: column → its values as arranged here, or None for counting order

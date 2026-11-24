@@ -12,6 +12,7 @@ from __future__ import annotations
 import pyqtgraph as pg
 from PyQt6 import QtGui, QtWidgets
 
+from .help_window import describe
 from .. import density, figures
 from ..cluster_stats import ordered
 from ..transforms import decade_ticks, display_range
@@ -21,6 +22,7 @@ from . import palette, style, theme
 class NormalizationDialog(QtWidgets.QDialog):
     def __init__(self, check: dict, parent=None):
         super().__init__(parent)
+        describe(self, "normalisation")
         self.setWindowTitle("Batch normalisation: before and after")
         self.check = check
         self.marker = QtWidgets.QComboBox()

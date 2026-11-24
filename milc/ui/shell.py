@@ -15,6 +15,7 @@ from . import style, theme
 from .clusters_tab import ClustersTab
 from .explore_tab import ExploreTab
 from .gates_tab import GatesTab
+from .help_window import describe, help_page_for
 from .samples_tab import SamplesTab
 from .settings import settings
 from .statistics_tab import StatisticsTab
@@ -42,6 +43,10 @@ class MainShell(QtWidgets.QMainWindow):
         self.clusters = ClustersTab(self.session)
         self.tabs.addTab(self.explore, "Explore")
         self.tabs.addTab(self.clusters, "Clusters")
+        for tab, page in ((self.samples, "samples-tab"), (self.gates, "gates-tab"),
+                          (self.statistics, "statistics-tab"),
+                          (self.explore, "explore-tab"), (self.clusters, "clusters-tab")):
+            describe(tab, page)
         self.stale = QtWidgets.QLabel("")
         self.stale.setProperty("role", "warning")
         self.stale.setWordWrap(True)
@@ -109,6 +114,16 @@ class MainShell(QtWidgets.QMainWindow):
         self._action(view, "Plate…", self.show_plate)
         self._plate = None
 
+        helping = self.menuBar().addMenu("&Help")
+        manual = self._action(helping, "Manual", lambda: self.show_manual(self.context_page()),
+                              QtGui.QKeySequence.StandardKey.HelpContents)
+        manual.setToolTip("The manual, on the page for where you are (F1)")
+        self._action(helping, "Export manual as PDF…", self.export_manual)
+        # the menu's shortcut answers while this window is active; a dialog
+        # is a window of its own, and F1 pressed there reaches the filter
+        QtWidgets.QApplication.instance().installEventFilter(self)
+        self._help_window = None
+
         screen = QtWidgets.QApplication.primaryScreen()
         room = screen.availableGeometry() if screen else QtCore.QRect(0, 0, 1280, 800)
         self.resize(min(self.WANTED_SIZE[0], room.width() - 40),
@@ -126,6 +141,40 @@ class MainShell(QtWidgets.QMainWindow):
         if shortcut is not None:
             action.setShortcut(shortcut)
         return action
+
+    # -- the manual -------------------------------------------------------- #
+    def context_page(self) -> str:
+        """The manual page for what has the focus, or for the tab shown."""
+        focused = QtWidgets.QApplication.focusWidget()
+        page = help_page_for(focused) if focused is not None else None
+        return page or help_page_for(self.tabs.currentWidget()) or "welcome"
+
+    def eventFilter(self, watched, event):
+        if event.type() == QtCore.QEvent.Type.KeyPress and \
+                event.matches(QtGui.QKeySequence.StandardKey.HelpContents):
+            widget = watched if isinstance(watched, QtWidgets.QWidget) else None
+            self.show_manual(help_page_for(widget) or self.context_page())
+            return True
+        return super().eventFilter(watched, event)
+
+    def show_manual(self, page: str | None = None) -> None:
+        """The manual, in its own window; one window, brought back if open."""
+        from .help_window import HelpWindow
+
+        if self._help_window is None:
+            self._help_window = HelpWindow(self)
+        if page:
+            self._help_window.show_page(page)
+        self._help_window.show()
+        self._help_window.raise_()
+        self._help_window.activateWindow()
+
+    def export_manual(self) -> None:
+        from .help_window import HelpWindow
+
+        if self._help_window is None:
+            self._help_window = HelpWindow(self)
+        self._help_window.export_pdf()
 
     def status(self, text: str) -> None:
         self.statusBar().showMessage(text)
@@ -172,6 +221,9 @@ class MainShell(QtWidgets.QMainWindow):
     # --- files -----------------------------------------------------------------
 
     def closeEvent(self, ev) -> None:
+        QtWidgets.QApplication.instance().removeEventFilter(self)
+        if self._help_window is not None:
+            self._help_window.close()
         if self._plate is not None:
             self._plate.flush()
         super().closeEvent(ev)

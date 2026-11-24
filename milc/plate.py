@@ -19,7 +19,7 @@ import copy
 import textwrap
 from dataclasses import dataclass, field, replace
 
-from . import figures
+from . import __version__, figures
 from .figures import FigureStyle
 
 #: what belongs to the page and is never a panel's own: one type and one
@@ -442,9 +442,13 @@ def report(path: str, pages: list, dataset=None, title: str = "MIL-C analysis") 
     count = 0
     # the fonts are embedded when the file is closed: the settings that keep
     # text as text must still hold then
-    with matplotlib.rc_context(figures._rc(style)), PdfPages(path) as pdf:
+    # the version that wrote it, in the file's properties and on its first page
+    made = f"MIL-C {__version__}"
+    with matplotlib.rc_context(figures._rc(style)), \
+            PdfPages(path, metadata={"Creator": made}) as pdf:
         if dataset is not None:
-            for fig in _text_pages(summary(dataset), title, style):
+            lines = summary(dataset) + ["", f"Written by {made}."]
+            for fig in _text_pages(lines, title, style):
                 pdf.savefig(fig)
                 count += 1
         for page in pages:

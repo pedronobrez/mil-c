@@ -15,6 +15,7 @@ import os
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import figures
 from ..figures import FigureStyle
 from . import palette
@@ -51,6 +52,7 @@ def last_style() -> FigureStyle:
 class FigureDialog(QtWidgets.QDialog):
     def __init__(self, content, parent=None, name: str = "figure"):
         super().__init__(parent)
+        describe(self, "figures")
         self.setWindowTitle("Figure")
         self.content = content
         self._bars = False

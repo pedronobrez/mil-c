@@ -23,7 +23,7 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - **Figures.** Little control over legend, colours and type, and exports whose resolution has to
   be fought. Here every plot becomes a figure in millimetres, with editable text, as SVG, PDF,
   PNG or TIFF.
-- **Balance.** An treated sample usually carries several times the cells of its control, and a map
+- **Balance.** A treated sample usually carries several times the cells of its control, and a map
   built on everything is a map of the treated group. Here the sampling plan is on the table
   before anything is concatenated: what each sample has, what it will give, and which one set
   the limit.
@@ -99,7 +99,7 @@ ID7000, BD FACSymphony A5 SE): many detectors, fewer fluorochromes. "Unmixing…
   they are concatenated again.
 - Export the population shown, of the samples selected or of all, as FCS or CSV.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
-- What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
+- What is drawn is kept beside the files (`MIL-C.json`, the project) and is there next time.
 - **Quality…** checks each acquisition in the order it was acquired for four things: a flow
   rate far from the usual one (a clog), an abrupt change of signal (a step, a bubble), a
   moderate shift that lasts (a drift: a population's level, followed over a long window, away
@@ -240,6 +240,12 @@ ID7000, BD FACSymphony A5 SE): many detectors, fewer fluorochromes. "Unmixing…
   PDF behind a page stating the quality control, population, sampling plan, seed, normalisation
   and the settings of each run.
 
+**The manual** — Help ▸ Manual, or F1 for the page about the tab or dialog you are in.
+- Every tab, dialog and method described, with what was measured against what; in English and
+  in Portuguese (the switch is in the manual's toolbar; the application stays in English).
+- Search by the beginning of words, links between pages both ways, and the whole manual as one
+  PDF (Help ▸ Export manual as PDF…). The pages are Markdown, in `milc/help/pages`.
+
 ## What it does not do
 
 - **Gating is not all of FlowJo's.** Rectangles, polygons, ellipses, quadrants, ranges and
@@ -291,8 +297,8 @@ for Windows with a portable `.zip` beside it for machines where an installer can
 for Linux (x86-64, Ubuntu 22.04 or anything as recent) a `.deb` and a `.tar.gz`:
 
 ```bash
-sudo apt install ./MIL-C-0.1.0-linux-x86_64.deb      # Debian, Ubuntu, Mint: menu entry and `milc`
-tar -xzf MIL-C-0.1.0-linux-x86_64.tar.gz && MIL-C-0.1.0/install.sh   # any other, into ~/.local
+sudo apt install ./MIL-C-1.0.0-linux-x86_64.deb      # Debian, Ubuntu, Mint: menu entry and `milc`
+tar -xzf MIL-C-1.0.0-linux-x86_64.tar.gz && MIL-C-1.0.0/install.sh   # any other, into ~/.local
 ```
 
 Nothing is signed. On macOS, right-click ▸ Open the first time; on Windows, choose "More info",
@@ -387,7 +393,10 @@ milc/
   figures.py        a plot and a style into SVG, PDF, PNG or TIFF (matplotlib)
   session.py        the open analysis; what the window reads and writes
   cli.py            the command line
-  ui/               the window (PyQt6, pyqtgraph). Nothing outside imports Qt.
+  manual.py         the manual: its pages, their links, the search (and its PDF, by Qt)
+  help/pages/       the manual's pages, Markdown; pt/ the same pages in Portuguese
+  ui/               the window (PyQt6, pyqtgraph). Nothing outside imports Qt, but for
+                    the manual's PDF, which imports it when it is printed.
 run.py              what a packaged MIL-C starts from
 packaging/
   make_icon.py      the mark and the application icon
@@ -448,11 +457,10 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
   lasting shift of 0.3 in 80% of the cases, of 0.25 in 56%. The real files lose the same
   (5.5%) with the drift limit anywhere from 0.20 to 0.33 and the shift limit from 0.20 to
   0.30: 0.25 is the middle of both. Where a shift becomes a defect the data cannot say.
-- **A workspace written here has not been opened in FlowJo.** It was read back by this program
+- **A workspace written here** was opened in FlowJo by hand before 1.0. It was read back by this program
   and by FlowKit and gated the same events: 32 samples, 192 populations, no event of
   difference. Its elements are those FlowJo 10.10 writes for samples, matrices, scales and
-  gates; window layout, tables and cytometer defaults are not written. Open it in FlowJo and
-  compare the counts before relying on it. Time is written in seconds, as FlowJo's own
+  gates; window layout, tables and cytometer defaults are not written. Time is written in seconds, as FlowJo's own
   workspaces imply. Gating-ML files validate against the standard's schema, and FlowKit gates
   the same events from them.
 - **Curly quadrants** were set beside CytoML 2.24.0 (cytolib 2.24.0) on a workspace this
@@ -488,7 +496,7 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
 - **Logicle** was set beside FlowUtils, not beside FlowJo's own display. No workspace here
   declares a logicle scale: reading one was tested on XML written by hand.
 - **Prism files** follow the layout of the R package `pzfx`, round-trip through this program's
-  own reader, and have not been opened in Prism by the author.
+  own reader, and were opened in Prism by hand before 1.0.
 - **Statistics** follow FlowJo's definitions and were not set beside FlowJo's numbers.
 - **Quadrants, booleans and ellipses from a workspace.** Quadrant and boolean counts rest on
   arithmetic already verified for rectangles. Ellipses were checked against FlowJo once, on a

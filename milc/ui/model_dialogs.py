@@ -21,6 +21,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from .. import cellcycle, compare, kinetics, proliferation
 from ..stats import StatsTable
 from . import palette, theme
+from .help_window import describe
 from .settings import settings
 from .statistics_tab import _Cell, _format
 
@@ -96,6 +97,8 @@ class _ModelDialog(QtWidgets.QDialog):
     in `_controls`, `columns`, `_fit` and `_draw`."""
 
     KIND = ""
+    #: the manual page that describes this model
+    PAGE = "gates-tab"
     NAME = "model"
     #: the column a comparison between groups starts on
     COMPARE = ""
@@ -105,6 +108,7 @@ class _ModelDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.source = source
         self.setWindowTitle(f"{self.KIND} — {source.population}")
+        describe(self, self.PAGE)
         #: sample → what was fitted, and → why it could not be
         self.fits: dict = {}
         self.problems: dict = {}
@@ -414,6 +418,7 @@ class _ModelDialog(QtWidgets.QDialog):
 # --- proliferation --------------------------------------------------------------------------
 
 class ProliferationDialog(_ModelDialog):
+    PAGE = "proliferation"
     KIND, NAME, COMPARE = PROLIFERATION, "proliferation", "Division Index"
     DEFINITIONS = (
         "FlowJo's definitions. % Divided: the share of the cells at the start that divided "
@@ -506,6 +511,7 @@ class ProliferationDialog(_ModelDialog):
 # --- the cell cycle -------------------------------------------------------------------------
 
 class CellCycleDialog(_ModelDialog):
+    PAGE = "cell-cycle"
     KIND, NAME, COMPARE = CELL_CYCLE, "cell_cycle", "% S"
     DEFINITIONS = (
         "G1 and G2 are Gaussians on the linear DNA signal. Watson pragmatic: each fitted on "
@@ -651,6 +657,7 @@ class CellCycleDialog(_ModelDialog):
 # --- kinetics -------------------------------------------------------------------------------
 
 class KineticsDialog(_ModelDialog):
+    PAGE = "kinetics"
     KIND, NAME, COMPARE = KINETICS, "kinetics", "Peak − baseline"
     DEFINITIONS = (
         "The acquisition is cut into slices of time; each point is the statistic of the "

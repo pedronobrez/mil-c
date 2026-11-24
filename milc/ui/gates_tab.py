@@ -6,7 +6,7 @@ delete a gate.
 A gate drawn here belongs to the population being looked at, as in
 FlowJo, and — unless the box is unticked — to every sample at once, as a
 gate put on a group does. What is drawn is kept beside the files
-(`MIL-C gates.json`) and takes the place of the workspace's from then on.
+(the project, `MIL-C.json`) and takes the place of the workspace's from then on.
 
 A marker is shown on FlowJo's biexponential scale and a polygon drawn
 there is tested there: a side that is straight on the screen is the side
@@ -21,6 +21,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import autogate, density, figures, order, views
 from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
@@ -1990,6 +1991,7 @@ class CombineDialog(QtWidgets.QDialog):
 
     def __init__(self, sisters: list[str], parent=None):
         super().__init__(parent)
+        describe(self, "drawing-gates")
         self.setWindowTitle("Combine populations")
         self.op = QtWidgets.QComboBox()
         self.op.addItem("In all of them (AND)", AND)
@@ -2036,6 +2038,7 @@ class ScaleDialog(QtWidgets.QDialog):
 
     def __init__(self, label: str, current, parent=None):
         super().__init__(parent)
+        describe(self, "scales-and-transforms")
         self.setWindowTitle(f"Scale of {label}")
         self.reset_asked = False
         self.kind = QtWidgets.QComboBox()
@@ -2185,6 +2188,7 @@ class CompensationDialog(QtWidgets.QDialog):
     def __init__(self, session, entries: list, entry, selected: list, labels: dict,
                  apply, parent=None):
         super().__init__(parent)
+        describe(self, "compensation")
         self.setWindowTitle("Compensation")
         self.session, self.entries, self.labels, self._apply = session, list(entries), labels, apply
         self.channels: list[str] = []
@@ -2497,6 +2501,7 @@ class CompensationDialog(QtWidgets.QDialog):
 class ExportDialog(QtWidgets.QDialog):
     def __init__(self, population: str, selected: int, start: str, parent=None):
         super().__init__(parent)
+        describe(self, "tables-and-prism")
         self.setWindowTitle(f"Export {population}")
         self.format = QtWidgets.QComboBox()
         self.format.addItem("FCS 3.1", "fcs")

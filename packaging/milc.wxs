@@ -17,7 +17,7 @@
   without accepting a paid maintenance-fee EULA.
 
       dotnet tool install wix -g ; version 5.0.2
-      wix build packaging/milc.wxs -d Version=0.1.0 -d BundleDir=C:\...\dist\MIL-C
+      wix build packaging/milc.wxs -d Version=1.0.0 -d BundleDir=C:\...\dist\MIL-C
           -d IconFile=C:\...\packaging\icons\MIL-C.ico -o MIL-C.msi
 
   BundleDir and IconFile are absolute paths. A relative one resolves against

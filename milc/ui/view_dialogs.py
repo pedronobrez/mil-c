@@ -15,6 +15,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .help_window import describe
 from .. import figures, views
 from . import palette, theme
 
@@ -139,6 +140,7 @@ class _FigureDialog(QtWidgets.QDialog):
 
     def __init__(self, title: str, name: str, parent=None):
         super().__init__(parent)
+        describe(self, "gates-tab")
         self.setWindowTitle(title)
         self.name = name
         self.content = None
