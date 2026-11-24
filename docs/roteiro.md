@@ -386,6 +386,11 @@ amostras de um grupo de uma vez; as barras do gráfico de frequência saem na co
 tinham 60% de opacidade, e preto virava cinza), com a opacidade ajustável em Figure…; e
 "Numbers" liga ou desliga os valores nas células do heatmap, na tela e na figura.
 
+Corrigido em 23 de novembro, a pedido: a figura feita da aba Gates (Figure…) saía sem os gates
+— só os pontos. Agora leva cada gate desenhado no gráfico, com o nome e a porcentagem como a
+tela escreve, inclusive os quatro cantos de um quadrante e a faixa de um histograma, e uma
+caixa no diálogo os tira. Conferido na `3Case1` (Cells 55,9%, CD45 36,1%) e num teste.
+
 Feito em 23 de novembro, depois da lista anterior: a limpeza ganhou uma passada lenta para
 derivas moderadas e duradouras, com os limites no diálogo (`docs/comparacao.md` §3: deriva
 conhecida de 81 para 97% e de 54 para 76%; nos 32 arquivos reais de 1,4 para 5,3% dos eventos,
@@ -415,47 +420,48 @@ reais perdem o mesmo com o limite de deriva de 0,20 a 0,33 e o de desvio curto d
 0,25 ficou, no meio das duas faixas. `check` ficou cerca de um terço mais lento (os 32 arquivos
 de 5,5 para 7,5 s).
 
-Prioritárias:
+Feito em 23 de novembro, das prioridades da véspera (detalhes nas seções acima e em
+`docs/comparacao.md`):
 
-1. ~~**Autocompensação por single stains** (e AutoSpill)~~ — feito: ver "Autocompensação"
-   abaixo.
-2. **Unmixing espectral**, para citômetros espectrais.
-3. ~~**Limpeza: defeito moderado e curto.**~~ **Feito** (passada curta; limites medidos em
-   cópias com defeito conhecido). Falta: um arquivo real com defeito anotado por quem adquiriu,
-   para dizer a partir de que tamanho um deslocamento é defeito; e um desvio curto de 2% ou
-   menos do arquivo ainda passa, salvo se for grande (0,5 do desvio em 1%: 20 das 32 cópias).
-4. ~~**Gates automáticos: refazer o ajuste** quando o gate pai muda, e não perder o ajuste à mão
-   ao renomear um gate ajustado por amostra.~~ **Feito.** O gate proposto guarda como foi
-   achado e é ajustado de novo sozinho quando a população em que está muda (gate pai movido,
-   editado ou reajustado; compensação, escala, normalização ou limpeza): em cada amostra, se o
-   ajuste é por amostra, ou na amostra em que foi proposto, e dado a todas. O gate desenhado à
-   mão fica onde está. O proposto que depois foi movido à mão não é sobrescrito: uma barra diz
-   que ficou velho, com **Refit** e **Keep**. Renomear renomeia em todas as amostras de uma vez,
-   e o ajuste de cada uma vai junto; tudo fica no projeto. Nos 32 arquivos reais, com um gate de
-   singletes (banda) sob Cells e um vale de CD45 sob Live, ajustados por amostra: encolher Cells
-   em 15% e cortar pela metade o limite do corante em Live refez os 63 gates (32 bandas e 31
-   vales) em 3 s; o vale movido à mão na `3Ctrl3` ficou onde estava (corte 1.294) e foi listado
-   como velho, e o Refit o pôs em 811. O CD45 automático acompanha o CD45 do FlowJo antes (2.431
-   e 2.259 na `3Case1`) e depois (1.717 e 1.597). Não há desfazer para gates: não foi feito.
-5. ~~**Quadrantes "curly" do FlowJo**~~ **Feito em parte**: lidos do workspace, desenhados com
-   as duas curvas e o centro arrastável, gravados no projeto e exportados (de volta como curly
-   no `.wsp`; em polígonos no Gating-ML). A curva é a do CytoML; falta conferir com o FlowJo
-   num workspace real com os arquivos, e desenhar um novo aqui.
-6. **Modelos**: pôr o ciclo celular ao lado do ModFit ou do FlowJo com os mesmos arquivos (os
-   de BrdU/PI do §6 de `docs/comparacao.md` servem); a cinética num fluxo de cálcio real; o pico
-   de Fox para um S sincronizado; agregados mais prováveis entre células maiores.
+1. ~~**Autocompensação por single stains** (e AutoSpill)~~ — feito (§5 da comparação).
+2. ~~**Unmixing espectral**~~ — feito: OLS e WLS, autofluorescência, similaridade e índice de
+   complexidade, conferidos com o SpectroFlo e o AutoSpectral num conjunto público do Aurora (§8).
+3. ~~**Limpeza: defeito moderado e curto**~~ — feito (passada curta; limites medidos em cópias
+   com defeito conhecido, §3).
+4. ~~**Gates automáticos: refazer o ajuste**~~ — feito. O gate proposto é ajustado de novo
+   sozinho quando a população em que está muda; o desenhado à mão fica onde está; o proposto que
+   depois foi movido à mão não é sobrescrito (barra com **Refit** e **Keep**). Renomear leva o
+   ajuste de cada amostra junto. Nos 32 arquivos, encolher Cells e cortar Live refez 63 gates em
+   3 s; o vale movido à mão na `3Ctrl3` ficou em 1.294 até o Refit (811).
+5. ~~**Quadrantes "curly" do FlowJo**~~ — feito em parte: lidos, desenhados, gravados e
+   exportados com a curva do CytoML (§7); não conferidos com o FlowJo.
+6. ~~**Modelos**~~ — feito: população aneuploide, debris e agregados no Dean-Jett-Fox,
+   conferidos com o BrdU de 223 arquivos públicos (§6).
 
-Em seguida:
+Antes da 1.0:
 
-7. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
-8. **Distribuição.** Publicar a versão 0.1.0; assinatura dos instaladores (hoje o macOS e o
-   Windows avisam na primeira abertura).
-9. **Expressão diferencial ao lado do diffcyt** em si, com os pesos e o `duplicateCorrelation`
+1. **Manual embutido**, em inglês e português, como no MIL-Q e no MIL-X.
+2. **Distribuição.** Número de versão 1.0.0 no programa, nos instaladores e no relatório;
+   notas da versão; assinatura dos instaladores (hoje o macOS e o Windows avisam na primeira
+   abertura).
+3. **Conferências que dependem de você** (lista acima, "A conferir, antes de qualquer item novo"): o
+   workspace escrito pelo MIL-C aberto no FlowJo; o `.pzfx` no Prism; o `.msi` num Windows de
+   verdade; o instalador de Linux numa máquina com tela; uso à mão com mouse.
+
+Depois da 1.0:
+
+4. **Expressão diferencial ao lado do diffcyt** em si, com os pesos e o `duplicateCorrelation`
    dele; e o estimador novo do limma para graus de liberdade desiguais.
-10. **Eixos com a escala do workspace**: hoje a escala declarada no `.wsp` vale para testar os
-    gates, não para desenhar os eixos.
-11. **Acabamento do relatório**: nome da prancha em cada página; o motivo de um arquivo não ter
-    sido conferido pela limpeza; `milc analyze` escrevendo abundância e expressão diferencial.
+5. **Eixos com a escala do workspace**: hoje a escala declarada no `.wsp` vale para testar os
+   gates, não para desenhar os eixos.
+6. **Acabamento do relatório**: nome da prancha em cada página; o motivo de um arquivo não ter
+   sido conferido pela limpeza; `milc analyze` escrevendo abundância e expressão diferencial.
+7. **Modelos e quadrantes, contra os programas comerciais**: o ciclo ao lado do ModFit ou do
+   FlowJo com os arquivos de BrdU/PI; a cinética num fluxo de cálcio real; o "curly" num
+   workspace do FlowJo com os `.fcs`; desenhar um "curly" novo aqui.
+8. **Unmixing**: escolha de detectores à mão; matriz de espalhamento (SSM); autofluorescência
+   por célula; exportação de amostras desmisturadas para `.wsp` e Gating-ML.
+9. **Limpeza**: um arquivo com defeito anotado por quem adquiriu; desvios de 2% ou menos.
 
 Mais adiante: autogating por modelo; trilha de auditoria.
 

@@ -354,3 +354,65 @@ def test_the_arms_of_a_quadrant_in_the_window(app, folder):
     assert isinstance(first.gates.children[0].gate, OffsetQuadrantGate)
     assert {n.gate.quadrant: again.load(first).count(n.path)
             for n in first.gates.children} == counts
+
+
+def test_a_figure_of_the_gates_tab_shows_its_gates(app, folder, tmp_path):
+    """A figure made from the Gates tab draws the gates the plot shows,
+    each with its name and share as the plot writes them: a polygon, the
+    four corners of a quadrant, and a gate of one parameter on a histogram."""
+    from matplotlib.figure import Figure
+    from milc import figures, plate_store
+    from milc.ui import worker
+    from milc.ui.gates_tab import HISTOGRAM
+    from milc.ui.shell import MainShell
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    for _ in range(3):
+        worker.wait_all()
+        app.processEvents()
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    poly = g.add_polygon([(0.1, 0.1), (0.5, 0.1), (0.5, 0.5), (0.1, 0.5)], "Box")
+    g.add_quadrants(0.4, 0.4)
+    c = g.content()
+    assert isinstance(c, figures.MapContent) and c.xrange is not None
+    shown = {m.label for m in c.gates}
+    here = g.sample.count(g.node.path)
+    box = f"Box  {100 * g.sample.count(poly.path) / here:.1f}%"
+    assert box in shown
+    assert sum("%" in m.label for m in c.gates) == 5          # the box and four corners
+    [mark] = [m for m in c.gates if m.label == box]
+    assert len(mark.lines) == 1 and mark.lines[0].shape[1] == 2
+    assert sum(len(m.lines) for m in c.gates if m is not mark) == 2   # one crossing, two lines
+
+    # drawn: one line for the box and two for the crossing; off, none
+    def lines(style):
+        fig = Figure()
+        figures._DRAW[type(c)](fig, c, style)
+        return len(fig.axes[0].lines), [t.get_text() for t in fig.axes[0].texts]
+    n, texts = lines(figures.FigureStyle())
+    assert n == 3 and box in texts
+    assert lines(figures.FigureStyle(gates=False)) == (0, [])
+    # and a plate keeps them
+    arrays = {}
+    back = plate_store.decode(plate_store.encode(c, arrays), arrays)
+    assert [m.label for m in back.gates] == [m.label for m in c.gates]
+    assert np.allclose(back.gates[0].lines[0], c.gates[0].lines[0])
+
+    # one parameter, as a histogram: the band's two edges, its label inside the plot
+    g.set_axes("Comp-PE-A", HISTOGRAM)
+    band = g.add_rectangle(0.3, 0.0, 0.6, 0.0, "Band")
+    c = g.content()
+    [mark] = [m for m in c.gates if m.label.startswith("Band")]
+    assert mark.relative and len(mark.lines) == 2 and mark.at[1] <= 1.0
+    assert mark.label == f"Band  {100 * g.sample.count(band.path) / here:.1f}%"
+    fig = Figure()
+    figures._DRAW[type(c)](fig, c, figures.FigureStyle())
+    ax = fig.axes[0]
+    top = ax.get_ylim()[1]
+    edges = [l for l in ax.lines if len(l.get_xdata()) == 2]
+    assert any(max(l.get_ydata()) == pytest.approx(top) for l in edges)
+    w.close()

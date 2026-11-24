@@ -224,6 +224,9 @@ ID7000, BD FACSymphony A5 SE): many detectors, fewer fluorochromes. "Unmixing…
 - Width and height in millimetres, resolution, font and size, title and axis labels, frame,
   point size and opacity, legend position, colour ramp.
 - Recolour or rename any category: double-click its colour, type over its label.
+- From the Gates tab, the figure carries the gates on the plot, each with its name and share as
+  the plot writes them (a polygon, a rectangle, an ellipse, the four corners of a quadrant, a
+  band on a histogram). "Gates, with their names and shares" turns them off.
 - Save the look under a name and apply it to the next figure.
 - The preview is drawn by the code that writes the file.
 - **Add to plate**: several panels on one page (View ▸ Plate…), lettered A, B, C…, in one type,

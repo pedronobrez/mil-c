@@ -116,6 +116,7 @@ class FigureDialog(QtWidgets.QDialog):
         self.legend_counts = QtWidgets.QCheckBox("Counts")
         self.colormap = RampPicker(follow=False)
         self.annotate = QtWidgets.QCheckBox("Numbers in the cells")
+        self.gates = QtWidgets.QCheckBox("Gates, with their names and shares")
         self.transparent = QtWidgets.QCheckBox("Transparent background")
         self.categories = QtWidgets.QTableWidget(0, 2)
         self.categories.setHorizontalHeaderLabels(["Colour", "Label"])
@@ -166,6 +167,7 @@ class FigureDialog(QtWidgets.QDialog):
         form.addRow("Legend title", self.legend_title)
         self._row_cmap = self._add(form, "Colour ramp", self.colormap)
         form.addRow(self.annotate)
+        form.addRow(self.gates)
         form.addRow(self.transparent)
 
         self.export_button = QtWidgets.QPushButton("Export…")
@@ -227,6 +229,7 @@ class FigureDialog(QtWidgets.QDialog):
         self.rasterize.setVisible(is_map)
         self._visible(self._row_cmap, figures.uses_colormap(content))
         self.annotate.setVisible(is_heat)
+        self.gates.setVisible(bool(getattr(content, "gates", None)))
         self._visible(self._row_x, not is_tree)
         self._visible(self._row_y, not is_tree)
         self.grid.setVisible(not (is_tree or is_heat))
@@ -246,7 +249,7 @@ class FigureDialog(QtWidgets.QDialog):
         for w in (self.title, self.xlabel, self.ylabel, self.legend_title):
             w.textEdited.connect(self._changed)
         for w in (self.ticks, self.grid, self.rasterize, self.legend_counts,
-                  self.annotate, self.transparent):
+                  self.annotate, self.gates, self.transparent):
             w.toggled.connect(self._changed)
         self.size_preset.currentIndexChanged.connect(self._size_chosen)
         self.preset.activated.connect(self._preset_chosen)
@@ -320,6 +323,7 @@ class FigureDialog(QtWidgets.QDialog):
         self.legend_counts.setChecked(s.legend_counts)
         self.colormap.set_choice(s.colormap, s.colormap_colors)
         self.annotate.setChecked(s.annotate)
+        self.gates.setChecked(s.gates)
         self.transparent.setChecked(s.transparent)
         names = figures.category_names(self.content)
         self.categories.setRowCount(len(names))
@@ -363,6 +367,7 @@ class FigureDialog(QtWidgets.QDialog):
         s.colormap = self.colormap.name()
         s.colormap_colors = list(self.colormap.colors)
         s.annotate = self.annotate.isChecked()
+        s.gates = self.gates.isChecked()
         s.transparent = self.transparent.isChecked()
 
     def _changed(self, *_):

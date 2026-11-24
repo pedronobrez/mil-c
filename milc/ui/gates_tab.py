@@ -1239,6 +1239,7 @@ class GatesTab(QtWidgets.QWidget):
         self._draw_gates(xdim, ydim, xr, yr)
         self._draw_quadrants(xdim, ydim, xr, yr, self.sample.masks(),
                              max(int(self.sample.mask(self.node.path).sum()), 1))
+        self._mark_gates(xdim, ydim, xr, yr)
         parent = self.node.parent
         of = (f", {100 * rows.size / max(int(self.sample.mask(parent.path).sum()), 1):.1f}% "
               f"of {parent.name if parent.gate is not None else 'all events'}"
@@ -1358,6 +1359,46 @@ class GatesTab(QtWidgets.QWidget):
             item.sigRegionChangeFinished.connect(
                 lambda _=None, c=child, it=item: self._gate_moved(c, it))
             self._overlays.append((child, item, label))
+
+    def _mark_gates(self, xdim, ydim, xr, yr) -> None:
+        """Put the gates drawn on the plot, with their names and shares as
+        the plot writes them, into what a figure of it shows."""
+        content = self._content
+        if not isinstance(content, (figures.MapContent, figures.OverlayContent)):
+            return
+        if isinstance(content, figures.MapContent):
+            content.xrange, content.yrange = tuple(xr), tuple(yr)
+        histogram = ydim == HISTOGRAM
+
+        def lines(gate):
+            if histogram:
+                return views.outline(gate, self._scale, [xr]) if len(gate.dims) == 1 else []
+            flipped = gate.dims[0] != xdim
+            out = views.outline(gate, self._scale, [yr, xr] if flipped else [xr, yr])
+            return [line[:, ::-1] if flipped else line for line in out]
+
+        def placed(label):
+            pos, anchor = label.pos(), label.anchor
+            align = ("left" if anchor.x() < 0.5 else "right",
+                     "top" if anchor.y() < 0.5 else "bottom")
+            y = float(pos.y())
+            if histogram:
+                y = (y - yr[0]) / ((yr[1] - yr[0]) or 1.0)
+                if y > 0.99:       # at the top of the plot: inside it, not above
+                    align = (align[0], "top")
+            return (float(pos.x()), y), align
+
+        marks = []
+        for child, _item, label in self._overlays:
+            at, align = placed(label)
+            marks.append(figures.GateMark(lines(child.gate), label.toPlainText(), at, align,
+                                          relative=histogram))
+        for members, *_rest, labels in self._crossings:
+            for k, (child, label) in enumerate(labels):
+                at, align = placed(label)
+                marks.append(figures.GateMark(lines(child.gate) if k == 0 else [],
+                                              label.toPlainText(), at, align))
+        content.gates = marks
 
     def _draw_quadrants(self, xdim, ydim, xr, yr, masks, here) -> None:
         """One crossing for each set of four made together, with each

@@ -129,6 +129,46 @@ def combine(a: Categories | None, b: Categories | None) -> Categories | None:
 
 
 @dataclass
+class GateMark:
+    """A gate as the Gates tab shows it: its lines, and its name and share
+    written beside it. Coordinates are the plot's. Where `relative` (a gate
+    of one parameter, on a histogram), y runs from 0 at the bottom of the
+    plot to 1 at its top, for the lines and for the label alike."""
+    lines: list = field(default_factory=list)
+    label: str = ""
+    at: tuple | None = None
+    #: which side of the label sits at `at`: ("left" | "right", "bottom" | "top")
+    align: tuple = ("left", "bottom")
+    relative: bool = False
+
+
+def _draw_gates(ax, gates: list, style) -> None:
+    """The gates in black, each with its name and share on a pale ground,
+    without moving the ends of the axes."""
+    if not (gates and style.gates):
+        return
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+    height = ylim[1] - ylim[0]
+    for g in gates:
+        def y(v, g=g):
+            return ylim[0] + np.asarray(v) * height if g.relative else v
+        for line in g.lines:
+            line = np.asarray(line, dtype=np.float64)
+            ax.plot(line[:, 0], y(line[:, 1]), color="black", linewidth=0.9, zorder=5,
+                    clip_on=True)
+        if g.label and g.at is not None:
+            # a little off the point, so that the label does not sit on the line
+            off = (2 if g.align[0] == "left" else -2, 3 if g.align[1] == "bottom" else -3)
+            ax.annotate(style.label(g.label), (g.at[0], y(g.at[1])), xytext=off,
+                        textcoords="offset points", ha=g.align[0], va=g.align[1],
+                        fontsize=max(style.font_size - 1, 5), zorder=6, annotation_clip=False,
+                        bbox=dict(boxstyle="square,pad=0.2", facecolor="white", edgecolor="none",
+                              alpha=0.85))
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+
+
+@dataclass
 class MapContent:
     x: np.ndarray
     y: np.ndarray
@@ -143,6 +183,11 @@ class MapContent:
     #: panels per row when split; None lets the number of panels decide.
     #: Split by two columns, a row is one value of the first.
     columns: int | None = None
+    #: the ends of the axes, as on the screen; None: as far as the points go
+    xrange: tuple | None = None
+    yrange: tuple | None = None
+    #: the gates drawn on the plot (`GateMark`), from the Gates tab
+    gates: list = field(default_factory=list)
 
 
 @dataclass
@@ -199,6 +244,8 @@ class OverlayContent:
     yrange: tuple | None = None
     #: histograms one above the other instead of on one baseline
     offset: bool = False
+    #: the gates drawn on the plot (`GateMark`), from the Gates tab
+    gates: list = field(default_factory=list)
 
     @property
     def is_histogram(self) -> bool:
@@ -279,6 +326,8 @@ class FigureStyle:
     colormap_colors: list[str] = field(default_factory=list)
     #: numbers in the heatmap's cells
     annotate: bool = True
+    #: on a plot of the Gates tab: the gates, with their names and shares
+    gates: bool = True
     transparent: bool = False
     #: points as a bitmap inside a vector file: for maps of very many
     #: events, where a million circles make an SVG nobody can open
@@ -428,6 +477,11 @@ def _draw_map(fig, c: MapContent, style: FigureStyle) -> None:
             ax.set_xticks([p for p, _ in c.xticks], [_tick_text(t) for _, t in c.xticks])
         if c.yticks:
             ax.set_yticks([p for p, _ in c.yticks], [_tick_text(t) for _, t in c.yticks])
+        if c.xrange:
+            ax.set_xlim(*c.xrange)
+        if c.yrange:
+            ax.set_ylim(*c.yrange)
+        _draw_gates(ax, c.gates, style)
         _frame(ax, style)
     xlabel = c.xlabel if style.xlabel is None else style.xlabel
     ylabel = c.ylabel if style.ylabel is None else style.ylabel
@@ -653,6 +707,7 @@ def _draw_overlay(fig, c: OverlayContent, style: FigureStyle) -> None:
         ax.set_xticks([p for p, _ in c.xticks], [_tick_text(t) for _, t in c.xticks])
     if c.xrange:
         ax.set_xlim(*c.xrange)
+    _draw_gates(ax, c.gates, style)
     ax.set_xlabel(c.xlabel if style.xlabel is None else style.xlabel)
     _frame(ax, style)
     handles = [Line2D([], [], color=colour[g], linewidth=1.6, label=style.label(g))
