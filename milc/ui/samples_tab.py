@@ -14,7 +14,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from .. import order, sampling
 from ..session import ALL_EVENTS, Session, suggest_pattern
 from . import style, worker
-from .flow import ElidedLabel
+from .flow import ElidedLabel, flow, together
 
 MODES = [
     (sampling.EQUAL_PER_SAMPLE, "Same number from every sample"),
@@ -70,11 +70,11 @@ class SamplesTab(QtWidgets.QWidget):
         names.addWidget(self.folder_label)
         names.addWidget(self.wsp_label)
         top.addLayout(names, 1)
-        top.addWidget(self.add_column_button)
-        top.addWidget(self.order_button)
-        top.addWidget(self.fill_button)
-        top.addWidget(self.wsp_button)
-        top.addWidget(self.open_button)
+        # in a row that wraps: on Windows its five buttons on one line were
+        # wider than the window may be
+        top.addWidget(flow(together(self.add_column_button, self.order_button),
+                           together(self.fill_button, self.wsp_button, self.open_button),
+                           spacing=6))
 
         self.table = QtWidgets.QTableWidget()
         self.table.setAlternatingRowColors(True)
