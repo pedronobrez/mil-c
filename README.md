@@ -73,6 +73,9 @@ ID7000, BD FACSymphony A5 SE): many detectors, fewer fluorochromes. "Unmixing…
 - The gating tree with events and percent of parent; choose a population to see it.
 - Draw a rectangle, a polygon, an ellipse or a range; drag its handles to move, stretch or turn
   it; rename; delete.
+- **Lasso**: hold the button down and draw around the events, freehand; let go and it closes.
+  It becomes a polygon of a few dozen corners (at most 60, none further than 0.4% of the plot
+  from the line drawn), to move, export and apply to every sample like any other.
 - A quadrant gate: one click where two lines cross makes four populations, and moving a line
   moves them all.
 - Combine populations: the events in all of them, in any of them, or in none of them.

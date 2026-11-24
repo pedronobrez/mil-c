@@ -24,7 +24,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from .. import autogate, density, figures, order, views
 from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
-from ..gating import ARMS, CurlyQuadrantGate, OffsetQuadrantGate
+from ..gating import ARMS, CurlyQuadrantGate, OffsetQuadrantGate, simplify_outline
 from ..gating import TimeGate, time_node
 from ..session import Session
 from ..transforms import Arcsinh, Biex, Log, Logicle, decade_ticks, display_range, same
@@ -78,11 +78,26 @@ class _DrawBox(pg.ViewBox):
         self._outline(xs, ys)
 
     def mouseDragEvent(self, ev, axis=None):
-        if self.mode not in ("rect", "ellipse") or ev.button() != QtCore.Qt.MouseButton.LeftButton:
+        if (self.mode not in ("rect", "ellipse", "lasso")
+                or ev.button() != QtCore.Qt.MouseButton.LeftButton):
             return super().mouseDragEvent(ev, axis)
         ev.accept()
         a = self.mapSceneToView(ev.buttonDownScenePos())
         b = self.mapSceneToView(ev.scenePos())
+        if self.mode == "lasso":
+            if ev.isStart() or not self._points:
+                self._points = [(a.x(), a.y())]
+            self._points.append((b.x(), b.y()))
+            xs, ys = zip(*(self._points + self._points[:1]))
+            self._outline(xs, ys)
+            if ev.isFinish():
+                points = np.array(self._points)
+                (x0, x1), (y0, y1) = self.viewRange()
+                self.cancel()
+                outline = simplify_outline(points, (x1 - x0, y1 - y0))
+                if len(outline) >= 3:
+                    self.sigPolygon.emit(outline)
+            return
         if self.mode == "ellipse":
             t = np.linspace(0, 2 * np.pi, 73)
             self._outline((a.x() + b.x()) / 2 + abs(b.x() - a.x()) / 2 * np.cos(t),
@@ -370,6 +385,11 @@ class GatesTab(QtWidgets.QWidget):
                        (self.poly_button, "Click each corner; double-click to close.")):
             b.setCheckable(True)
             b.setToolTip(tip)
+        self.lasso_button = QtWidgets.QPushButton("Lasso")
+        self.lasso_button.setCheckable(True)
+        self.lasso_button.setToolTip(
+            "Hold the button down and draw around the events, freehand; let go to close. "
+            "It becomes a polygon of a few dozen corners, to move like any other.")
         self.ellipse_button = QtWidgets.QPushButton("Ellipse")
         self.ellipse_button.setCheckable(True)
         self.ellipse_button.setToolTip("Drag the box it fits in; then turn and stretch it by its handles.")
@@ -399,12 +419,13 @@ class GatesTab(QtWidgets.QWidget):
         tools = QtWidgets.QGridLayout()
         tools.addWidget(self.rect_button, 0, 0)
         tools.addWidget(self.poly_button, 0, 1)
-        tools.addWidget(self.ellipse_button, 0, 2)
-        tools.addWidget(self.quad_button, 1, 0)
-        tools.addWidget(self.auto_button, 1, 1)
-        tools.addWidget(self.combine_button, 1, 2)
-        tools.addWidget(self.rename_button, 2, 0)
-        tools.addWidget(self.delete_button, 2, 1, 1, 2)
+        tools.addWidget(self.lasso_button, 0, 2)
+        tools.addWidget(self.ellipse_button, 1, 0)
+        tools.addWidget(self.quad_button, 1, 1)
+        tools.addWidget(self.auto_button, 1, 2)
+        tools.addWidget(self.combine_button, 2, 0)
+        tools.addWidget(self.rename_button, 2, 1)
+        tools.addWidget(self.delete_button, 2, 2)
         left = QtWidgets.QVBoxLayout()
         left.addWidget(self._eyebrow("Samples"))
         left.addWidget(self.samples, 2)
@@ -460,12 +481,17 @@ class GatesTab(QtWidgets.QWidget):
         self.export_button = QtWidgets.QPushButton("Export…")
         self.export_button.setToolTip("The events of the population shown, of the samples "
                                       "selected or of all, as FCS or CSV files")
+        from .unmixing_dialog import button as unmixing_button
+        self.unmixing_button = unmixing_button(self)
+        # beside Compensation, in the row that wraps: on Windows, with its
+        # wider buttons, a fourth button in the row below set the window's width
         bar = flow(captioned("X", self.x_axis, self.x_scale),
                    captioned("Y", self.y_axis, self.y_scale),
                    captioned("Plot", self.kind), captioned("Colour by", self.colour_by),
                    self.overlay,
                    together(self.quality_button, self.compensation_button,
-                            self.export_button, self.figure_button))
+                            self.unmixing_button),
+                   together(self.export_button, self.figure_button))
         self.box = _DrawBox()
         self.plot = pg.PlotWidget(viewBox=self.box)
         self.plot.setBackground(theme.background())
@@ -484,6 +510,8 @@ class GatesTab(QtWidgets.QWidget):
         self.review = QtWidgets.QLabel("")
         self.review.setProperty("role", "warning")
         self.review.setWordWrap(True)
+        self.review.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                  QtWidgets.QSizePolicy.Policy.Preferred)
         self.reviewed_button = QtWidgets.QPushButton("Reviewed")
         self.reviewed_button.setToolTip("The gates were looked at and are where they "
                                         "should be: stop saying so")
@@ -500,6 +528,8 @@ class GatesTab(QtWidgets.QWidget):
         self.outdated = QtWidgets.QLabel("")
         self.outdated.setProperty("role", "warning")
         self.outdated.setWordWrap(True)
+        self.outdated.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                    QtWidgets.QSizePolicy.Policy.Preferred)
         self.refit_button = QtWidgets.QPushButton("Refit")
         self.refit_button.setToolTip("Fit these gates again on their population as it is "
                                      "now, giving up where they were moved by hand")
@@ -531,8 +561,6 @@ class GatesTab(QtWidgets.QWidget):
                 lambda _checked=False, k=kind: self.open_model(k))
         self.model_button.setMenu(models)
         looks.addWidget(self.model_button)
-        from .unmixing_dialog import button as unmixing_button
-        looks.addWidget(unmixing_button(self))
         right.addLayout(looks)
         right.addWidget(self.stack, 1)
 
@@ -556,6 +584,7 @@ class GatesTab(QtWidgets.QWidget):
         self.x_axis.currentIndexChanged.connect(self._axes_changed)
         self.y_axis.currentIndexChanged.connect(self._axes_changed)
         self._tools = {"rect": self.rect_button, "poly": self.poly_button,
+                       "lasso": self.lasso_button,
                        "ellipse": self.ellipse_button, "quad": self.quad_button}
         for mode, button in self._tools.items():
             button.toggled.connect(lambda on, m=mode: self._tool(m, on))
@@ -1578,6 +1607,7 @@ class GatesTab(QtWidgets.QWidget):
         hints = {"seed": "Click on the population to outline",
                  "rect": "Drag across the events to gate",
                  "poly": "Click each corner; double-click to close. Esc cancels.",
+                 "lasso": "Hold the button down and draw around the events; let go to close",
                  "ellipse": "Drag the box the ellipse fits in",
                  "quad": "Click where the two lines should cross"}
         if on:

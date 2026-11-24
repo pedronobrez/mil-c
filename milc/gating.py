@@ -528,6 +528,55 @@ class TimeGate:
         return mask if self.inside else ~mask
 
 
+def simplify_outline(points, spans, tolerance: float = 0.004, most: int = 60) -> np.ndarray:
+    """A path drawn by hand (n x 2), as a polygon of few corners: the
+    corners Ramer-Douglas-Peucker keeps when no point of the path may be
+    further than `tolerance` of the plot's width or height (`spans`) from
+    the polygon, loosened until there are at most `most`. Where the hand
+    went back over its own track, the polygon follows; the last point is
+    joined to the first when the gate is tested, as for any polygon."""
+    pts = np.asarray(points, dtype=np.float64)
+    keep = np.ones(len(pts), dtype=bool)
+    keep[1:] = np.any(np.diff(pts, axis=0) != 0, axis=1)   # a mouse resting in one place
+    pts = pts[keep]
+    if len(pts) < 3:
+        return pts
+    unit = pts / np.where(np.asarray(spans, dtype=np.float64) > 0, spans, 1.0)
+
+    def rdp(tol: float) -> np.ndarray:
+        chosen = np.zeros(len(unit), dtype=bool)
+        chosen[[0, -1]] = True
+        stack = [(0, len(unit) - 1)]
+        while stack:
+            i, j = stack.pop()
+            if j <= i + 1:
+                continue
+            a, b = unit[i], unit[j]
+            seg = b - a
+            span = float(seg @ seg)
+            mid = unit[i + 1:j]
+            if span == 0.0:
+                d = np.hypot(*(mid - a).T)
+            else:
+                t = np.clip((mid - a) @ seg / span, 0.0, 1.0)
+                d = np.hypot(*(mid - (a + t[:, None] * seg)).T)
+            k = int(np.argmax(d))
+            if d[k] > tol:
+                chosen[i + 1 + k] = True
+                stack += [(i, i + 1 + k), (i + 1 + k, j)]
+        return chosen
+
+    tol = tolerance
+    chosen = rdp(tol)
+    while chosen.sum() > most:
+        tol *= 1.5
+        chosen = rdp(tol)
+    out = pts[chosen]
+    if len(out) > 3 and np.allclose(out[0], out[-1]):
+        out = out[:-1]
+    return out
+
+
 def points_in_polygon(x: np.ndarray, y: np.ndarray, poly: np.ndarray) -> np.ndarray:
     """Even-odd rule, one pass per edge."""
     x = np.asarray(x, dtype=np.float64)

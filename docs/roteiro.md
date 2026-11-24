@@ -391,6 +391,15 @@ Corrigido em 23 de novembro, a pedido: a figura feita da aba Gates (Figure…) s
 tela escreve, inclusive os quatro cantos de um quadrante e a faixa de um histograma, e uma
 caixa no diálogo os tira. Conferido na `3Case1` (Cells 55,9%, CD45 36,1%) e num teste.
 
+Também a pedido: um gate **Lasso**, à mão livre, para análises rápidas: segura-se o botão e
+contorna-se os eventos; ao soltar, o traço vira um polígono de poucas dezenas de vértices (no
+máximo 60; nenhum ponto do traço a mais de 0,4% do gráfico do polígono), que se move e se
+exporta como qualquer polígono. Numa alça de 3.000 pontos tremidos, o polígono simplificado
+classifica igual ao traço inteiro 99,6% ou mais de 200.000 eventos. O botão "Unmixing…" foi
+para a fila de cima, ao lado de Compensation…, e os avisos passaram a quebrar a linha: no
+Windows, com botões mais largos, os dois deixavam a janela com 1.062 e 1.114 px de largura
+mínima.
+
 Feito em 23 de novembro, depois da lista anterior: a limpeza ganhou uma passada lenta para
 derivas moderadas e duradouras, com os limites no diálogo (`docs/comparacao.md` §3: deriva
 conhecida de 81 para 97% e de 54 para 76%; nos 32 arquivos reais de 1,4 para 5,3% dos eventos,

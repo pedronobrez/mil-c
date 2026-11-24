@@ -416,3 +416,72 @@ def test_a_figure_of_the_gates_tab_shows_its_gates(app, folder, tmp_path):
     edges = [l for l in ax.lines if len(l.get_xdata()) == 2]
     assert any(max(l.get_ydata()) == pytest.approx(top) for l in edges)
     w.close()
+
+
+def test_a_lasso_drawn_by_hand_is_a_polygon_of_few_corners():
+    """A shaky freehand loop of 3,000 points becomes at most 60 corners, and
+    gates the same events as the loop itself, all but a few in a thousand."""
+    from milc.gating import points_in_polygon, simplify_outline
+    rng = np.random.default_rng(1)
+    t = np.linspace(0, 2 * np.pi, 3000)
+    r = 1 + 0.25 * np.sin(3 * t) + rng.normal(0, 0.003, t.size)
+    loop = np.column_stack([5 + 40 * r * np.cos(t), 50 + 30 * r * np.sin(t)])
+    loop = np.repeat(loop, 2, axis=0)                 # the mouse resting between moves
+    outline = simplify_outline(loop, (100.0, 100.0))
+    assert 8 <= len(outline) <= 60
+    x, y = rng.uniform(-60, 70, 200000), rng.uniform(0, 100, 200000)
+    exact = points_in_polygon(x, y, loop)
+    kept = points_in_polygon(x, y, outline)
+    assert exact.sum() > 10000
+    assert (exact != kept).mean() < 0.004
+    assert len(simplify_outline(loop[:2], (1, 1))) < 3    # too short to be a gate
+
+
+def test_the_lasso_in_the_window(app, folder):
+    """Dragging with the Lasso on makes a polygon gate around what was drawn."""
+    from PyQt6 import QtCore
+    from milc.gating import PolygonGate
+    from milc.ui import worker
+    from milc.ui.shell import MainShell
+
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    w.resize(1300, 800)
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    for _ in range(3):
+        worker.wait_all()
+        app.processEvents()
+    g.set_axes("Comp-PE-A", "Comp-FITC-A")
+    g.lasso_button.setChecked(True)
+    assert g.box.mode == "lasso" and not g.poly_button.isChecked()
+    (x0, x1), (y0, y1) = g.box.viewRange()
+    t = np.linspace(0, 2 * np.pi, 200)
+    path = np.column_stack([x0 + (x1 - x0) * (0.5 + 0.3 * np.cos(t)),
+                            y0 + (y1 - y0) * (0.5 + 0.3 * np.sin(t))])
+
+    class Drag:
+        def __init__(self, k):
+            self.k = k
+        def button(self):
+            return QtCore.Qt.MouseButton.LeftButton
+        def buttonDownScenePos(self):
+            return g.box.mapViewToScene(QtCore.QPointF(*path[0]))
+        def scenePos(self):
+            return g.box.mapViewToScene(QtCore.QPointF(*path[self.k]))
+        def isStart(self):
+            return self.k == 1
+        def isFinish(self):
+            return self.k == len(path) - 1
+        def accept(self):
+            pass
+
+    g._ask_name = lambda: "Loop"
+    for k in range(1, len(path)):
+        g.box.mouseDragEvent(Drag(k))
+    [made] = [c for c in g.node.children if c.name == "Loop"]
+    assert isinstance(made.gate, PolygonGate) and 8 <= len(made.gate.vertices) <= 60
+    assert not g.lasso_button.isChecked() and g.box.mode is None
+    assert 0 < g.sample.count(made.path) < g.sample.count(g.node.path)
+    w.close()
