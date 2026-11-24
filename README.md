@@ -393,6 +393,7 @@ packaging/
   make_icon.py      the mark and the application icon
   milc.spec         the PyInstaller build, for macOS, Windows and Linux
   make_dmg.sh       the macOS disk image
+  release_mac.sh    the suite, the disk image, and the image attached to a release
   milc.wxs          the Windows installer (WiX)
   make_linux.sh     the Linux package (.deb) and archive (.tar.gz)
 tests/              pytest; test_real.py runs only where the acquisitions are
@@ -401,13 +402,17 @@ tests/              pytest; test_real.py runs only where the acquisitions are
 ## Building the installers
 
 ```bash
-bash packaging/make_dmg.sh      # macOS: builds MIL-C.app, tests it, wraps it in dist/*.dmg
+bash packaging/make_dmg.sh             # macOS: builds MIL-C.app, tests it, wraps it in dist/*.dmg
+bash packaging/release_mac.sh v1.0.0   # the suite first, then the image, attached to v1.0.0
 ```
 
-The Windows and Linux ones cannot be built on a Mac: a bundle is the interpreter and every
-compiled extension for the machine that built it. `.github/workflows/ci.yml` builds all three
-on GitHub's machines (`packaging/make_linux.sh` wraps the Linux one, and the build installs the
-package and the archive before it lets them out) — on a tag `v*`, which also creates the release, or on request from the Actions tab.
+The macOS image is built on a Mac, not on GitHub: a macOS minute there is billed as ten Linux
+ones. The Windows and Linux ones cannot be built on a Mac: a bundle is the interpreter and
+every compiled extension for the machine that built it. `.github/workflows/ci.yml` builds those
+two on GitHub's machines (`packaging/make_linux.sh` wraps the Linux one, and the build installs
+the package and the archive before it lets them out) — on a tag `v*`, which also creates the
+release, or on request from the Actions tab. For a release: push the tag, wait for the CI, then
+run `release_mac.sh` with the tag; it adds the image and makes `SHA256SUMS` again over all five.
 Every build is asked to run the whole route on invented data (`MIL-C selftest`) and to open its
 window before it is wrapped.
 
