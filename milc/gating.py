@@ -386,8 +386,14 @@ class GateNode:
     #: how the gate was fitted to this sample's own events, when each
     #: sample was given its own (`milc.autogate`): the method and its
     #: settings, as plain values. A copy of the tree given to another
-    #: sample then keeps that sample's own gate (see `keep_fits`).
+    #: sample then keeps that sample's own gate (see `keep_fits`). With a
+    #: `sample` key the gate is not each sample's own: it was fitted on
+    #: that one file's events and every sample is given the same.
     fit: dict | None = None
+    #: what the fitted gate was fitted on, and what it came out as: the
+    #: digests `on` (of the parent's gates and the values under them) and
+    #: `gate` — see `Session.refit`. This sample's own, like the gate.
+    fitted: dict | None = None
 
     def add(self, child: "GateNode") -> "GateNode":
         child.parent = self
@@ -472,7 +478,7 @@ def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
                             inside=g.inside)
         out = GateNode(node.name, g, note=node.note,
                        reference_count=node.reference_count if keep_counts else None,
-                       fit=_plain_copy(node.fit))
+                       fit=_plain_copy(node.fit), fitted=_plain_copy(node.fitted))
         for child in node.children:
             out.add(clone(child))
         return out
@@ -503,6 +509,8 @@ def tree_to_dict(tree: GateNode) -> dict:
         out["note"] = tree.note
     if tree.fit:
         out["fit"] = _plain_copy(tree.fit)
+    if tree.fitted:
+        out["fitted"] = _plain_copy(tree.fitted)
     g = tree.gate
     if isinstance(g, RectangleGate):
         out["gate"] = {"type": "rectangle", "dims": g.dims, "mins": g.mins,
@@ -580,7 +588,7 @@ def tree_from_dict(d: dict) -> GateNode:
                            codes.reshape(g["codes"]["shape"]).astype(np.float64),
                            [int(n) for n in g["nodes"]], inside=g.get("inside", True))
     node = GateNode(d.get("name", ""), gate, note=d.get("note", ""),
-                    fit=d.get("fit") or None)
+                    fit=d.get("fit") or None, fitted=d.get("fitted") or None)
     for child in d.get("children", []):
         node.add(tree_from_dict(child))
     return node
@@ -652,15 +660,17 @@ def keep_fits(copy: GateNode, own: GateNode) -> list[GateNode]:
     on each sample's own events takes back the one this sample's `own`
     tree had at the same path, if that was fitted the same way. The
     populations it had none for are returned: their gates are still the
-    other sample's, to be fitted here."""
+    other sample's, to be fitted here. A gate fitted on one sample and
+    given to all (`fit` with a `sample`) is the copy's, as a drawn one is."""
     had = {n.path: n for n in own.walk() if n.fit}
     missing = []
     for node in copy.walk():
-        if not node.fit:
+        if not node.fit or node.fit.get("sample"):
             continue
         mine = had.get(node.path)
         if mine is not None and mine.fit == node.fit:
             node.gate, node.note = copy_tree(GateNode("", mine.gate)).gate, mine.note
+            node.fitted = _plain_copy(mine.fitted)
         else:
             missing.append(node)
     return missing

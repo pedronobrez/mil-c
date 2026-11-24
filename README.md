@@ -93,6 +93,14 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   gate again on each sample's own events instead of copying the coordinates. On the test data
   the valleys agree with the hand-drawn Live and CD45 gates (Jaccard 0.95 to 0.97); the scatter
   gates are looser than the hand-drawn ones and should be looked at.
+  A proposed gate remembers how it was found. When the population it is in changes — a parent
+  gate moved, edited or fitted again, another compensation, scale, normalisation or quality
+  cleaning — it is **fitted again by itself** on the new population: on each sample's own
+  events, or on the sample it was proposed on and given to all. A hand-drawn gate stays where
+  it is. A proposed gate you then moved by hand is not overwritten: a bar says it is out of
+  date, with **Refit** (fit it again, losing the move) and **Keep** (leave it). Renaming a gate
+  renames it on every sample at once, so each sample's own fit, or a move by hand, goes with
+  the new name; all of this is kept in the project.
 - **Model…** fits a model to the population shown, in every sample selected, and gives a table
   with a row for each sample (CSV, tests between groups) and a figure. *Proliferation* (CFSE,
   CellTrace Violet): the generations as Gaussians a halving apart, anchored on an unstimulated
