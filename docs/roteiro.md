@@ -37,8 +37,8 @@ material de divulgação.
 |---|---|---|---|
 | Aplicar a matriz do arquivo ou do workspace | S | **S** | todos |
 | Editor de matriz | S | **S** (por amostra, ou uma para todas) | FCS Express, OMIQ, CellEngine, Kaluza |
-| Autocompensação por single stains | S | N | FCS Express, OMIQ, FlowLogic, Floreada |
-| AutoSpill | S | N | Floreada, R |
+| Autocompensação por single stains | S | **S** (positivo × negativo; detector primário pelo brilho, com troca à mão; gate de scatter opcional) | FCS Express, OMIQ, FlowLogic, Floreada |
+| AutoSpill | S | **S** (conferido com o pacote em R) | Floreada, R |
 | Unmixing espectral | S | N | FCS Express, OMIQ |
 | Biexponencial | S | **S** (a do FlowJo, conferida) | FCS Express |
 | Logicle, hyperlog | S | **S** (logicle; hyperlog não) | Floreada (logicle), R |
@@ -260,6 +260,26 @@ E, no mesmo dia, os seis primeiros itens da lista seguinte: comparação com os 
 diferencial por cluster; Leiden e tamanho mínimo de cluster; pranchas guardadas com o projeto,
 mais de uma; limpeza pela linha de comando (`milc qc`, `--qc`) e o resumo dela no relatório.
 
+### Autocompensação (23 de novembro)
+
+No diálogo **Compensation…**, o botão **From controls…** calcula a matriz a partir de controles
+de uma cor: um FCS por fluorocromo e, se houver, um não marcado (reconhecido pelo nome). Cada
+controle recebe o detector em que é mais brilhante, sem repetir detector; dá para trocar na
+lista. Dois métodos: o do AutoSpill (Roca et al. 2021: regressão robusta de cada detector contra
+o primário, depois corrigida nos controles compensados até não sobrar inclinação) e o clássico
+(mediana dos positivos menos a dos negativos). O gate de scatter é opcional. A matriz aparece ao
+lado da que as amostras têm e vai para a tabela; dali se aplica a amostras escolhidas ou a todas,
+como uma matriz digitada — o aviso de concatenado velho, a matriz por amostra e o projeto seguem
+funcionando. Pela linha de comando: `milc autocomp PASTA --out matriz.csv`.
+
+Conferido (`docs/comparacao.md` §5): nos mesmos eventos, o nosso AutoSpill dá a matriz do pacote
+em R a 2e-5 nos controles simulados e a 3e-4 nos controles reais do flowCore (um FACSCalibur),
+com o mesmo número de iterações. Em simulação acha a matriz verdadeira a 0,04 ponto percentual; o
+clássico, a 0,3. Não conferido: controles de um citômetro moderno de vários lasers, esferas,
+espectral; os controles do artigo do AutoSpill (o FlowRepository exige conta); nenhuma matriz foi
+posta ao lado da do FlowJo ou do FACSDiva. Os seus 32 arquivos não têm controles de uma cor, então
+nada disso foi usado neles.
+
 ### A conferir, antes de qualquer item novo
 
 Coisas feitas que ainda dependem de um olhar de fora:
@@ -291,6 +311,9 @@ Coisas feitas que ainda dependem de um olhar de fora:
 - **A limpeza com a passada lenta, nos seus arquivos.** Agora ela tiraria 32,7% da `7Ctrl5` e
   22,8% da `14Case1`, e mais de um décimo de `14Case3` e `` 14Case4` ``. Os desvios foram medidos,
   mas só você sabe se essas aquisições tiveram problema: olhe os gráficos antes de aplicar.
+- **A autocompensação com controles de verdade.** Só foi rodada em controles simulados e nos
+  quatro do flowCore. No primeiro experimento com controles de uma cor, comparar a matriz com a
+  do FACSDiva ou do FlowJo; e conferir o detector que cada controle recebeu.
 - **Os gates automáticos** ficam mais largos que os seus em scatter (Cells 12 a 15% a mais) e
   não propõem nada para o Tcrb, que não tem vale.
 
@@ -329,8 +352,8 @@ pelo FlowKit sem diferença de eventos; **nunca aberto no FlowJo**).
 
 Prioritárias:
 
-1. **Autocompensação por single stains** (e AutoSpill): calcular a matriz a partir dos controles
-   de uma cor, em vez de só ler e editar a que veio do aparelho.
+1. ~~**Autocompensação por single stains** (e AutoSpill)~~ — feito: ver "Autocompensação"
+   abaixo.
 2. **Unmixing espectral**, para citômetros espectrais.
 3. **Limpeza: defeito moderado e curto.** Um desvio de 0,3 do espalhamento em 5% do arquivo
    continua invisível; e o limite de deriva (0,25) foi escolhido nestes 32 arquivos — falta uma

@@ -66,6 +66,13 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   **Compensation…** lists every sample with where its matrix comes from (file, workspace,
   edited, shared); type over any cell and apply it to the samples selected or to all, or go
   back to the original. The caption under the plot says which matrix is in use.
+- **From controls…** in the same dialog computes a spillover matrix from single-stain controls
+  (one FCS file per fluorochrome, and optionally an unstained one): each control is given the
+  detector it is brightest in, which you can change; the matrix is computed by AutoSpill's
+  method (robust regression, refined on the compensated controls until no spill is left) or the
+  classic one (positive against negative population), optionally inside a scatter gate, and
+  shown beside the samples' own. It goes into the table, to apply to the samples selected or to
+  all like a matrix typed by hand.
 - When the values under the gates change after the fact — another matrix, or the samples
   themselves batch-normalised — the tab says the gates were drawn on the old values until you
   press Reviewed, and a line above the tabs says the concatenated events are out of date until
@@ -280,6 +287,7 @@ python -m milc gates   DATA --wsp analysis.wsp --out gates.wsp   # or gates.xml:
 python -m milc concat  DATA --wsp analysis.wsp --out concat \
     --pattern '(?P<Day>\d+)(?P<Group>[A-Za-z]+)' --group-by Day,Group
 python -m milc analyze concat.npz --channels CD8,CD4,Foxp3 --umap --tsne --flowsom --out run
+python -m milc autocomp CONTROLS --gate --out spillover.csv   # a matrix from single stains
 ```
 
 `concat --dry-run` prints the sampling plan and writes nothing. `analyze` also takes any
@@ -298,6 +306,7 @@ as it is.
 milc/
   fcs.py            FCS 2.0 / 3.0 / 3.1, read and written with numpy alone
   compensation.py   spillover matrices, from the file or from the workspace
+  autocomp.py       a spillover matrix from single-stain controls: classic and AutoSpill
   transforms.py     linear, arcsinh, FlowJo's biexponential, Logicle; decade ticks
   gating.py         the gates — drawn, by time, by cluster — and the tree they form
   wsp.py            a FlowJo 10 workspace: files, matrices, transforms, gates
@@ -403,6 +412,14 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
   the two programs are as far from each other as each is from itself with another seed, and
   bring the reference samples equally close. Beyond the outermost quantiles they differ on
   purpose — CytoNorm continues the spline's end slope, this continues as a shift.
+- **Compensation from single-stain controls** gives the AutoSpill R package's matrix (0.2.0,
+  from GitHub) on the same events to 2e-5 on simulated controls and 3e-4 on the real
+  FACSCalibur controls flowCore ships, in as many iterations. On simulated controls with a
+  known matrix it is within 0.04 percentage points (the classic method within 0.3). AutoSpill's
+  own example controls could not be downloaded (FlowRepository needs an account), so nothing was
+  measured on a modern multi-laser instrument, on beads or on a spectral one, and no matrix was
+  set beside FlowJo's or FACSDiva's for the same controls. The data in this repository's tests
+  has no single-stain controls.
 - **Logicle** was set beside FlowUtils, not beside FlowJo's own display. No workspace here
   declares a logicle scale: reading one was tested on XML written by hand.
 - **Prism files** follow the layout of the R package `pzfx`, round-trip through this program's

@@ -15,6 +15,7 @@ packages below are needed only to run these scripts.
 | `phenograph_compare.py` | `milc.graphcluster.phenograph` | the authors' `PhenoGraph` (PyPI), with its Louvain and with Leiden |
 | `qc_compare.py` + `qc_peacoqc.R` | `milc.qc.check` | PeacoQC, flowAI |
 | `normalize_compare.py` + `normalize_cytonorm.R` | `milc.normalize.fit` / `apply` | CytoNorm (`saeyslab/CytoNorm`) |
+| `autocomp_compare.py` + `autocomp_autospill.R` | `milc.autocomp` | AutoSpill (`carlosproca/autospill`), `flowStats::spillover` |
 
 ## Installing
 
@@ -37,6 +38,13 @@ Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); options(repos = "https://cloud.r-p
 curl -sL https://github.com/saeyslab/CytoNorm/archive/refs/heads/master.tar.gz | tar xz -C $REF
 R CMD INSTALL --no-docs --no-build-vignettes -l $R_LIBS_USER $REF/CytoNorm-master
 
+# AutoSpill, from its author's repository, and flowStats for spillover()
+Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); options(repos = "https://cloud.r-project.org")
+  install.packages(c("deldir", "fields", "moments", "sp", "tripack"), lib = lib)
+  BiocManager::install("flowStats", lib = lib, ask = FALSE, update = FALSE)'
+curl -sL https://github.com/carlosproca/autospill/archive/refs/heads/master.tar.gz | tar xz -C $REF
+R CMD INSTALL --no-docs -l $R_LIBS_USER $REF/autospill-master
+
 # PhenoGraph, in a virtual environment that also sees the project's own dependencies
 python3 -m venv --system-site-packages $REF/venv
 $REF/venv/bin/pip install PhenoGraph
@@ -49,7 +57,8 @@ columns out when they are not installed.
 Versions of the run that is written up: R 4.6.1, Bioconductor 3.23, edgeR
 4.10.7, limma 3.68.5, diffcyt 1.32.1, flowCore 2.24.0, PeacoQC 1.22.0,
 flowAI 1.42.0, FlowSOM 2.20.0, CytoNorm 2.0.13 (commit 515a4e9),
-PhenoGraph 1.5.7 with leidenalg 0.12.0, Python 3.14.6.
+PhenoGraph 1.5.7 with leidenalg 0.12.0, Python 3.14.6; for the
+compensation, AutoSpill 0.2.0 (GitHub master), flowStats 4.24.0 and MASS 7.3.65.
 
 ## Running
 
@@ -64,6 +73,7 @@ python3 tests/reference/abundance_compare.py 100     # tables per setting
 $REF/venv/bin/python tests/reference/phenograph_compare.py
 python3 tests/reference/qc_compare.py
 python3 tests/reference/normalize_compare.py
+python3 tests/reference/autocomp_compare.py          # needs R_LIBS_USER, for flowCore's compdata
 ```
 
 On the day of the run, on a machine busy with other work, they took about
