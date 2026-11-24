@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The macOS half of a release, on the Mac: the CI builds the Windows and Linux
-# installers but not this one (a macOS minute there costs ten Linux ones).
+# The macOS half of a release, from the Mac, for when the CI cannot build it
+# (it does, on a tag or on request: this is the way round it).
 #
 #     bash packaging/release_mac.sh            # tests and disk image, in dist/
 #     bash packaging/release_mac.sh v1.0.0     # the same, then attached to the

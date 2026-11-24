@@ -1,7 +1,7 @@
 # Acquisitions and everything derived from them: never committed.
 # Raw data is large, and unpublished results do not belong in a history
 # that may one day be public — removing them afterwards does not remove them.
-Data/
+Data
 data/
 exemplos/
 *.fcs
@@ -31,6 +31,7 @@ dist/
 # macOS
 .DS_Store
 
-# Local notes about the data
+# Local notes about the data, and the real names of the samples
 NOTES.local.md
+tests/real_names.json
 .claude/

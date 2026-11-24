@@ -176,7 +176,7 @@ def main() -> None:
     rows = []
     for d, s in sorted({(v["drift"], v["shift"]) for v in plain}):
         these = [v for v in plain if (v["drift"], v["shift"]) == (d, s)]
-        sel = {v["file"]: v["removed"] / v["n"] for v in these}
+        sel = {common.neutral(v["file"]): v["removed"] / v["n"] for v in these}
         removed = sum(v["removed"] for v in these)
         rows.append([d, s, 100 * removed / total, sum(x >= 0.01 for x in sel.values()),
                      sum(x >= 0.05 for x in sel.values()), sum(x >= 0.2 for x in sel.values())]

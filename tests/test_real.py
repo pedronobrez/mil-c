@@ -9,6 +9,7 @@ at most 3 events on the final population. The tolerances below are that
 measurement with a margin, not a target.
 """
 
+import json
 import os
 
 import pytest
@@ -17,7 +18,24 @@ from milc.sample import Sample
 from milc.wsp import read_wsp
 
 DATA = os.path.join(os.path.dirname(__file__), "..", "Data")
-WSP = os.path.join(DATA, "workspace.wsp")
+
+# The experiment is unpublished, and this repository is public: its samples
+# are called by neutral names here (`3Case2`, `14Ctrl4`; the FlowJo files
+# `workspace`). `real_names.json` beside this file, never committed, says
+# what each neutral word is in the names of the files:
+#     {"Case": "...", "Ctrl": "...", "workspace": "..."}
+_NAMES = os.path.join(os.path.dirname(__file__), "real_names.json")
+_WORDS = json.load(open(_NAMES, encoding="utf-8")) if os.path.exists(_NAMES) else {}
+
+
+def real(name: str) -> str:
+    """A name as written here, as the files on disk have it."""
+    for neutral, word in _WORDS.items():
+        name = name.replace(neutral, word)
+    return name
+
+
+WSP = os.path.join(DATA, real("workspace") + ".wsp")
 TCRB = "Cells/Single Cells/Single Cells/Live/CD45/Tcrb"
 
 pytestmark = [pytest.mark.real,
@@ -32,7 +50,7 @@ def workspace():
 def test_workspace_structure(workspace):
     gated = [s for s in workspace.samples if s.compensation is not None]
     assert len(gated) == 12
-    s = workspace.sample("3Case2.fcs")
+    s = workspace.sample(real("3Case2.fcs"))
     assert [n.path for n in s.gates.leaves()] == [TCRB]
     assert s.gates.find(TCRB).reference_count == 638
     # the matrix is the one edited in FlowJo, not the file's own
@@ -74,7 +92,7 @@ import numpy as np
 from milc.dataset import Dataset
 from milc.transforms import Biex
 
-RUNS = os.path.join(DATA, "workspace")
+RUNS = os.path.join(DATA, real("workspace"))
 FIVE = ["FITC-A", "PE-A", "APC-A", "BV421-A", "BV510-A"]
 CASES = [("concat_pedro_2_1.fcs", "EF93", "OSQG"),
          ("concat_UMAP_group_1.fcs", "G7WJ", "IQGK")]
@@ -134,8 +152,9 @@ def test_files_outside_the_workspace_get_the_shared_gates(workspace):
     usable = [e for e in s.entries if s.available(e)]
     assert len(usable) == 32 and sum(e.borrowed for e in usable) == 20
     by_name = {e.name: e for e in s.entries}
-    assert s.count(by_name["3Ctrl1"]) == 109 and s.count(by_name["3Ctrl2"]) == 175
-    assert sorted(map(sorted, s.repeats())) == [["14Case4", "14Case4`"], ["7Case3", "7Case3`"]]
+    assert s.count(by_name[real("3Ctrl1")]) == 109 and s.count(by_name[real("3Ctrl2")]) == 175
+    assert sorted(map(sorted, s.repeats())) == sorted(
+        [sorted(map(real, pair)) for pair in (["14Case4", "14Case4`"], ["7Case3", "7Case3`"])])
 
     s.set_extend_gates(False)
     assert sum(s.available(e) for e in s.entries) == 12

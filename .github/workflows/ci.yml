@@ -1,21 +1,17 @@
 name: CI
 
 # MIL-C is developed on macOS. Everything in it is platform-neutral Python,
-# so the suite runs on Linux for every push, and on Windows where a mistake
-# would otherwise reach a release: a pull request, a tag, a request.
+# so the suite runs on Linux for every push, and on macOS and Windows where a
+# mistake would otherwise reach a release: a pull request, a tag, a request.
 #
-# macOS is not here. A macOS minute costs ten times a Linux one, and the Mac
-# it is developed on runs the suite and builds the disk image itself:
-#     bash packaging/release_mac.sh [TAG]
-# builds, tests and attaches the .dmg (see that script).
+# The installers are built here because there is no other way to build the
+# Windows one: a bundle is the interpreter and every compiled extension for
+# the machine that built it, and nothing cross-compiles that.
 #
-# The Windows and Linux installers are built here because there is no other
-# way to build the Windows one: a bundle is the interpreter and every compiled
-# extension for the machine that built it, and nothing cross-compiles that.
-#
-#   a tag `v*`            tests on Linux and Windows, builds their installers,
+#   a tag `v*`            tests on three systems, builds the installers,
 #                         creates the release and attaches them
-#   Run workflow (manual) the same, into a pre-release `build-N`
+#   Run workflow (manual) the same, without the release: the installers are
+#                         left as artefacts of the run
 
 on:
   push:
@@ -38,9 +34,9 @@ jobs:
     strategy:
       fail-fast: false
       # the matrix is what varies rather than a condition on the job, because
-      # a job's own `if` cannot see the matrix context. In a private
-      # repository a Windows minute is billed as two Linux ones (and a macOS
-      # minute as ten, which is why it is not here).
+      # a job's own `if` cannot see the matrix context. The repository is
+      # public, so none of it is billed; the matrix still keeps macOS and
+      # Windows for what can reach a release, which is what they are for.
       matrix:
         include: >-
           ${{ fromJSON(
@@ -49,6 +45,7 @@ jobs:
              || startsWith(github.ref, 'refs/tags/'))
             && '[{"os":"ubuntu-latest","python":"3.13"},
                  {"os":"ubuntu-latest","python":"3.10"},
+                 {"os":"macos-latest","python":"3.13"},
                  {"os":"windows-latest","python":"3.13"}]'
             || '[{"os":"ubuntu-latest","python":"3.13"},
                  {"os":"ubuntu-latest","python":"3.10"}]'
@@ -99,9 +96,12 @@ jobs:
           fi
 
   package:
-    # Nothing is signed: Windows SmartScreen will warn until there is a
-    # certificate. The macOS disk image is built on the Mac, not here
-    # (packaging/release_mac.sh).
+    # Nothing is signed. On macOS that costs nothing until the file travels:
+    # Gatekeeper reacts to the quarantine attribute a download attaches. On
+    # Windows SmartScreen will warn until there is a certificate.
+    #
+    # Apple Silicon only. numba, which FlowSOM and UMAP are compiled with,
+    # no longer publishes wheels for Intel Macs.
     #
     # Linux is built on the oldest Ubuntu offered: a bundle takes the C
     # library from the machine it runs on, and one built against a newer
@@ -117,7 +117,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        os: [windows-latest, macos-latest, ubuntu-22.04]
 
     steps:
       - uses: actions/checkout@v4
@@ -145,7 +145,13 @@ jobs:
           python -m pip install -e .
           python -m pip install pyinstaller
 
+      # make_dmg.sh builds the application, asks it to test itself and wraps it
+      - name: Application and disk image
+        if: runner.os == 'macOS'
+        run: bash packaging/make_dmg.sh "$PWD/dist"
+
       - name: Application
+        if: runner.os != 'macOS'
         run: python -m PyInstaller packaging/milc.spec --noconfirm
 
       - name: The application works
@@ -236,8 +242,7 @@ jobs:
       # allowed to fail: artefact storage is one quota for the whole account,
       # and the first build of this repository found it full of another's.
       # The release below is the copy that counts.
-      # kept three days: storage is billed by the hour, and the release
-      # below holds the copy that lasts
+      # kept three days: the release below holds the copy that lasts
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:

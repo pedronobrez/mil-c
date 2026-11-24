@@ -45,6 +45,21 @@ def rscript(script: str, *args: str, timeout: int = 3600) -> str:
     return done.stdout
 
 
+# The experiment is unpublished and this repository is public: its groups
+# are called `Case` and `Ctrl` here. `tests/real_names.json`, never committed,
+# says what they are called in the file names (see tests/test_real.py).
+_NAMES = os.path.join(HERE, "..", "real_names.json")
+_WORDS = (__import__("json").load(open(_NAMES, encoding="utf-8"))
+          if os.path.exists(_NAMES) else {})
+
+
+def neutral(name: str) -> str:
+    """A name from the files, as this repository writes it."""
+    for word, real in _WORDS.items():
+        name = name.replace(real, word)
+    return name
+
+
 def has_real() -> bool:
     return bool(DATA) and os.path.isdir(DATA)
 
@@ -61,6 +76,9 @@ def real_session():
         s.set_workspace(os.path.join(DATA, wsp[0]))
         s.set_extend_gates(True)
     s.annotate(PATTERN)
+    for e in s.entries:
+        if "Group" in e.meta:
+            e.meta["Group"] = neutral(e.meta["Group"])
     entries = [e for e in s.entries if e.gated and not e.problem and "`" not in e.name]
     return s, entries
 

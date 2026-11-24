@@ -406,13 +406,13 @@ bash packaging/make_dmg.sh             # macOS: builds MIL-C.app, tests it, wrap
 bash packaging/release_mac.sh v1.0.0   # the suite first, then the image, attached to v1.0.0
 ```
 
-The macOS image is built on a Mac, not on GitHub: a macOS minute there is billed as ten Linux
-ones. The Windows and Linux ones cannot be built on a Mac: a bundle is the interpreter and
-every compiled extension for the machine that built it. `.github/workflows/ci.yml` builds those
-two on GitHub's machines (`packaging/make_linux.sh` wraps the Linux one, and the build installs
-the package and the archive before it lets them out) — on a tag `v*`, which also creates the
-release, or on request from the Actions tab. For a release: push the tag, wait for the CI, then
-run `release_mac.sh` with the tag; it adds the image and makes `SHA256SUMS` again over all five.
+The Windows and Linux ones cannot be built on a Mac: a bundle is the interpreter and every
+compiled extension for the machine that built it. `.github/workflows/ci.yml` builds all three on
+GitHub's machines (`packaging/make_linux.sh` wraps the Linux one, and the build installs the
+package and the archive before it lets them out) — on a tag `v*`, which also creates the
+release, or on request from the Actions tab. `release_mac.sh` does the macOS part from a Mac
+instead, should the CI not be there: the suite, the image, and the image attached to a release
+with `SHA256SUMS` made again over all five.
 Every build is asked to run the whole route on invented data (`MIL-C selftest`) and to open its
 window before it is wrapped.
 
