@@ -16,6 +16,7 @@ instalar os pacotes e rodar). Eles não fazem parte da suíte de testes.
 | `graphcluster.phenograph` | PhenoGraph 1.5.7 (PyPI) | Mesmo número de clusters, com diferença de um ou dois, e partições tão parecidas com as do pacote quanto duas corridas do pacote entre si (ARI 0,71 nos eventos reais; 0,73 pacote contra pacote). |
 | `qc.check` | PeacoQC 1.22.0, flowAI 1.42.0 | Defeitos nítidos (degrau, entupimento) são achados igual ou melhor. Desvios lentos e moderados o PeacoQC achava e o nosso não (1,4% dos eventos reais removidos contra 5,1%): `qc.check` ganhou uma passada lenta e, medido de novo, acha-os no nível do PeacoQC (5,25% contra 5,13% dos eventos reais; 76% contra 74% de uma deriva injetada), sem as remoções dele em arquivos cujas medianas não se movem. |
 | `normalize.fit` / `apply` | CytoNorm 2.0.13 (GitHub) | Sem clusters é a mesma curva (diferença média de 1e-5 do eixo). Com clusters, os dois programas diferem entre si tanto quanto duas sementes de um mesmo. Fora da faixa das referências o nosso é deliberadamente mais contido. |
+| `autocomp.autospill` / `classic` | AutoSpill 0.2.0 (GitHub), flowStats 4.24.0 | Nos mesmos eventos o nosso AutoSpill dá a matriz do pacote a 2e-5 (simulado) e 3e-4 (controles reais do flowCore), com o mesmo número de iterações. Em simulação acha a matriz verdadeira a 0,04 ponto percentual; o clássico, a 0,3. Os exemplos do próprio AutoSpill (FlowRepository) não puderam ser baixados. |
 
 Versões: R 4.6.1, Bioconductor 3.23, limma 3.68.5, flowCore 2.24.0, FlowSOM 2.20.0, leidenalg
 0.12.0, Python 3.14.6, em macOS arm64. Todos os pacotes instalaram; nenhuma comparação foi
@@ -700,6 +701,112 @@ módulo, que agora cita estes números.
 
 ---
 
+## 5. Autocompensação por controles de uma cor (`milc/autocomp.py`), o AutoSpill e o flowStats
+
+Medido em 23 de novembro de 2026, com AutoSpill 0.2.0 (`carlosproca/autospill`, instalado do
+GitHub com as dependências do CRAN), flowStats 4.24.0, flowCore 2.24.0 e MASS 7.3.65. Script:
+`tests/reference/autocomp_compare.py` com `autocomp_autospill.R`.
+
+### O que foi comparado
+
+- **AutoSpill**: as duas funções do pacote, `get.marker.spillover` (regressão robusta `MASS::rlm`
+  de cada detector contra o primário, nos eventos sem compensar) e `refine.spillover` (compensa,
+  mede o que sobrou, corrige, repete; primeiro na escala linear até nenhuma inclinação passar de
+  1e-2, depois na biexponencial até 1e-4), com os parâmetros de `get.autospill.param("minimal")`.
+  Rodadas duas vezes: em todos os eventos (os algoritmos sozinhos, os mesmos eventos dos dois
+  lados) e no gate de scatter do próprio AutoSpill (por tesselação), cujas linhas o R escreve e o
+  Python lê, para rodar o nosso nos mesmos eventos.
+- **posnegpop** do AutoSpill (`get.marker.spillover.posnegpop`): mediana dos positivos menos a
+  dos negativos do próprio controle — o que o nosso `classic` faz.
+- **`flowStats::spillover`** (`method = "median"`, o não marcado como base): mediana do arquivo
+  marcado inteiro menos a do não marcado. É o `spillover()` que estava no flowCore e passou para
+  o flowStats; o flowCore 2.24 só lê a matriz do arquivo.
+
+### Dados
+
+- **sim6**: seis detectores, matriz conhecida, 20.000 eventos por controle, 60% positivos,
+  autofluorescência, ruído de fótons e eletrônico, 15% de debris e 1% de eventos brilhantes
+  soltos, e um controle não marcado (`autocomp.simulate`).
+- **sim12**: doze detectores, matriz mais densa (até 35% entre vizinhos), 15.000 eventos, limpo.
+- **compdata**: os controles reais que o flowCore traz (`extdata/compdata`, um FACSCalibur,
+  quatro detectores FL1-H a FL4-H, amplificação logarítmica de 4 décadas, 7.500 a 10.000
+  eventos, e um tubo não marcado). Lidos pelo MIL-C, que aplica o `$PnE`, e reescritos como
+  valores lineares, para que os dois programas leiam os mesmos números (o AutoSpill lê com
+  `transformation = NULL` e não linearizaria).
+
+Não houve como usar os controles do artigo do AutoSpill (FlowRepository FR-FCM-Z2SS, Z2ST, Z2SV):
+a página lista os arquivos, mas baixar exige conta, e a API do FlowRepository recusa clientes não
+cadastrados. Nenhuma conta foi criada.
+
+### Concordância medida
+
+Maior diferença entre duas matrizes, fora da diagonal, em fração (0,001 = 0,1 ponto percentual):
+
+| | sim6 | sim12 | compdata |
+|---|---|---|---|
+| MIL-C AutoSpill × AutoSpill refinado, todos os eventos | 1,9e-5 | 5,5e-6 | 2,7e-4 |
+| MIL-C AutoSpill × AutoSpill refinado, gate do AutoSpill | 3,0e-6 | 5,0e-6 | 2,1e-4 |
+| MIL-C clássico × posnegpop do AutoSpill | 8,7e-4 | 1,3e-3 | 0,035 |
+| MIL-C clássico (não marcado como negativo) × flowStats | 0,058 | 2,9e-3 | 0,017 |
+| primeiro passo × refinado, ambos do AutoSpill | 6,7e-4 | 3,9e-4 | 3,2e-3 |
+
+O número de iterações é o mesmo dos dois lados em todas as seis rodadas (5, 3, 3, 4, 5, 5). Nos
+dados do FACSCalibur a diferença maior (2,7e-4) vem, até onde se pode ver, dos valores
+quantizados da amplificação logarítmica: muitos eventos empatados mudam a mediana dos resíduos
+que a regressão de Huber usa como escala.
+
+Distância à matriz verdadeira (só nas simuladas):
+
+| | sim6 | sim12 |
+|---|---|---|
+| MIL-C AutoSpill, todos os eventos | 0,0026 | 0,00037 |
+| MIL-C AutoSpill, gate de scatter do MIL-C | 0,00017 | 0,00037 |
+| AutoSpill refinado, todos os eventos | 0,0026 | 0,00037 |
+| AutoSpill refinado, gate do AutoSpill | 0,00024 | 0,00036 |
+| MIL-C clássico, todos os eventos | 0,0034 | 0,0013 |
+| MIL-C clássico, gate do MIL-C | 0,0012 | 0,0012 |
+| posnegpop do AutoSpill | 0,0030 | 0,0012 |
+| flowStats | 0,058 | 0,0020 |
+
+Em `tests/test_autocomp.py`, com outra simulação de seis detectores e sementes 0 a 7, o AutoSpill
+ficou a no máximo 0,0004 da verdade e o clássico a 0,0026; o teste pede 0,001 e 0,005. O
+refinamento reduz a maior inclinação que sobra nos controles compensados de 3e-4 (primeiro
+passo) para 3e-5 a 1,7e-4.
+
+Tempo, na mesma máquina e com ela ocupada: o nosso levou de 0,1 a 4 s por conjunto; o AutoSpill,
+de 1 a 15 s, mais 3 a 16 s do gate por tesselação.
+
+### Onde diferem e por quê
+
+- **O flowStats em sim6 (5,8 pontos de erro)**: ele toma a mediana do arquivo inteiro. Com 40% de
+  células negativas e 15% de debris no tubo, a mediana não é a dos positivos. É o desenho do
+  método — feito para tubos quase todos positivos, como esferas —, não um defeito; no sim12, sem
+  debris, fica a 0,2 ponto.
+- **Clássico × posnegpop**: os dois tomam positivos e negativos do próprio controle, mas acham o
+  vale de forma um pouco diferente (o nosso: duas médias e o mínimo de um histograma suavizado;
+  o deles: `kmeans` e o mínimo de `density`). Nas simuladas a diferença é de 0,1 ponto. No
+  compdata chega a 3,5 pontos na linha do FL3, cujo controle é fraco (mediana 63 contra 4 do não
+  marcado): positivos e negativos se sobrepõem e a posição do corte pesa.
+- **Clássico × AutoSpill no compdata**: o FL3 no FL4 sai 0,12 pelo AutoSpill e 0,15 a 0,23 pelo
+  clássico, conforme o negativo (do próprio tubo ou o não marcado). Sem matriz verdadeira não há
+  como dizer qual está certo; o critério do AutoSpill (inclinação que sobra) favorece o próprio
+  AutoSpill por construção, e por isso não foi usado como juiz aqui.
+- **O gate de scatter**: com 15% de debris (sim6) o gate muda tudo — o AutoSpill vai de 0,26 a
+  0,02 ponto de erro. Com o nosso gate (a elipse robusta de `autogate.gaussian`, 95%) ou com o
+  do AutoSpill (tesselação), as duas implementações ficam a menos de 0,03 ponto da verdade.
+
+### O que não foi conferido
+
+- Controles de citômetro espectral ou com mais de 12 detectores; controles em esferas.
+- A fase biexponencial usa a biexponencial padrão do AutoSpill (a mesma do MIL-C) para todos os
+  detectores; o AutoSpill aceita parâmetros por detector num CSV, que aqui não se lê.
+- O controle de autofluorescência do AutoSpill (antígeno "AutoF") e o gate por controle em CSV
+  não foram reproduzidos.
+- Nenhuma matriz calculada aqui foi posta ao lado da do FlowJo ou do FACSDiva para os mesmos
+  controles.
+
+---
+
 ## O que não foi feito
 
 - O Rphenograph não foi instalado: o pacote Python dos autores funcionou e era o preferido.
@@ -707,5 +814,6 @@ módulo, que agora cita estes números.
   correspondente no nosso código e ficou fora.
 - A normalização não foi comparada com arquivos FCS brutos e `transformList` do CytoNorm: os
   eventos foram entregues já transformados, para comparar a normalização e não a transformação.
+- Os exemplos de controles do artigo do AutoSpill não foram obtidos (FlowRepository exige conta).
 - Os tempos de execução foram anotados com a máquina ocupada por outros processos e não servem
   como medida de desempenho.
