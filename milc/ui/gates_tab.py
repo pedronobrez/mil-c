@@ -417,11 +417,14 @@ class GatesTab(QtWidgets.QWidget):
             "Ticked, a gate drawn, moved or deleted on this sample is drawn, moved or "
             "deleted on all of them, as a gate on a FlowJo group is. Unticked, only here.")
         tools = QtWidgets.QGridLayout()
+        # the widest names in one column, so that the three columns are no
+        # wider together than they must be: on Windows, a few pixels here are
+        # the window's
         tools.addWidget(self.rect_button, 0, 0)
         tools.addWidget(self.poly_button, 0, 1)
         tools.addWidget(self.lasso_button, 0, 2)
-        tools.addWidget(self.ellipse_button, 1, 0)
-        tools.addWidget(self.quad_button, 1, 1)
+        tools.addWidget(self.quad_button, 1, 0)
+        tools.addWidget(self.ellipse_button, 1, 1)
         tools.addWidget(self.auto_button, 1, 2)
         tools.addWidget(self.combine_button, 2, 0)
         tools.addWidget(self.rename_button, 2, 1)
