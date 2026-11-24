@@ -114,7 +114,10 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   control if one is chosen; % in each generation and FlowJo's Division, Proliferation,
   Expansion and Replication Index and % Divided, each with a standard error. *Cell cycle* (PI,
   DAPI, Hoechst, linear): G1 and G2 as Gaussians and S by Watson's pragmatic method or
-  Dean-Jett-Fox. *Kinetics* (calcium flux): a statistic of a parameter, or of the ratio of two,
+  Dean-Jett-Fox; with Dean-Jett-Fox, each of these can be switched on: a second (aneuploid)
+  population with its own G1, S, G2, DNA index and CV, debris (exponential, or nuclei cut once
+  as in ModFit) and aggregates of two and three cells worked out from the single cells; the
+  table gives each share with a standard error and the reduced chi-square. *Kinetics* (calcium flux): a statistic of a parameter, or of the ratio of two,
   in slices of time; baseline, peak, time to peak, slope and area under the curve.
 - **File ▸ Export gates…** writes the gates out: a FlowJo workspace (every sample with its
   file, compensation, scales and gating tree) or Gating-ML 2.0, the standard FlowKit,
@@ -213,8 +216,11 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   propose; where a population has no valley beside it (Tcrb, in the test data) they propose
   nothing, and that gate still needs judgement or a control.
 - **The models are simple ones.** Proliferation takes the generations to be exactly a halving
-  apart; the cell cycle has no aneuploid population, no debris or doublet model and no Fox
-  peak for a synchronised S.
+  apart; the cell cycle has no Fox peak for a synchronised S, a second population only with
+  Dean-Jett-Fox, and its aggregates do not grow likelier with the size of the cells as
+  ModFit's can. Where a second population's G1 lies on the first's S (DNA index 1.25, or a
+  hypodiploid 0.8), the histogram cannot say whose S a cell is in: their phases move by up to
+  13 points in simulation.
 - **Tests between groups stop short of mixed models.** One value per sample, compared by group,
   paired or not; counts by a negative-binomial model written here, not by edgeR itself.
 - **Its maps are not FlowJo's maps point for point.** See below.
@@ -405,8 +411,15 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
   the same events from them.
 - **Proliferation** agrees with R's flowFit on its own CFSE and CellTrace Violet data (each
   generation within 0.5 points); on its Cell Proliferation Dye sample the two differ by up to
-  6.5 points. **Cell cycle** and **kinetics** were checked on simulations only, and neither
-  was set beside FlowJo or ModFit. The test data has no proliferation dye and no DNA stain.
+  6.5 points. **Cell cycle** was checked on 223 public BrdU/PI files (four ovarian cancer
+  lines, Dryad doi:10.5061/dryad.sn02v6x89): fitted on PI alone, aggregates found on ungated
+  events match what a PI-A/PI-H singlet gate drops (24.8% against 25.6%, r = 0.90) and leave
+  the phases of the singlets; on the 39 control samples Dean-Jett-Fox gives 6.6 points less S
+  than the BrdU+ cells (SD 5.8) — BrdU also counts cells that left S during the pulse — and
+  Watson 3.9 points more (SD 13.5: it misreads skewed G2 peaks). **Kinetics** agrees with the
+  same definitions written again in R to 1e-13, which checks the arithmetic, not a real
+  calcium flux (none public could be reached). Neither was set beside FlowJo or ModFit, which
+  are not available here. The test data has no proliferation dye and no DNA stain.
 - **Batch normalisation**: without clusters it is CytoNorm 2.0's curve inside the range the
   references cover (apart by a thousandth of the correction on the real data). With clusters
   the two programs are as far from each other as each is from itself with another seed, and

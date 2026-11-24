@@ -104,9 +104,9 @@ material de divulgação.
 
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
-| Ciclo celular | S | N | FCS Express, Kaluza, Floreada |
-| Proliferação | S | N | FCS Express |
-| Cinética / fluxo de cálcio | S | N | FCS Express, Floreada |
+| Ciclo celular | S | **S** (Watson, Dean-Jett-Fox; aneuploide, debris e agregados) | FCS Express, Kaluza, Floreada, ModFit |
+| Proliferação | S | **S** | FCS Express |
+| Cinética / fluxo de cálcio | S | **S** | FCS Express, Floreada |
 | Comparação de populações (Overton, K-S, χ²) | S | N | — |
 | Ensaios com beads | P (plugin) | N | FlowLogic |
 
@@ -326,7 +326,12 @@ pacote concorda consigo mesmo, e a divisão excessiva na resolução 1 é do mé
 também dá 15 clusters nos 3.488 eventos); a normalização sem clusters é a curva do CytoNorm; e
 a limpeza acertava degraus e entupimentos, mas deixava passar derivas moderadas e duradouras que
 o PeacoQC pega (na `7Ctrl5` ele tira 19% e o MIL-C tirava 1%) — o que a passada lenta, feita em
-seguida, corrigiu.
+seguida, corrigiu. O ciclo celular foi posto ao lado do BrdU das mesmas células em 223 arquivos
+públicos de BrdU/PI (`docs/comparacao.md` §5): os agregados achados sem gate de singletos batem com o que o gate tira,
+e o Dean-Jett-Fox dá uns 6 pontos de S a menos que as células BrdU+ nos controles, sendo o BrdU
+mais largo por natureza; o Watson erra pouco na média e muito em cada arquivo. A cinética bate
+com as mesmas contas refeitas em R até 1e-13 — o que confere a aritmética, não um fluxo de
+cálcio de verdade, que não achei público.
 
 ### Próximas implementações, na ordem em que eu faria
 
@@ -349,6 +354,16 @@ PeacoQC 5,1%); quadrante de braços móveis e gates automáticos (botão Auto…
 ciclo celular e cinética (botão Model…; proliferação conferida com o flowFit, os outros dois só
 em simulação); exportação dos gates como workspace do FlowJo e Gating-ML 2.0 (relido aqui e
 pelo FlowKit sem diferença de eventos; **nunca aberto no FlowJo**).
+
+Feito depois, no mesmo dia: o ciclo celular ganhou, no Dean-Jett-Fox, uma segunda população
+(aneuploide, com G1, S e G2 próprios, índice de DNA e CV), debris (exponencial ou de núcleos
+cortados uma vez, como no ModFit) e agregados de duas e três células tirados das próprias
+células, cada um ligado ou desligado no diálogo, com a parte de cada um, o erro-padrão e o
+qui-quadrado reduzido na tabela. Em simulação, debris e agregados voltam a menos de 1 ponto e
+uma população de índice 1,5 a uns 3; onde a segunda população cai sobre o S da primeira
+(índice 1,25 ou 0,8) as fases de cada uma andam até 13 pontos. Em dados reais, ver acima e
+`docs/comparacao.md` §5. **O FlowJo e o ModFit não estão disponíveis aqui; nada foi posto ao
+lado deles.**
 
 Prioritárias:
 
@@ -373,8 +388,9 @@ Prioritárias:
    e 2.259 na `3Case1`) e depois (1.717 e 1.597). Não há desfazer para gates: não foi feito.
 5. **Quadrantes "curly" do FlowJo**: o workspace não guarda a curva; seria preciso reproduzir a
    que o FlowJo desenha.
-6. **Modelos**: ciclo celular com população aneuploide, debris e dobletes; conferir ciclo e
-   cinética com um arquivo real e com o FlowJo ou o ModFit.
+6. **Modelos**: pôr o ciclo celular ao lado do ModFit ou do FlowJo com os mesmos arquivos (os
+   de BrdU/PI do §5 de `docs/comparacao.md` servem); a cinética num fluxo de cálcio real; o pico
+   de Fox para um S sincronizado; agregados mais prováveis entre células maiores.
 
 Em seguida:
 

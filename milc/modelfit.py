@@ -159,11 +159,22 @@ def _draw_fit(fig, c: FitContent, style: figures.FigureStyle) -> None:
     if c.xticks:
         ax.set_xticks([p for p, _ in c.xticks], [figures._tick_text(t) for _, t in c.xticks])
     ax.set_xlim(edges[0], edges[-1])
-    ax.set_ylim(0, max(float(c.counts.max(initial=1.0)), float(c.model.max(initial=1.0))) * 1.06)
+    top = max(float(c.counts.max(initial=1.0)), float(c.model.max(initial=1.0))) * 1.06
     ax.set_xlabel(c.xlabel if style.xlabel is None else style.xlabel)
     ax.set_ylabel(c.ylabel if style.ylabel is None else style.ylabel)
     if c.summary:
-        ax.text(0.02, 0.98, c.summary, transform=ax.transAxes, va="top", ha="left",
-                fontsize=style.font_size - 1, linespacing=1.3)
+        # in the upper corner the data leave emptier, the axis raised until
+        # the lines clear the data under them
+        third = max(c.x.size * 2 // 5, 1)
+        tallest = np.maximum(c.counts, c.model)
+        left, right = float(tallest[:third].max()), float(tallest[-third:].max())
+        corner = 0.02 if left <= right else 0.98
+        lines = c.summary.count("\n") + 1
+        room = 1.0 - 0.02 - lines * 0.062 * (style.font_size - 1) / 9
+        top = max(top, min(left, right) * 1.04 / max(room, 0.3))
+        ax.text(corner, 0.98, c.summary, transform=ax.transAxes, va="top",
+                ha="left" if corner < 0.5 else "right", fontsize=style.font_size - 1,
+                linespacing=1.3)
+    ax.set_ylim(0, top)
     figures._frame(ax, style)
     figures._legend(fig, [ax], handles, style, "")

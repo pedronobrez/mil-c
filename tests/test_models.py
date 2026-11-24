@@ -226,6 +226,110 @@ def test_cell_cycle_table_and_figure(tmp_path):
         assert ">G1 · " in svg and ">PI<" in svg and name in svg and name in cellcycle.summary(f)
 
 
+#: simulated mixtures (30,000 events) and how far each number may be from
+#: the truth, in points, over four acquisitions at a CV of 3 and of 5%.
+#: Measured: at most 2.7 (phases of the diploid), 3 (share aneuploid),
+#: 4.3 (its phases), 0.7 (debris), 1 (aggregates), 5.2 / 6.9 / 10.5 with
+#: all at once at a CV of 5% — the aneuploid G1 then sits on the diploid S
+_E = cellcycle.Extras
+MIXTURES = {
+    "aneuploid": ({"aneuploid": (0.4, 1.5, (50, 30, 20), 0.035)}, _E(aneuploid=True),
+                  {"phases": 3.5, "aneuploid": (40, 4), "index": (1.5, 0.02),
+                   "aneuploid_phases": ((50, 30, 20), 6)}),
+    "single cut": ({"debris": 0.25}, _E(debris=cellcycle.SINGLE_CUT),
+                   {"phases": 2, "debris": (25, 1)}),
+    "exponential": ({"debris": 0.25, "debris_kind": cellcycle.EXPONENTIAL},
+                    _E(debris=cellcycle.EXPONENTIAL), {"phases": 2, "debris": (25, 1)}),
+    "aggregates": ({"aggregates": 0.15}, _E(aggregates=True),
+                   {"phases": 2, "aggregates": (15, 1)}),
+    "everything": ({"aneuploid": (0.3, 1.4, (55, 30, 15), 0.04), "debris": 0.15,
+                    "aggregates": 0.08},
+                   _E(aneuploid=True, debris=cellcycle.SINGLE_CUT, aggregates=True),
+                   {"phases": 7, "aneuploid": (30, 8), "index": (1.4, 0.03),
+                    "aneuploid_phases": ((55, 30, 15), 12), "debris": (15, 1.5),
+                    "aggregates": (8, 1.5)}),
+}
+
+
+@pytest.mark.parametrize("case", list(MIXTURES))
+def test_a_second_population_debris_and_aggregates_are_recovered(case):
+    sim, extras, within = MIXTURES[case]
+    for cv in (0.03, 0.05):
+        for seed in range(2):
+            dna = cellcycle.simulate_sample(30000, cv=cv, rng=np.random.default_rng(seed), **sim)
+            f = cellcycle.fit(dna, cellcycle.DJF, extras=extras)
+            assert np.abs(f.percent - [60, 25, 15]).max() < within["phases"], (cv, f.percent)
+            assert f.g1_mean == pytest.approx(50000, rel=0.01) and 0.6 < f.chi2 < 1.6
+            assert f.names[:3] == cellcycle.PHASES and len(f.names) == len(f.components)
+            assert np.allclose(f.model, f.components.sum(axis=0))
+            for name, value in (("aneuploid", f.aneuploid), ("debris", f.debris),
+                                ("aggregates", f.aggregates), ("index", f.dna_index)):
+                if name in within:
+                    truth, tolerance = within[name]
+                    assert value == pytest.approx(truth, abs=tolerance), (name, cv, value)
+                else:
+                    assert np.isnan(value)
+            if "aneuploid_phases" in within:
+                truth, tolerance = within["aneuploid_phases"]
+                assert np.abs(f.aneuploid_percent - truth).max() < tolerance
+                assert f.aneuploid_cv == pytest.approx(100 * sim["aneuploid"][3], abs=1.0)
+                assert (f.aneuploid_percent_se > 0).all() and 0 < f.dna_index_se < 0.01
+            row = dict(zip(cellcycle.columns(extras), cellcycle.row(f), strict=True))
+            assert row["% S"] == f.percent[1]
+            # left out, what they stand for lands on the phases, and the chi-square says so
+            if seed == 0 and cv == 0.03:
+                plain = cellcycle.fit(dna, cellcycle.DJF)
+                assert plain.chi2 > 1.5 * f.chi2
+
+
+def test_what_the_extra_components_say_of_themselves(tmp_path):
+    rng = np.random.default_rng(5)
+    # aggregates lie where G2 is: without them G2 is overstated, as on real data
+    dna = cellcycle.simulate_sample(30000, cv=0.04, rng=rng, aggregates=0.2)
+    plain, both = (cellcycle.fit(dna, cellcycle.DJF, extras=e)
+                   for e in (None, cellcycle.Extras(aggregates=True)))
+    assert plain.percent[2] > 18 and abs(both.percent[2] - 15) < 2
+    # asked for what is not there, the fit says there is (almost) none
+    clean = cellcycle.simulate_sample(30000, cv=0.04, rng=rng)
+    f = cellcycle.fit(clean, cellcycle.DJF, extras=cellcycle.Extras(
+        debris=cellcycle.SINGLE_CUT, aggregates=True))
+    assert f.debris < 1 and f.aggregates < 1 and np.abs(f.percent - [60, 25, 15]).max() < 2
+    assert f.fitted[0] == pytest.approx(cellcycle.DEBRIS_FROM * f.g1_mean)
+    with pytest.raises(ValueError, match="no second G1"):
+        cellcycle.fit(clean, cellcycle.DJF, extras=cellcycle.Extras(aneuploid=True))
+    with pytest.raises(ValueError, match="Dean-Jett-Fox only"):
+        cellcycle.fit(clean, cellcycle.WATSON, extras=cellcycle.Extras(aggregates=True))
+    with pytest.raises(ValueError, match="unknown debris"):
+        cellcycle.fit(clean, cellcycle.DJF, extras=cellcycle.Extras(debris="two cuts"))
+    # where the aneuploid G1 is the taller, the lower peak is still the diploid
+    tall = cellcycle.simulate_sample(30000, cv=0.04, rng=rng,
+                                     aneuploid=(0.7, 1.6, (70, 20, 10), 0.04))
+    f = cellcycle.fit(tall, cellcycle.DJF, extras=cellcycle.Extras(aneuploid=True))
+    assert f.g1_mean == pytest.approx(50000, rel=0.01)
+    assert f.dna_index == pytest.approx(1.6, abs=0.02)
+    assert f.aneuploid == pytest.approx(70, abs=4)
+    # given, a DNA index near 2 is not taken for G2 (a near-tetraploid population)
+    tetra = cellcycle.simulate_sample(30000, cv=0.03, rng=rng,
+                                      aneuploid=(0.3, 1.9, (60, 25, 15), 0.03))
+    f = cellcycle.fit(tetra, cellcycle.DJF,
+                      extras=cellcycle.Extras(aneuploid=True, dna_index=1.9))
+    assert f.dna_index == pytest.approx(1.9, abs=0.02) and f.aneuploid == pytest.approx(30, abs=5)
+    # a saturated detector: the events piled on its top are in no bin
+    piled = np.minimum(cellcycle.simulate_sample(20000, rng=rng, aggregates=0.1), 180000.0)
+    f = cellcycle.fit(piled, cellcycle.DJF, extras=cellcycle.Extras(aggregates=True))
+    assert f.x[-1] < 180000 and abs(f.percent[1] - 25) < 3
+    assert f.above_g2 == pytest.approx(100 * np.mean(piled >= 180000), abs=0.01)
+    # the table, the legend and the figure
+    c = cellcycle.content(f, "PI", "3Case1")
+    assert [p.name for p in c.components] == ["G1", "S", "G2", "Aggregates"]
+    assert c.components[3].share == pytest.approx(f.aggregates) and "χ²" in c.summary
+    assert "aggregates" in cellcycle.summary(f) and "χ²" in cellcycle.summary(f)
+    assert cellcycle.columns(cellcycle.Extras(aggregates=True))[-2:] == [
+        "% aggregates", "% aggregates SE"]
+    svg = _svg(c, tmp_path)
+    assert ">Aggregates · " in svg
+
+
 def test_the_uncertainty_of_a_fit_is_that_of_counting():
     # a straight line through counts: the errors of its two numbers, known in closed form
     x = np.arange(50.0)
@@ -531,6 +635,39 @@ def test_cell_cycle_from_gates(gates, tmp_path):
     assert d2.content() is None and "not gated" in d2.said.text() and d2.make_figure() is None
     d.close()
     d2.close()
+
+
+def test_cell_cycle_components_switched_on_and_off(gates, tmp_path):
+    g = gates
+    g.set_axes("YL2-A", "FSC-A")
+    d = g.open_model("Cell cycle", show=False)
+    # Watson has no shape for S to add them to
+    assert not d.aggregates.isEnabled() and not d.debris.isEnabled()
+    assert not d.aneuploid.isEnabled() and not d.index.isEnabled()
+    d.aggregates.setChecked(True)
+    assert d.extras() == cellcycle.Extras()
+    d.set_model(cellcycle.DJF)
+    assert d.aggregates.isEnabled() and d.debris.isEnabled() and not d.index.isEnabled()
+    d.set_extras(debris=cellcycle.SINGLE_CUT, aggregates=True)
+    assert d.result.columns[-5:] == ["% debris", "% debris SE", "% aggregates",
+                                     "% aggregates SE", "Note"]
+    for name in ("% debris", "% aggregates"):
+        assert all(0 <= v < 2 for v in _column(d, name).values()), name   # none simulated
+    for name, (_, phases, _) in TRUE.items():
+        assert _column(d, "% S")[name] == pytest.approx(phases[1], abs=4), name
+    c = d.content()
+    assert [p.name for p in c.components] == ["G1", "S", "G2", "Debris", "Aggregates"]
+    assert "Debris" in d.said.text() or "debris" in d.said.text()
+    assert len(d.plot.listDataItems()) >= 7
+    figures.save(c, STYLE, str(tmp_path / "cycle_extras.svg"))
+    assert "% aggregates" in d.value_columns()
+    # these samples have one population: asked for a second, each says why not
+    d.set_extras(aneuploid=True)
+    assert d.index.isEnabled() and set(d.problems) == set(TRUE)
+    assert "no second G1" in d.problems["3Ctrl1"] and "% aneuploid" in d.result.columns
+    d.set_extras()
+    assert not d.problems and "% aneuploid" not in d.result.columns
+    d.close()
 
 
 def test_kinetics_from_gates(gates, tmp_path):

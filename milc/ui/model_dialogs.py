@@ -512,10 +512,13 @@ class CellCycleDialog(_ModelDialog):
         "the side S does not reach; S is what is left between them, whatever its shape — "
         "noisier, and biased where S piles up against a peak. Dean-Jett-Fox: S is a "
         "broadened second-degree polynomial fitted with the peaks — the more precise where "
-        "S is smooth, wrong where it is not. % G1, % S and % G2 are of the cells in the "
-        "three; sub-G1 and above G2 are of all events, outside the dotted lines. Gate "
-        "single cells first: two G1 cells stuck together count as G2. SE: standard error "
-        "from counting.")
+        "S is smooth, wrong where it is not. % G1, % S and % G2 are of the cells of the "
+        "first (diploid) population; sub-G1 and above G2 are of all events, outside the "
+        "dotted lines. With Dean-Jett-Fox, a second population (DNA index: its G1 over the "
+        "first's; % aneuploid of the cells of both), debris (% of all events modelled) and "
+        "aggregates of two and three cells (% of events) can be added; otherwise gate "
+        "single cells first, or two G1 cells stuck together count as G2. Reduced χ² near 1: "
+        "nothing left but counting. SE: standard error from counting.")
 
     def _controls(self) -> None:
         s = self.source
@@ -536,16 +539,49 @@ class CellCycleDialog(_ModelDialog):
                                 "both: steadier where G2 is small.")
         self.g1 = _spin(0.0, 0.0, 1e9, 0, 1000.0,
                         "About where the G1 peak is, in the units of the file, when the one "
-                        "found is not it")
+                        "found is not it. With a second population: where the diploid G1 is.")
         self.g1.setSpecialValueText("Found")
+        needs = "Dean-Jett-Fox only: Watson's S has no shape to add it to."
+        self.aneuploid = QtWidgets.QCheckBox("Second (aneuploid) population")
+        self.aneuploid.setToolTip(
+            "A second G1, S and G2 with their own DNA index and CV (G2 at the same multiple "
+            "of its G1 as the first). The lower of the two G1 peaks is taken as diploid "
+            "unless 'G1 near' says otherwise. " + needs)
+        self.index = _spin(0.0, 0.0, 4.0, 2, 0.05,
+                           "About where the aneuploid G1 is, as a multiple of the diploid G1 "
+                           "(1.5: half as much DNA again). Found: the tallest peak that is "
+                           "neither the diploid G1 nor its G2 — give it near 2, where it "
+                           "would be taken for G2.")
+        self.index.setSpecialValueText("Found")
+        self.debris = QtWidgets.QComboBox()
+        for key, text in cellcycle.DEBRIS.items():
+            self.debris.addItem(text, key)
+        self.debris.setToolTip(
+            "Debris below and under the cells; the fit then reaches down to a fifth of G1. "
+            "Single cut: nuclei cut once at a random point, worked out from the cells "
+            "themselves (no number to fit). Exponential: a curve that falls by e every so "
+            "much DNA, fitted. " + needs)
+        self.aggregates = QtWidgets.QCheckBox("Aggregates (doublets, triplets)")
+        self.aggregates.setToolTip(
+            "Two or three cells stuck together, worked out from the single cells fitted: "
+            "G1+G1 lies on G2, G1+G2 and G2+G2 above it. Then single cells need not be "
+            "gated. " + needs)
         self.form.addRow("Model", self.model)
         self.form.addRow("G2 / G1", ratio)
         self.form.addRow("G1 near", self.g1)
         self.form.addRow(self.same_cv)
-        self.model.currentIndexChanged.connect(self.changed)
+        self.form.addRow(self.aneuploid)
+        self.form.addRow("DNA index near", self.index)
+        self.form.addRow("Debris", self.debris)
+        self.form.addRow(self.aggregates)
+        self.model.currentIndexChanged.connect(self._model_changed)
         self.same_cv.toggled.connect(self.changed)
-        for box in (self.ratio_lo, self.ratio_hi, self.g1):
+        self.aneuploid.toggled.connect(self._model_changed)
+        self.aggregates.toggled.connect(self.changed)
+        self.debris.currentIndexChanged.connect(self.changed)
+        for box in (self.ratio_lo, self.ratio_hi, self.g1, self.index):
             box.valueChanged.connect(self.changed)
+        self._enable()
         # DNA is read on a linear parameter: the one shown if it is one,
         # otherwise the first that is
         linear = [d for _, d in s.parameters if s.session.scale_of(d) is None
@@ -553,18 +589,48 @@ class CellCycleDialog(_ModelDialog):
         start = s.dim if s.dim in linear or not linear else linear[0]
         self.parameter.setCurrentIndex(max(self.parameter.findData(start), 0))
 
+    def _enable(self) -> None:
+        djf = self.model.currentData() == cellcycle.DJF
+        for w in (self.aneuploid, self.debris, self.aggregates):
+            w.setEnabled(djf)
+        self.index.setEnabled(djf and self.aneuploid.isChecked())
+
+    def _model_changed(self, *_) -> None:
+        self._enable()
+        self.changed()
+
+    def extras(self) -> cellcycle.Extras:
+        """What is modelled besides one population's phases."""
+        if self.model.currentData() != cellcycle.DJF:
+            return cellcycle.Extras()
+        return cellcycle.Extras(self.aneuploid.isChecked(), self.index.value() or None,
+                                self.debris.currentData(), self.aggregates.isChecked())
+
+    def set_extras(self, aneuploid: bool = False, index: float = 0.0,
+                   debris: str = cellcycle.NO_DEBRIS, aggregates: bool = False) -> None:
+        self._filling = True
+        self.aneuploid.setChecked(aneuploid)
+        self.index.setValue(index)
+        self.debris.setCurrentIndex(max(self.debris.findData(debris), 0))
+        self.aggregates.setChecked(aggregates)
+        self._filling = False
+        self._enable()
+        self.compute()
+
     def columns(self) -> list[str]:
-        return list(cellcycle.COLUMNS)
+        return cellcycle.columns(self.extras())
 
     def set_model(self, kind: str) -> None:
         self.model.setCurrentIndex(max(self.model.findData(kind), 0))
+        self._enable()
         self.compute()
 
     def _fit(self, entry):
         f = cellcycle.fit(self.source.values(entry, self.parameter.currentData()),
                           self.model.currentData(),
                           (self.ratio_lo.value(), self.ratio_hi.value()),
-                          self.same_cv.isChecked(), self.g1.value() or None)
+                          self.same_cv.isChecked(), self.g1.value() or None,
+                          extras=self.extras())
         return f, cellcycle.row(f)
 
     def content(self):

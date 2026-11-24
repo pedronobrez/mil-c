@@ -17,6 +17,8 @@ instalar os pacotes e rodar). Eles não fazem parte da suíte de testes.
 | `qc.check` | PeacoQC 1.22.0, flowAI 1.42.0 | Defeitos nítidos (degrau, entupimento) são achados igual ou melhor. Desvios lentos e moderados o PeacoQC achava e o nosso não (1,4% dos eventos reais removidos contra 5,1%): `qc.check` ganhou uma passada lenta e, medido de novo, acha-os no nível do PeacoQC (5,25% contra 5,13% dos eventos reais; 76% contra 74% de uma deriva injetada), sem as remoções dele em arquivos cujas medianas não se movem. |
 | `normalize.fit` / `apply` | CytoNorm 2.0.13 (GitHub) | Sem clusters é a mesma curva (diferença média de 1e-5 do eixo). Com clusters, os dois programas diferem entre si tanto quanto duas sementes de um mesmo. Fora da faixa das referências o nosso é deliberadamente mais contido. |
 | `autocomp.autospill` / `classic` | AutoSpill 0.2.0 (GitHub), flowStats 4.24.0 | Nos mesmos eventos o nosso AutoSpill dá a matriz do pacote a 2e-5 (simulado) e 3e-4 (controles reais do flowCore), com o mesmo número de iterações. Em simulação acha a matriz verdadeira a 0,04 ponto percentual; o clássico, a 0,3. Os exemplos do próprio AutoSpill (FlowRepository) não puderam ser baixados. |
+| `cellcycle.fit` | o BrdU das mesmas células (223 arquivos públicos de BrdU/PI) | O FlowJo e o ModFit não estão aqui. Sem gate de singletos, os agregados achados (24,8%) batem com o que o gate tira (25,6%; r = 0,90) e as fases ficam as dos singletos. Nos 39 controles o Dean-Jett-Fox dá 6,6 pontos de S a menos que o BrdU (DP 5,8); o Watson, 3,9 a mais com DP 13,5. |
+| `kinetics.curve` / `measure` | as mesmas definições refeitas em R (flowCore) | Iguais até 1e-13 em 23 arquivos reais com Time. Confere a aritmética; nenhum fluxo de cálcio público foi alcançado. |
 
 Versões: R 4.6.1, Bioconductor 3.23, limma 3.68.5, flowCore 2.24.0, FlowSOM 2.20.0, leidenalg
 0.12.0, Python 3.14.6, em macOS arm64. Todos os pacotes instalaram; nenhuma comparação foi
@@ -804,6 +806,82 @@ de 1 a 15 s, mais 3 a 16 s do gate por tesselação.
   não foram reproduzidos.
 - Nenhuma matriz calculada aqui foi posta ao lado da do FlowJo ou do FACSDiva para os mesmos
   controles.
+
+## 6. Ciclo celular (`milc/cellcycle.py`) e cinética (`milc/kinetics.py`)
+
+### O que foi comparado
+
+Não há aqui nenhum programa que ajuste histogramas de DNA como o ModFit ou o FlowJo, e não achei
+pacote de R ou Python que faça Watson ou Dean-Jett-Fox. A referência do ciclo foi então o
+próprio dado: arquivos com pulso de BrdU e iodeto de propídio, em que a fase de cada célula se lê
+no gráfico BrdU × PI sem modelo nenhum. O MIL-C vê só o PI. Script:
+`tests/reference/cellcycle_compare.py`.
+
+A leitura do BrdU, escrita aqui (os autores não publicaram a deles por arquivo): singletos por
+PI-H/PI-A acima de 0,82 da mediana no pico G1; BrdU+ = log10 FITC-A mais de 0,4 acima da faixa
+BrdU−, traçada entre a moda do pico G1 e a do G2; BrdU+ é S, e as BrdU− abaixo ou acima do meio
+dos dois picos são G1 ou G2. Isto não é a verdade do conteúdo de DNA: células que incorporaram
+BrdU e chegaram a G2 (ou se dividiram) durante o pulso contam como S, e o começo de S com pouco
+BrdU conta como G1. Onde um fármaco para a replicação (XL413, AZD6738, olaparibe), há células em
+S sem BrdU e a referência quebra — por isso o resumo também é dado só para os controles
+(siControl, DMSO, shControl).
+
+### Dados
+
+Yang & Hill, *The ORFIUS complex regulates ORC2 localization at replication origins*: 223
+arquivos FCS de linhagens de câncer de ovário (OV8, FT194, UWB1.289 com e sem BRCA1, CaOV3,
+SKOV3), BD Fortessa, 10 a 20 mil eventos cada. Dryad doi:10.5061/dryad.sn02v6x89 (CC0), também
+no Zenodo (registro 10499157). O PI-A satura em 262.143 em alguns por cento dos eventos (4 e 7% nos dois arquivos olhados de perto; agregados, na maioria): esses
+eventos ficam fora de todos os bins. Baixados para uma pasta própria e lidos com `python3 -I`.
+
+### Concordância medida
+
+Modelo menos BrdU, em pontos (média ± DP entre arquivos):
+
+| | G1 | S | G2 | χ² reduzido (mediana) |
+|---|---|---|---|---|
+| **controles (39)**; BrdU: 39,8 / 39,8 / 20,4 | | | | |
+| singletos, Watson | −2,8 ± 14,8 | +3,9 ± 13,5 | −1,1 ± 9,0 | 2,60 |
+| singletos, Dean-Jett-Fox | +4,9 ± 4,1 | −6,6 ± 5,8 | +1,7 ± 5,2 | 1,87 |
+| singletos, DJF + debris | +4,9 ± 4,0 | −6,7 ± 5,8 | +1,8 ± 5,3 | 1,41 |
+| todos os eventos, DJF | +0,8 ± 4,0 | −11,4 ± 7,2 | +10,7 ± 7,6 | 9,98 |
+| todos os eventos, DJF + agregados | +4,3 ± 4,2 | −6,5 ± 6,1 | +2,1 ± 5,9 | 1,63 |
+| todos os eventos, DJF + debris + agregados | +4,4 ± 4,1 | −6,7 ± 6,0 | +2,3 ± 5,6 | 1,44 |
+| **todos os arquivos (223)**; BrdU: 45,9 / 33,0 / 21,1 | | | | |
+| singletos, Watson | −6,2 ± 16,3 | +10,9 ± 17,2 | −4,6 ± 8,8 | 2,89 |
+| singletos, Dean-Jett-Fox | +2,5 ± 6,8 | −1,5 ± 11,8 | −1,1 ± 7,8 | 2,11 |
+| todos os eventos, DJF + debris + agregados | +1,7 ± 6,8 | −2,6 ± 11,7 | +0,8 ± 7,5 | 1,62 |
+
+Agregados: nos eventos sem gate, o modelo acha 24,8% (DP 5,2) de agregados na faixa ajustada; o
+gate de singletos tira 25,6% (DP 4,7) da mesma faixa; r = 0,90 entre arquivos. Ajustar todos os
+eventos com agregados dá, arquivo a arquivo, as fases dos singletos (S −1,1 ± 4,9; G2 +1,9 ±
+5,3); sem agregados, o G2 sobe 10,4 ± 7,1 pontos — os dobletes G1+G1 contados como G2.
+
+Cinética (`tests/reference/kinetics_compare.py`): em 23 desses arquivos (um em cada dez), a
+mediana do FITC-A e a da razão FITC-A/PI-A em 100 fatias de tempo, média móvel de 5, linha de
+base, pico, tempo do pico e AUC, comparados com as mesmas definições escritas de novo em R, com
+os arquivos lidos pelo flowCore: maior diferença relativa 3,5e-14.
+
+### Onde diferem e por quê
+
+- **S abaixo do BrdU nos controles (−6,6).** É o sentido esperado da diferença entre as duas
+  medidas: o BrdU marca quem passou por S durante o pulso, inclusive quem já está em G2 ou de
+  volta em G1. Sem o ModFit não sei quanto dessa diferença ele também teria.
+- **Watson.** Na média dos controles erra pouco, mas espalha três vezes mais. O G2 destas
+  linhagens é assimétrico (cauda à esquerda); o Watson ajusta só o lado direito, faz um G2
+  estreito demais e o resto vira S. O χ² dele, só dos lados ajustados, não acusa.
+- **Fármacos.** Em UWB com XL413/AZD6738/olaparibe o Dean-Jett-Fox dá 17 a 18 pontos de S a
+  mais que o BrdU (o Watson, 29): células paradas em S não incorporam BrdU. Aqui a referência é
+  que falha.
+- **Debris** quase não muda as fases destes arquivos (há pouco), mas baixa o χ² de 1,87 para
+  1,41: o que sobrava abaixo do G1 era debris.
+
+### O que não foi feito
+
+- Nada foi posto ao lado do ModFit nem do FlowJo, que não estão disponíveis aqui.
+- A população aneuploide só foi conferida em simulação: estes arquivos têm uma população cada.
+- A cinética não foi conferida num fluxo de cálcio real (o FlowRepository não respondeu; o
+  Zenodo não tinha um), e o R refaz as mesmas definições — escritas por mim, não por outro.
 
 ---
 
