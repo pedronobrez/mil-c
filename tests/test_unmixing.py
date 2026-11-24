@@ -376,3 +376,14 @@ def test_the_dialog_computes_shows_and_applies(app, spectral):  # noqa: F811
     d.deleteLater()
     w.deleteLater()
     settle()
+
+
+def test_gates_on_detectors_that_unmixing_removes_are_named(spectral):
+    data, controls = spectral
+    s = Session()
+    s.open_folder(data)
+    u = _unmixing(controls)
+    assert um.lost_gate_channels(u, s.usable()) == []
+    s.usable()[0].gates.add(GateNode("V3+", RectangleGate(["V3-A"], [500.0], [None])))
+    s.usable()[1].gates.add(GateNode("Cells", RectangleGate(["FSC-A"], [500.0], [None])))
+    assert um.lost_gate_channels(u, s.usable()) == ["V3-A"]

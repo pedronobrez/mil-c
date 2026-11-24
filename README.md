@@ -48,6 +48,23 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   a ceiling per sample; and a minimum below which a sample is left out rather than allowed to
   drag every other down.
 
+**Spectral unmixing** — for spectral cytometers (Cytek Aurora and Northern Lights, Sony
+ID7000, BD FACSymphony A5 SE): many detectors, fewer fluorochromes. "Unmixing…" in Gates.
+- Tick the single-stain reference controls and name each one's fluorochrome; the spectrum is
+  the brightest events' median minus the negative's (the control's own dim events, or the
+  unstained control), with its peak at 1. Autofluorescence, from the unstained control, can
+  be one more spectrum. Spectra are also read from, and written to, a CSV.
+- Ordinary least squares, or weighted least squares with Poisson-like weights per event, as
+  Cytek's WLS (about 60 µs an event with 43 spectra on 64 detectors).
+- The spectra drawn on the detectors; the similarity matrix (cosine, pairs above 0.98 in red)
+  and the complexity index (the matrix's condition number); and how much of each control the
+  set leaves unexplained or spills into another channel.
+- Applied, every sample with those detectors is unmixed in place of being compensated: the
+  unmixed channels, named after the fluorochromes, replace the detectors and are ordinary
+  fluorescence channels for gates (`Comp-PE`), statistics, clustering and figures. Saved with
+  the project; changing it marks the concatenated events and the gates for review, as a new
+  matrix does.
+
 **Gates** — open one sample and look at it.
 - Any two parameters as a pseudocolour or contour plot, or one as a histogram; markers on
   FlowJo's biexponential scale.
@@ -203,6 +220,10 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - **Tests between groups stop short of mixed models.** One value per sample, compared by group,
   paired or not; counts by a negative-binomial model written here, not by edgeR itself.
 - **Its maps are not FlowJo's maps point for point.** See below.
+- **Unmixing has no spillover-spreading matrix, no per-cell autofluorescence and no
+  unmixing per sample.** One set of spectra for every sample with its detectors; gates drawn on
+  a raw detector have to go before it is applied. A workspace or Gating-ML written from
+  unmixed samples has not been tried in FlowJo.
 
 ## How close it is to FlowJo
 
@@ -324,6 +345,7 @@ milc/
   compare.py        tests between groups, and adjustment for many of them
   prism.py          tables in the shape GraphPad Prism takes, as .pzfx
   normalize.py      batch normalisation: quantile curves per batch, marker and cluster
+  unmixing.py       spectral unmixing: spectra from controls, OLS and WLS, similarity
   figures.py        a plot and a style into SVG, PDF, PNG or TIFF (matplotlib)
   session.py        the open analysis; what the window reads and writes
   cli.py            the command line
@@ -405,6 +427,14 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
   100-event published file with linear axes; on biexponential axes nothing was measured, and an
   ellipse near zero may sit up to about one display channel off. FlowJo's count beside each is
   the check.
+- **Spectral unmixing**, on a public Aurora dataset (42 bead controls, 64 detectors) that has
+  every file both raw and as SpectroFlo 3.3 unmixed it: with SpectroFlo's spectra this
+  reproduces its unmixed values to 1e-7, and the spectra it takes from the same raw controls
+  have a median cosine of 0.99994 with SpectroFlo's (lowest ViaKrome 808, 0.966); the beads'
+  unmixed medians agree within 1% (0.991 to 1.023). OLS, per-event WLS, the similarity matrix
+  and the condition number agree with AutoSpectral's R functions to 1e-9 or better. Cytek's
+  own WLS and complexity index were not compared (its formula is not published); no ID7000
+  or A5 SE file was opened, and the dataset's tissue samples were not unmixed here.
 - **Repeated-measures and Welch's ANOVA** reproduce textbook and R examples typed from memory,
   and independent calculations on random data.
 
