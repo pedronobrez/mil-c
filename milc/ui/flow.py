@@ -13,8 +13,10 @@ class FlowLayout(QtWidgets.QLayout):
 
     #: the row does not ask to be narrower than this, if it is wider on one
     #: line: a layout sizes a window for the height a row has at its
-    #: narrowest, and a row a button wide is as tall as the screen
-    FLOOR = 640
+    #: narrowest, and a row a button wide is as tall as the screen. 620 and
+    #: not more: the Gates tab is 370 + this + margins, and Windows draws
+    #: the frame of the tabs 4 px wider than macOS
+    FLOOR = 620
 
     def __init__(self, parent=None, spacing: int = 8, line_spacing: int = 6):
         super().__init__(parent)
