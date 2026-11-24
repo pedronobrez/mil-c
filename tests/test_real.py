@@ -153,6 +153,9 @@ def test_files_outside_the_workspace_get_the_shared_gates(workspace):
     assert len(usable) == 32 and sum(e.borrowed for e in usable) == 20
     by_name = {e.name: e for e in s.entries}
     assert s.count(by_name[real("3Ctrl1")]) == 109 and s.count(by_name[real("3Ctrl2")]) == 175
+    # whatever the project in Data/ has ticked: here, in memory, every file
+    for e in s.entries:
+        e.include = True
     assert sorted(map(sorted, s.repeats())) == sorted(
         [sorted(map(real, pair)) for pair in (["14Case4", "14Case4`"], ["7Case3", "7Case3`"])])
 
