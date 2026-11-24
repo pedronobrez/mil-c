@@ -642,13 +642,23 @@ class GatesTab(QtWidgets.QWidget):
         if self.entry is None and self.samples.count():
             self.samples.setCurrentRow(0)
 
+    def _say_now(self, text: str) -> None:
+        """Say it in the status bar before what follows blocks. The bar is
+        painted at once, and nothing else: running the whole event loop
+        here (processEvents) lets anything waiting in it run in the middle
+        of this, and on GitHub's macOS the suite crashed at that line one
+        run in two."""
+        self.sigStatus.emit(text)
+        bar = getattr(self.window(), "statusBar", None)
+        if callable(bar):
+            bar().repaint()
+
     def _sample_chosen(self, row: int) -> None:
         if self._filling or row < 0 or row >= len(self.entries):
             return
         keep = self.node.path if self.node is not None else ""
         self.entry = self.entries[row]
-        self.sigStatus.emit(f"Reading {self.entry.name}…")
-        QtWidgets.QApplication.processEvents()
+        self._say_now(f"Reading {self.entry.name}…")
         self.sample = self.session.load(self.entry)
         self.sigStatus.emit("")
         self._fill_axes()
@@ -961,8 +971,7 @@ class GatesTab(QtWidgets.QWidget):
         self.show_review()
 
     def refit_outdated(self) -> None:
-        self.sigStatus.emit("Fitting the gates again…")
-        QtWidgets.QApplication.processEvents()
+        self._say_now("Fitting the gates again…")
         self.session.refit_outdated()
         self._after_session_refit()
 
@@ -1765,8 +1774,7 @@ class GatesTab(QtWidgets.QWidget):
         each = self.per_sample.isChecked() and self.everyone.isChecked()
         if each:
             node.fit, node.note = spec, autogate.note(spec)
-            self.sigStatus.emit("Fitting the gate on every sample…")
-            QtWidgets.QApplication.processEvents()
+            self._say_now("Fitting the gate on every sample…")
         else:
             # the same gate for every sample, fitted on this one's events:
             # fitted there again when the population it is in changes
