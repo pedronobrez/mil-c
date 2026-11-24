@@ -15,6 +15,8 @@ packages below are needed only to run these scripts.
 | `phenograph_compare.py` | `milc.graphcluster.phenograph` | the authors' `PhenoGraph` (PyPI), with its Louvain and with Leiden |
 | `qc_compare.py` + `qc_peacoqc.R` | `milc.qc.check` | PeacoQC, flowAI |
 | `normalize_compare.py` + `normalize_cytonorm.R` | `milc.normalize.fit` / `apply` | CytoNorm (`saeyslab/CytoNorm`) |
+| `cellcycle_compare.py` | `milc.cellcycle.fit` on PI alone | the BrdU of the same cells, gated here (no DNA-histogram program could be run) |
+| `kinetics_compare.py` + `kinetics_flowcore.R` | `milc.kinetics.curve` / `measure` | the same definitions written again in R on flowCore (arithmetic only) |
 
 ## Installing
 
@@ -64,6 +66,11 @@ python3 tests/reference/abundance_compare.py 100     # tables per setting
 $REF/venv/bin/python tests/reference/phenograph_compare.py
 python3 tests/reference/qc_compare.py
 python3 tests/reference/normalize_compare.py
+
+# public BrdU/PI files (Dryad doi:10.5061/dryad.sn02v6x89, Zenodo 10499157), unzipped
+# into a folder of their own; -I so that nothing in that folder can be imported
+python3 -I tests/reference/cellcycle_compare.py /path/to/ORFIUS
+python3 -I tests/reference/kinetics_compare.py /path/to/ORFIUS
 ```
 
 On the day of the run, on a machine busy with other work, they took about
