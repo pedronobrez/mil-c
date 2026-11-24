@@ -13,6 +13,7 @@ from milc import unmixing as um
 from milc.fcs import read_fcs, write_fcs
 from milc.gating import GateNode, RectangleGate
 from milc.session import Session
+from test_ui import app  # noqa: F401  (fixture)
 
 D = 24
 DETECTORS = [f"V{i}-A" for i in range(1, 9)] + [f"B{i}-A" for i in range(1, 9)] \
@@ -302,3 +303,76 @@ def test_conventional_files_are_not_touched(tmp_path):
     s.save_project()
     with open(s.project_file(), encoding="utf-8") as f:
         assert '"unmixing": null' in f.read()
+
+
+# --- the dialog ------------------------------------------------------------------------
+
+
+def test_the_dialog_computes_shows_and_applies(app, spectral):  # noqa: F811
+    from PyQt6 import QtCore
+
+    from milc.ui import worker
+    from milc.ui.shell import MainShell
+    from milc.ui.unmixing_dialog import UnmixingDialog, apply_to_tab, guess_fluor
+
+    def settle():
+        for _ in range(4):
+            worker.wait_all()
+            app.processEvents()
+
+    assert guess_fluor("x/A3 BUV395 (Beads)_Bead controls_1.fcs") == "BUV395"
+    data, controls = spectral
+    w = MainShell()
+    w.open_folder(data)
+    w.show()
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    settle()
+    assert any(b.text() == "Unmixing…" for b in g.findChildren(type(g.compensation_button)))
+    d = UnmixingDialog(w.session, lambda u: apply_to_tab(g, u), g)
+    # nothing in the folder of samples looks like a control
+    assert d.chosen() == []
+    for j, name in enumerate(FLUORS):
+        d._add_row(os.path.join(controls, f"{name}.fcs"))
+        r = d.controls.rowCount() - 1
+        assert d.controls.item(r, 2).text() == name
+        d.controls.item(r, 0).setCheckState(QtCore.Qt.CheckState.Checked)
+        d.controls.item(r, 3).setText(f"CD{j + 1}")
+    d.unstained.addItem("Unstained.fcs", os.path.join(controls, "Unstained.fcs"))
+    d.unstained.setCurrentIndex(d.unstained.count() - 1)
+    d.autofluorescence.setChecked(True)
+    d.compute()
+    settle()
+    assert d.unmixing is not None and d.unmixing.fluors == FLUORS + ["AF"]
+    assert d.similarity.rowCount() == 5 and "Complexity index" in d.complexity.text()
+    assert d.check.rowCount() == 4
+    # each control is explained by the set: little left over, little spilled
+    assert max(c["residual"] for c in d.checks) < 0.05
+    assert max(c["leak"] for c in d.checks) < 0.05
+    shot = os.environ.get("MILC_SHOT")
+    if shot:
+        d.show()
+        settle()
+        for i, tab in enumerate(("spectra", "similarity", "check")):
+            d.tabs.setCurrentIndex(i)
+            settle()
+            d.grab().save(os.path.join(shot, f"unmixing_{tab}.png"))
+    d.apply()
+    settle()
+    assert w.session.unmixing is not None
+    labels = [g.x_axis.itemText(i) for i in range(g.x_axis.count())]
+    assert "CD3" in labels and "V1-A" not in labels
+    assert g.x_axis.findData("Comp-PE") >= 0
+    assert d.stop_button.isEnabled()
+    if shot:
+        w.grab().save(os.path.join(shot, "gates_unmixed.png"))
+    assert w.minimumSizeHint().width() <= 1052
+    d.stop()
+    settle()
+    assert w.session.unmixing is None
+    assert g.x_axis.findData("V1-A") >= 0
+    d.close()
+    w.close()
+    d.deleteLater()
+    w.deleteLater()
+    settle()

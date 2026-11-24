@@ -389,6 +389,48 @@ class Unmixing:
             return None
 
 
+def check_references(unmixing: Unmixing, controls: list[dict], reader=None,
+                     positive_fraction: float = 0.05) -> list[dict]:
+    """Each control unmixed with the whole set: its brightest events in
+    its own channel, how much of them the spectra leave unexplained
+    (median |y − a M| / |y|) and the largest median that lands in another
+    channel, as a share of its own. A control the set explains well has
+    both near 0."""
+    from .fcs import read_fcs
+    reader = reader or read_fcs
+    out = []
+    for c in controls:
+        f = reader(c["path"])
+        y = f.events[:, [f.index(d) for d in unmixing.detectors]].astype(np.float64)
+        a = unmixing.unmix(y)
+        j = unmixing.fluors.index(c["fluor"])
+        top = a[:, j] >= np.quantile(a[:, j], 1.0 - positive_fraction)
+        own = float(np.median(a[top, j]))
+        others = [k for k in range(len(unmixing.fluors)) if k != j]
+        leak = (float(np.abs(np.median(a[top][:, others], axis=0)).max() / own)
+                if others and own > 0 else 0.0)
+        out.append({"fluor": c["fluor"], "residual": float(np.median(unmixing.residual(y[top], a[top]))),
+                    "leak": leak, "leak_into": unmixing.fluors[others[int(np.argmax(
+                        np.abs(np.median(a[top][:, others], axis=0))))]] if others else ""})
+    return out
+
+
+def lost_gate_channels(unmixing: Unmixing, entries) -> list[str]:
+    """The channels gates of these samples are drawn on that unmixing
+    takes away (a detector, `V7-A`): those gates would have nothing to cut."""
+    from .compensation import strip_prefix
+    lost = set()
+    for e in entries:
+        if not unmixing.covers(e.channels):
+            continue
+        there = set(unmixing.channels_of(e.channels))
+        for node in e.gates.walk():
+            for dim in getattr(node.gate, "dims", []) or []:
+                if strip_prefix(dim)[0] not in there:
+                    lost.add(dim)
+    return sorted(lost)
+
+
 # --- spectra in a CSV -------------------------------------------------------------
 
 
