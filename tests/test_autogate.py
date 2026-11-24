@@ -829,9 +829,22 @@ def test_fitted_gates_refit_and_rename_in_the_window(app, tmp_path):
     g.grab().save(str(tmp_path / "outdated.png"))
     if os.environ.get("MILC_SHOTS"):
         g.grab().save(os.path.join(os.environ["MILC_SHOTS"], "gates_outdated.png"))
-    assert w.minimumSizeHint().width() <= 1052
+    assert w.minimumSizeHint().width() <= 1052, _asking(w)
     # one click: fitted again there too
     g.refit_button.click()
     assert 15000 < centre(a2, "Big/Lymphocytes") < 25000
     assert not g.outdated_bar.isVisibleTo(g) and s.outdated() == []
     w.close()
+
+
+def _asking(widget) -> list:
+    """For the message of a failure: the visible widgets that ask for the
+    most width, widest first, with their text."""
+    from PyQt6 import QtWidgets
+    found = []
+    for child in widget.findChildren(QtWidgets.QWidget):
+        if child.isVisible() and child.minimumSizeHint().width() > 200:
+            text = getattr(child, "text", lambda: "")()
+            found.append((child.minimumSizeHint().width(), type(child).__name__,
+                          str(text)[:30]))
+    return sorted(found, reverse=True)[:15]

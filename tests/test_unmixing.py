@@ -366,7 +366,7 @@ def test_the_dialog_computes_shows_and_applies(app, spectral):  # noqa: F811
     assert d.stop_button.isEnabled()
     if shot:
         w.grab().save(os.path.join(shot, "gates_unmixed.png"))
-    assert w.minimumSizeHint().width() <= 1052
+    assert w.minimumSizeHint().width() <= 1052, _asking(w)
     d.stop()
     settle()
     assert w.session.unmixing is None
@@ -387,3 +387,16 @@ def test_gates_on_detectors_that_unmixing_removes_are_named(spectral):
     s.usable()[0].gates.add(GateNode("V3+", RectangleGate(["V3-A"], [500.0], [None])))
     s.usable()[1].gates.add(GateNode("Cells", RectangleGate(["FSC-A"], [500.0], [None])))
     assert um.lost_gate_channels(u, s.usable()) == ["V3-A"]
+
+
+def _asking(widget) -> list:
+    """For the message of a failure: the visible widgets that ask for the
+    most width, widest first, with their text."""
+    from PyQt6 import QtWidgets
+    found = []
+    for child in widget.findChildren(QtWidgets.QWidget):
+        if child.isVisible() and child.minimumSizeHint().width() > 200:
+            text = getattr(child, "text", lambda: "")()
+            found.append((child.minimumSizeHint().width(), type(child).__name__,
+                          str(text)[:30]))
+    return sorted(found, reverse=True)[:15]

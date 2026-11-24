@@ -513,8 +513,9 @@ class GatesTab(QtWidgets.QWidget):
         self.review = QtWidgets.QLabel("")
         self.review.setProperty("role", "warning")
         self.review.setWordWrap(True)
-        self.review.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
-                                  QtWidgets.QSizePolicy.Policy.Preferred)
+        # wraps to the room there is: a wrapped label otherwise asks for a
+        # width of its own, and on Windows that was the window's
+        self.review.setMinimumWidth(120)
         self.reviewed_button = QtWidgets.QPushButton("Reviewed")
         self.reviewed_button.setToolTip("The gates were looked at and are where they "
                                         "should be: stop saying so")
@@ -531,8 +532,9 @@ class GatesTab(QtWidgets.QWidget):
         self.outdated = QtWidgets.QLabel("")
         self.outdated.setProperty("role", "warning")
         self.outdated.setWordWrap(True)
-        self.outdated.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
-                                    QtWidgets.QSizePolicy.Policy.Preferred)
+        # wraps to the room there is: a wrapped label otherwise asks for a
+        # width of its own, and on Windows that was the window's
+        self.outdated.setMinimumWidth(120)
         self.refit_button = QtWidgets.QPushButton("Refit")
         self.refit_button.setToolTip("Fit these gates again on their population as it is "
                                      "now, giving up where they were moved by hand")
