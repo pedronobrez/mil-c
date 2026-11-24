@@ -8,7 +8,8 @@ skipped: their results are recomputed here, not imported.
 
 Rectangles and polygons are read by rules checked against FlowJo's own
 counts on a real experiment (tests/test_real.py). Quadrants, combinations
-(and, or, not) and ellipses are not: no workspace of ours holds one. They
+(and, or, not), ellipses and curly quadrants are not: no workspace of ours
+holds one. They
 are read the way two other readers of the format do — FlowKit (Python)
 and CytoML with cytolib (Bioconductor) — where the two agree, and the
 workspaces FlowKit publishes with its tests were looked at to see what
@@ -32,8 +33,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .compensation import Compensation
-from .gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
-                     PolygonGate, QuadrantGate, RectangleGate, tree_to_dict)
+from .gating import (AND, CURL_TOP, NOT, OR, QUADRANTS, BooleanGate, CurlyQuadrantGate,
+                     EllipseGate, GateNode, PolygonGate, QuadrantGate, RectangleGate,
+                     tree_to_dict)
 from .transforms import Biex, Linear, Logicle
 
 
@@ -225,6 +227,8 @@ def _time_as_stored(tree: GateNode, name: str, step: float) -> None:
             g.vertices[:, k] /= step
         elif isinstance(g, QuadrantGate):
             g.x, g.y = (g.x / step, g.y) if k == 0 else (g.x, g.y / step)
+        elif isinstance(g, CurlyQuadrantGate):
+            g.center[k] /= step
 
 
 def signature(tree: GateNode) -> list:
@@ -350,21 +354,59 @@ def _read_gate(el, transforms=None):
     if kind == "EllipsoidGate":
         return _read_ellipse(shape, dims, inside, transforms)
     if kind == "CurlyQuad":
-        # The workspace holds the crossing point and the corner, as for a
-        # plain quadrant (CytoML, winFlowJoWorkspace.hpp,
-        # getGate(wsCurlyQuadGateNode&): one min or max on each dimension),
-        # and not the curve. CytoML redraws the curve with a constant of
-        # its own choosing (cytolib src/gate.cpp, CurlyQuadGate::
-        # interpolate: 40 points, `multiplier = 0.001`) and FlowKit does
-        # not read it at all (no CurlyQuad in wsp_gate_constructor_lut):
-        # nothing to go by. It is not `gating.OffsetQuadrantGate` either,
-        # whose arms are straight; how FlowJo writes a quadrant with
-        # straight arms moved is in no reader looked at — its polygons
-        # carry a `quadId`, -1 in every workspace seen, which may be it —
-        # and such corners, if polygons, are read as the polygons they are.
-        raise _Unread("the curve of a curly quadrant is not written in the workspace, "
-                      "and no reader of the format is known to reproduce it")
+        return _read_curly(dims, mins, maxs, inside, transforms)
     raise _Unread(f"a kind of gate ({kind}) that is not read")
+
+
+def curl_scale(transform):
+    """The scale a curly quadrant's curve is measured on, from the axis'
+    transform in the workspace: a biexponential or a Logicle as it is; a
+    linear axis from 0 — cytolib scales it by its top alone, whatever its
+    bottom — to its top; an axis with none, linear to 262,144."""
+    if isinstance(transform, (Biex, Logicle)):
+        return transform
+    return Linear(0.0, transform.max if isinstance(transform, Linear) else CURL_TOP)
+
+
+def _read_curly(dims, mins, maxs, inside, transforms) -> CurlyQuadrantGate:
+    """FlowJo's curly quadrant: a corner of a crossing whose arms above
+    and to the right of the centre bend.
+
+    What the workspace holds is a quadrant's, and nothing else: `gating:
+    CurlyQuad` with one `gating:dimension` for each axis, bounded on one
+    side only, `min` where the corner is the high side of the axis and
+    `max` where it is the low one — so the crossing point and which corner
+    (CytoML, inst/include/CytoML/winFlowJoWorkspace.hpp,
+    getGate(wsCurlyQuadGateNode&); and so in the FlowJo 10.10 workspace
+    allotropy publishes, tests/parsers/flowjo/testdata/
+    flowjo_example_2.wsp). No curve, no constant: FlowJo draws the curve
+    itself, from a model of photon-counting spread (docs.flowjo.com,
+    Curly Quadrant: p2 = a·√p1 + b, `a` its "curliness") whose `a` is not
+    written. So the curve FlowJo draws is not known, and the one given is
+    CytoML's (cytolib src/gate.cpp, CurlyQuadGate::interpolate; see
+    `gating.CURL_BEND`), checked against CytoML itself (tests/
+    test_curly_quadrant.py) and not against FlowJo. FlowJo's own count
+    is beside each corner: `count_mismatches` says where it is not met."""
+    if transforms is None:
+        raise _Unread("a curly quadrant bends on the scale of each axis, and a group's "
+                      "gates come without the samples' scales")
+    if len(dims) != 2 or any((lo is None) == (hi is None) for lo, hi in zip(mins, maxs)):
+        raise _Unread("a curly quadrant without one bound on each of two axes")
+    high = tuple(lo is not None for lo in mins)
+    at = [lo if lo is not None else hi for lo, hi in zip(mins, maxs)]
+    corner = {v: k for k, v in QUADRANTS.items()}[high]
+    return CurlyQuadrantGate(dims, at, corner, "", inside,
+                             [curl_scale(transforms.get(d)) for d in dims])
+
+
+def _join_curly(parent: GateNode) -> None:
+    """The corners of one curly crossing under a parent share a `group`,
+    as the four of a plain quadrant do, so that moving one moves them
+    all: the same two axes, the same centre."""
+    for node in parent.children:
+        g = node.gate
+        if isinstance(g, CurlyQuadrantGate):
+            g.group = "|".join([parent.path, "curly", *g.dims, *map(repr, g.center)])
 
 
 def _read_ellipse(shape, dims, inside, transforms) -> EllipseGate:
@@ -557,8 +599,12 @@ def _read_populations(el, parent: GateNode, transforms=None,
             continue
         if isinstance(gate, EllipseGate):
             note = f"{UNVERIFIED}: an ellipse converted from FlowJo's 256-channel grid"
+        elif isinstance(gate, CurlyQuadrantGate):
+            note = (f"{UNVERIFIED}: a curly quadrant, whose curve the workspace does not hold; "
+                    "it is drawn as CytoML draws it")
         read.append((p, parent.add(GateNode(name=name, gate=gate, note=note,
                                             reference_count=_int(p.get("count"))))))
     _join_quadrants(parent)
+    _join_curly(parent)
     for p, node in read:
         _read_populations(p, node, transforms, skipped, owner)

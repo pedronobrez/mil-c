@@ -18,6 +18,7 @@ packages below are needed only to run these scripts.
 | `autocomp_compare.py` + `autocomp_autospill.R` | `milc.autocomp` | AutoSpill (`carlosproca/autospill`), `flowStats::spillover` |
 | `cellcycle_compare.py` | `milc.cellcycle.fit` on PI alone | the BrdU of the same cells, gated here (no DNA-histogram program could be run) |
 | `kinetics_compare.py` + `kinetics_flowcore.R` | `milc.kinetics.curve` / `measure` | the same definitions written again in R on flowCore (arithmetic only) |
+| `curly_compare.py` + `curly_cytoml.R` | `milc.gating.CurlyQuadrantGate` read by `milc.wsp` | CytoML (`flowjo_to_gatingset`), event by event |
 
 ## Installing
 
@@ -81,6 +82,7 @@ python3 tests/reference/autocomp_compare.py          # needs R_LIBS_USER, for fl
 # into a folder of their own; -I so that nothing in that folder can be imported
 python3 -I tests/reference/cellcycle_compare.py /path/to/ORFIUS
 python3 -I tests/reference/kinetics_compare.py /path/to/ORFIUS
+python3 tests/reference/curly_compare.py             # needs CytoML: BiocManager::install("CytoML")
 ```
 
 On the day of the run, on a machine busy with other work, they took about

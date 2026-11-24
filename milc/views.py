@@ -28,7 +28,7 @@ import numpy as np
 from . import density, figures, order
 from .gating import (BooleanGate, EllipseGate, GateNode, PolygonGate, QuadrantGate,
                      RectangleGate)
-from .gating import OffsetQuadrantGate
+from .gating import CurlyQuadrantGate, OffsetQuadrantGate
 from .transforms import decade_ticks, same
 
 VIOLIN, BOX = "violin", "box"
@@ -365,8 +365,8 @@ def outline(gate, scale_of, ranges: list[tuple[float, float]]) -> list[np.ndarra
     one parameter is its bounds as vertical lines from 0 to 1: of whatever
     height the plot has. A polygon or an ellipse is straight, or round,
     on the scales it is tested on; shown on others, it is the curve it
-    has become. A quadrant is the two lines of its crossing, or its four arms. A
-    combination has no outline."""
+    has become. A quadrant is the two lines of its crossing, or its four arms
+    (two of them curves, for a curly one). A combination has no outline."""
     if isinstance(gate, BooleanGate):
         return []
     shown = [scale_of(d) for d in gate.dims]
@@ -384,6 +384,11 @@ def outline(gate, scale_of, ranges: list[tuple[float, float]]) -> list[np.ndarra
         px, py = float(_shown(gate.x, shown[0])), float(_shown(gate.y, shown[1]))
         return [np.array([[px, ranges[1][0]], [px, ranges[1][1]]]),
                 np.array([[ranges[0][0], py], [ranges[0][1], py]])]
+    if isinstance(gate, CurlyQuadrantGate):
+        # its arms in the file's units (the bent ones as far as their
+        # scales go): on axes of other scales, carried there point by point
+        return [np.column_stack([_shown(line[:, k], shown[k]) for k in range(2)])
+                for line in gate.arms().values()]
     drawn = list(gate.scales or [None, None])
     if isinstance(gate, OffsetQuadrantGate):
         # each arm from the centre to well past the ends of the axes,

@@ -129,10 +129,16 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
   histograms on the diagonal — where spillover shows.
 - **Backgate…**: the population shown, highlighted over its parent's events on each gate above
   it, with the outlines drawn.
-- From a FlowJo workspace, quadrants, boolean combinations and ellipses are read as well as
-  rectangles and polygons. Those three are read by rules taken from FlowKit and CytoML, not
-  checked against FlowJo on our own files: such populations are in italics, with FlowJo's own
-  count in the tooltip to compare.
+- From a FlowJo workspace, quadrants, boolean combinations, ellipses and *curly* quadrants are
+  read as well as rectangles and polygons. Those four are read by rules taken from FlowKit and
+  CytoML, not checked against FlowJo on our own files: such populations are in italics, with
+  FlowJo's own count in the tooltip to compare.
+- A **curly quadrant** (FlowJo's quadrant whose arms above and to the right of the centre bend
+  with the spread of a compensated negative population) is drawn with its two curves and a
+  handle at the centre that moves the four corners. The workspace keeps only the centre and the
+  corner, not the curve, so the curve is CytoML's (0.001·d² on 255 channels of each axis, d the
+  channels from the centre) on FlowJo's own scales. Exported, it goes back to a workspace as a
+  curly quadrant, and to Gating-ML — which has none — as a polygon per corner.
 
 **Statistics** — a row for each population of each sample.
 - Count and percent of parent, of grandparent and of all events.
@@ -211,8 +217,8 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 ## What it does not do
 
 - **Gating is not all of FlowJo's.** Rectangles, polygons, ellipses, quadrants, ranges and
-  boolean combinations are drawn here and read from a FlowJo workspace. FlowJo's *curly*
-  quadrants are not read: the workspace does not store their curve. The automatic gates
+  boolean combinations are drawn here and read from a FlowJo workspace; FlowJo's *curly*
+  quadrants are read and drawn, but a new one cannot be drawn here. The automatic gates
   propose; where a population has no valley beside it (Tcrb, in the test data) they propose
   nothing, and that gate still needs judgement or a control.
 - **The models are simple ones.** Proliferation takes the generations to be exactly a halving
@@ -409,6 +415,12 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
   compare the counts before relying on it. Time is written in seconds, as FlowJo's own
   workspaces imply. Gating-ML files validate against the standard's schema, and FlowKit gates
   the same events from them.
+- **Curly quadrants** were set beside CytoML 2.24.0 (cytolib 2.24.0) on a workspace this
+  program wrote, with 40,000 simulated events and three curly crossings: the same events in
+  every corner to the ones cytolib's own table of the biexponential places elsewhere (up to 65
+  of a corner; at most 1 with that table in its place). The workspace's form is the one FlowJo
+  10.10 writes (allotropy's published workspace); no FlowJo workspace with curly quadrants and
+  its files was at hand, so FlowJo's own curve is not known.
 - **Proliferation** agrees with R's flowFit on its own CFSE and CellTrace Violet data (each
   generation within 0.5 points); on its Cell Proliferation Dye sample the two differ by up to
   6.5 points. **Cell cycle** was checked on 223 public BrdU/PI files (four ovarian cancer
@@ -443,6 +455,15 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
   100-event published file with linear axes; on biexponential axes nothing was measured, and an
   ellipse near zero may sit up to about one display channel off. FlowJo's count beside each is
   the check.
+- **Curly quadrants** are the least certain of these. FlowJo writes no curve in the workspace
+  and does not say how it draws it (its manual gives only the model, p2 = a·√p1 + b, not `a`).
+  The curve here is CytoML's; on a workspace written by MIL-C (not by FlowJo) with 40,000
+  simulated events it puts up to 65 events of a corner (1%) elsewhere than CytoML 2.24.0, all
+  of them from cytolib's coarser table of the biexponential — with that table in its place, at
+  most 1 (`tests/reference/curly_compare.py`). Another program fitted another curve to
+  FlowJo's counts (GateLab: 0.012·d^1.5 on 256 channels); on the same events the two move up
+  to 1.6% of a large corner and a quarter of a small one (908 events against 667). Against
+  FlowJo itself nothing was measured.
 - **Repeated-measures and Welch's ANOVA** reproduce textbook and R examples typed from memory,
   and independent calculations on random data.
 

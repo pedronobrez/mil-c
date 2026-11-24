@@ -22,8 +22,9 @@ from typing import Callable
 import numpy as np
 
 from .compensation import Compensation, strip_prefix
-from .gating import (AND, NOT, OR, BooleanGate, ClusterGate, EllipseGate, GateNode,
-                     OffsetQuadrantGate, PolygonGate, QuadrantGate, RectangleGate, TimeGate)
+from .gating import (AND, NOT, OR, BooleanGate, ClusterGate, CurlyQuadrantGate, EllipseGate,
+                     GateNode, OffsetQuadrantGate, PolygonGate, QuadrantGate, RectangleGate,
+                     TimeGate)
 from .transforms import Biex, Linear, Logicle, display_range, same
 
 WSP, GATINGML = "wsp", "gatingml"
@@ -186,6 +187,8 @@ def is_helper(node: GateNode) -> bool:
 def _is(gate, kind) -> bool:
     """`gate` is a `kind`, or a kind of it that tests events the same way
     — not one that only shares its fields."""
+    if isinstance(kind, tuple):
+        return any(_is(gate, k) for k in kind)
     return isinstance(gate, kind) and getattr(type(gate), "contains", None) is getattr(
         kind, "contains", None) and getattr(type(gate), "combine", None) is getattr(
         kind, "combine", None)
@@ -251,14 +254,42 @@ def _checked(gate):
     elif _is(gate, QuadrantGate):
         if len(gate.dims) != 2 or not finite([gate.x, gate.y]):
             raise Unwritable("a quadrant is cut at two numbers, on two parameters")
+    elif _is(gate, CurlyQuadrantGate):
+        if len(gate.dims) != 2 or not finite(gate.center):
+            raise Unwritable("a quadrant is cut at two numbers, on two parameters")
     return gate
 
 
-def prepare(sample: ExportSample, report: Report) -> GateNode:
+def corner_polygon(g, sample: ExportSample) -> PolygonGate:
+    """A corner of a quadrant with offset arms, or of a curly one, as the
+    polygon its two arms cut out of a box well beyond the axes — for a
+    format that has no such quadrant."""
+    scales = scales_of(g)
+    box = []
+    for dim, scale in zip(g.dims, scales):
+        if scale is None:
+            top = sample.range_of(sample.dimension(dim)[0])
+            box.append((-top, 2.0 * top))
+        else:
+            lo, hi = display_range(scale)
+            far = (lo - (hi - lo), hi + (hi - lo))
+            # a scale that ends (FlowJo's biexponential) cannot say where a
+            # point beyond its ends is: the box stops there
+            back = on(scale, off(scale, np.array(far)))
+            box.append(far if np.allclose(back, far, atol=1e-6 * (hi - lo)) else (lo, hi))
+    shape = g.corner(*box)
+    if shape is None:
+        raise Unwritable("the centre of its quadrant is off the scale")
+    vertices = np.column_stack([off(scale, shape[:, k]) for k, scale in enumerate(scales)])
+    return _checked(PolygonGate(list(g.dims), vertices, g.inside, g.scales))
+
+
+def prepare(sample: ExportSample, report: Report, curly: bool = False) -> GateNode:
     """The sample's tree with only rectangles, polygons, ellipses,
-    quadrants and combinations in it. A population keeps its name and its
-    place; each carries `source`, its path in MIL-C. One added to say
-    another (`helper`) has none of its own."""
+    quadrants and combinations in it — and curly quadrants, with `curly`,
+    for a FlowJo workspace, which has them. A population keeps its name
+    and its place; each carries `source`, its path in MIL-C. One added to
+    say another (`helper`) has none of its own."""
     root = GateNode(sample.gates.name)
 
     def expand(node: GateNode, name: str, taken: set[str]) -> list[GateNode]:
@@ -300,32 +331,15 @@ def prepare(sample: ExportSample, report: Report) -> GateNode:
             if g.op not in (AND, OR, NOT):
                 raise Unwritable(f"a combination ({g.op}) that is not and, or, not")
             return [GateNode(name, BooleanGate(g.op, operands))]
-        if _is(g, OffsetQuadrantGate):
-            # neither format has a quadrant whose arms tilt: the corner is
-            # the polygon its two arms cut out of a box well beyond the axes
-            scales = scales_of(g)
-            box = []
-            for dim, scale in zip(g.dims, scales):
-                if scale is None:
-                    top = sample.range_of(sample.dimension(dim)[0])
-                    box.append((-top, 2.0 * top))
-                else:
-                    lo, hi = display_range(scale)
-                    far = (lo - (hi - lo), hi + (hi - lo))
-                    # a scale that ends (FlowJo's biexponential) cannot say
-                    # where a point beyond its ends is: the box stops there
-                    back = on(scale, off(scale, np.array(far)))
-                    box.append(far if np.allclose(back, far, atol=1e-6 * (hi - lo))
-                               else (lo, hi))
-            shape = g.corner(*box)
-            if shape is None:
-                raise Unwritable("the centre of its quadrant is off the scale")
-            vertices = np.column_stack([off(scale, shape[:, k])
-                                        for k, scale in enumerate(scales)])
+        if _is(g, CurlyQuadrantGate) and curly:
+            return [GateNode(name, _checked(g))]
+        if _is(g, (OffsetQuadrantGate, CurlyQuadrantGate)):
             report.note(sample.name, node.path,
-                        "a corner of a quadrant with offset arms is written as a polygon")
-            return [GateNode(name, _checked(PolygonGate(list(g.dims), vertices, g.inside,
-                                                        g.scales)))]
+                        "a corner of a quadrant with offset arms is written as a polygon"
+                        if _is(g, OffsetQuadrantGate) else
+                        "a corner of a curly quadrant is written as a polygon that follows "
+                        "its curve in 256 pieces")
+            return [GateNode(name, corner_polygon(g, sample))]
         for kind in (RectangleGate, PolygonGate, EllipseGate, QuadrantGate):
             if _is(g, kind):
                 return [GateNode(name, _checked(g))]
@@ -446,12 +460,12 @@ def scales_of(gate) -> list:
 
 def axis_scales(sample: ExportSample, tree: GateNode) -> dict[str, object]:
     """Gate dimension → the scale to give that parameter in the file. It
-    is the scale of the axis in MIL-C — unless every polygon and ellipse
-    drawn on the parameter was drawn on one other scale, which is then the
-    one that keeps them as they are."""
+    is the scale of the axis in MIL-C — unless every polygon, ellipse and
+    curly quadrant drawn on the parameter was drawn on one other scale,
+    which is then the one that keeps them as they are."""
     drawn: dict[str, list] = {}
     for node in tree.walk():
-        if isinstance(node.gate, (PolygonGate, EllipseGate)):
+        if isinstance(node.gate, (PolygonGate, EllipseGate, CurlyQuadrantGate)):
             for dim, scale in zip(node.gate.dims, scales_of(node.gate)):
                 drawn.setdefault(dim, []).append(scale)
     out = {}

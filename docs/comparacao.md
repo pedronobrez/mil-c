@@ -5,6 +5,9 @@ só tinham sido conferidos por simulação. Aqui cada um foi posto ao lado do pr
 inspira, com a mesma entrada, e o que está escrito é o que foi medido. Onde um número não foi
 medido, ele não aparece.
 
+A §7, do mesmo dia, é de outro tipo: o quadrante "curly" do FlowJo, cuja curva o workspace não
+guarda, posto ao lado da leitura que o CytoML faz dele.
+
 Os scripts que produzem tudo isto estão em `tests/reference/` (o `README.md` de lá diz como
 instalar os pacotes e rodar). Eles não fazem parte da suíte de testes.
 
@@ -15,6 +18,7 @@ instalar os pacotes e rodar). Eles não fazem parte da suíte de testes.
 | `abundance.differential` | edgeR 4.10.7, diffcyt 1.32.1 | Chamado do mesmo jeito, o edgeR dá os mesmos números (p dentro de 0,06% no teste QL e 2% no LRT em 95% dos clusters). Contra os *padrões* do edgeR 4 e do diffcyt a diferença é maior, por desenho. A comparação achou dois defeitos no teste QL, que foram corrigidos. |
 | `graphcluster.phenograph` | PhenoGraph 1.5.7 (PyPI) | Mesmo número de clusters, com diferença de um ou dois, e partições tão parecidas com as do pacote quanto duas corridas do pacote entre si (ARI 0,71 nos eventos reais; 0,73 pacote contra pacote). |
 | `qc.check` | PeacoQC 1.22.0, flowAI 1.42.0 | Defeitos nítidos (degrau, entupimento) são achados igual ou melhor. Desvios lentos e moderados o PeacoQC achava e o nosso não (1,4% dos eventos reais removidos contra 5,1%): `qc.check` ganhou uma passada lenta e, medido de novo, acha-os no nível do PeacoQC (5,25% contra 5,13% dos eventos reais; 76% contra 74% de uma deriva injetada), sem as remoções dele em arquivos cujas medianas não se movem. |
+| `gating.CurlyQuadrantGate` lido por `wsp.read_wsp` | CytoML 2.24.0 (cytolib 2.24.0) | Os mesmos eventos em cada canto, a menos dos que a tabela da biexponencial do cytolib põe noutro lugar (até 65 de 40.000; no máximo 1 com a tabela dele no lugar da nossa). Contra o FlowJo, nada medido (§7). |
 | `normalize.fit` / `apply` | CytoNorm 2.0.13 (GitHub) | Sem clusters é a mesma curva (diferença média de 1e-5 do eixo). Com clusters, os dois programas diferem entre si tanto quanto duas sementes de um mesmo. Fora da faixa das referências o nosso é deliberadamente mais contido. |
 | `autocomp.autospill` / `classic` | AutoSpill 0.2.0 (GitHub), flowStats 4.24.0 | Nos mesmos eventos o nosso AutoSpill dá a matriz do pacote a 2e-5 (simulado) e 3e-4 (controles reais do flowCore), com o mesmo número de iterações. Em simulação acha a matriz verdadeira a 0,04 ponto percentual; o clássico, a 0,3. Os exemplos do próprio AutoSpill (FlowRepository) não puderam ser baixados. |
 | `cellcycle.fit` | o BrdU das mesmas células (223 arquivos públicos de BrdU/PI) | O FlowJo e o ModFit não estão aqui. Sem gate de singletos, os agregados achados (24,8%) batem com o que o gate tira (25,6%; r = 0,90) e as fases ficam as dos singletos. Nos 39 controles o Dean-Jett-Fox dá 6,6 pontos de S a menos que o BrdU (DP 5,8); o Watson, 3,9 a mais com DP 13,5. |
@@ -883,6 +887,96 @@ os arquivos lidos pelo flowCore: maior diferença relativa 3,5e-14.
 - A cinética não foi conferida num fluxo de cálcio real (o FlowRepository não respondeu; o
   Zenodo não tinha um), e o R refaz as mesmas definições — escritas por mim, não por outro.
 
+## 7. Quadrante "curly" do FlowJo (`milc/gating.py`, `milc/wsp.py`) e o CytoML
+
+### O que o workspace guarda, e o que não
+
+O FlowJo 10 tem um quadrante cujos braços acima e à direita do centro se curvam, acompanhando o
+espalhamento de uma população negativa compensada, que cresce com a intensidade no outro eixo.
+O manual (docs.flowjo.com, *Curly Quadrant*, em advanced-gates) dá o modelo — cada parâmetro
+compensado tem um limite de detecção p2 = a·√p1 + b, `a` a "curvatura" do ruído da
+fotomultiplicadora e `b` a fluorescência de fundo —, diz que os braços abaixo e à esquerda do
+centro são sempre retos, e não diz como `a` é escolhido.
+
+No workspace o canto curvo é um `gating:CurlyQuad` com um `gating:dimension` por eixo, cada um
+limitado de um lado só (`min` onde o canto é o lado alto do eixo, `max` onde é o baixo): o centro
+e qual canto, exatamente como um quadrante comum, e nada da curva. Assim está no único workspace
+do FlowJo com quadrantes curly que se achou publicado (FlowJo 10.10.0, no repositório do
+allotropy, `tests/parsers/flowjo/testdata/flowjo_example_2.wsp`, sem os `.fcs`) e assim o CytoML
+o lê (`winFlowJoWorkspace.hpp`, `getGate(wsCurlyQuadGateNode&)`). O FlowKit não lê `CurlyQuad`.
+
+Quem lê o workspace, então, desenha a curva. O cytolib (`src/gate.cpp`,
+`CurlyQuadGate::interpolate`) passa o centro para 255 canais de cada eixo (a biexponencial do
+eixo refeita com 255 canais; num eixo linear, valor × 255 / topo) e traça
+y = cy + 0,001·(x − cx)² para o braço da direita e x = cx + 0,001·(y − cy)² para o de cima, em
+40 pontos cada, até o canal 255; os outros dois braços são retos. É a curva adotada aqui, na
+escala do próprio eixo como o MIL-C desenha todos os outros gates (a tabela de 4096 pontos do
+FlowJo). Outro programa, o GateLab (`src/engine/models.ts`), diz ter ajustado às contagens do
+FlowJo em 44 populações de três workspaces públicos do FlowRepository a curva 0,012·d^1,5 em 256
+canais; os dados não puderam ser baixados aqui (o FlowRepository pede login para o workspace),
+e isso não foi conferido.
+
+### O que foi comparado
+
+`tests/reference/curly_compare.py` escreve um `.fcs` de 40.000 eventos simulados — negativos,
+PE+, BV786+ e duplo-positivos, com o ruído da contagem de fótons (variância proporcional à luz)
+e uma matriz de spillover, de modo que a população negativa compensada se abre com a intensidade
+do outro eixo — e, com o escritor de workspace do MIL-C, um `.wsp` com três cruzamentos curly
+(PE × BV786 nas escalas biexponenciais do workspace do allotropy, centro em (293, 435); FITC
+linear × PE biexponencial; PE × BV786 com centro alto, sob um polígono). **Esse workspace não foi
+feito pelo FlowJo.** O CytoML o lê com `flowjo_to_gatingset` e dá, evento a evento, o que põe em
+cada população (`curly_cytoml.R`); o MIL-C o lê com `wsp.read_wsp`.
+
+### Concordância medida
+
+| população | CytoML | MIL-C | eventos em lugar diferente | idem, com a tabela do cytolib | curva do GateLab | braços retos |
+|---|---:|---:|---:|---:|---:|---:|
+| Cells | 38.389 | 38.389 | 0 | 0 | 38.389 | 38.389 |
+| Cells/high Q1 | 9.517 | 9.517 | 0 | 0 | 9.518 | 9.517 |
+| Cells/high Q2 | 5.628 | 5.633 | 5 | 1 | 5.615 | 5.667 |
+| Cells/high Q3 | 9.599 | 9.594 | 5 | 1 | 9.611 | 9.560 |
+| Cells/high Q4 | 13.644 | 13.645 | 1 | 1 | 13.645 | 13.645 |
+| CD8 CD4 Q1 | 9.547 | 9.606 | 59 | 0 | 9.671 | 9.265 |
+| CD8 CD4 Q2 | 6.402 | 6.349 | 65 | 0 | 6.277 | 7.081 |
+| CD8 CD4 Q3 | 10.607 | 10.601 | 6 | 0 | 10.608 | 10.210 |
+| CD8 CD4 Q4 | 13.444 | 13.444 | 0 | 0 | 13.444 | 13.444 |
+| FITC PE Q1 | 15.033 | 15.082 | 49 | 0 | 15.319 | 11.521 |
+| FITC PE Q2 | 956 | 908 | 50 | 1 | 667 | 4.473 |
+| FITC PE Q3 | 6.670 | 6.671 | 1 | 1 | 6.675 | 6.667 |
+| FITC PE Q4 | 17.339 | 17.339 | 0 | 0 | 17.339 | 17.339 |
+
+CytoML 2.24.0, flowWorkspace 4.24.0, cytolib 2.24.0.
+
+### Onde diferem e por quê
+
+- **A tabela da biexponencial.** Para a curva, o cytolib refaz a biexponencial do eixo com 255
+  canais (`setTransformedScale(255)`): o canal do zero, um número inteiro, cai noutro lugar e as
+  décadas se esticam para alcançá-lo; e a raiz que dá o lado negativo da escala
+  (`biexpTrans::logRoot`) para assim que um passo de Newton fica abaixo de 1, por uma conversão
+  para inteiro (`abs((int64_t) dX) < 1e-12`) — no eixo BV786 do workspace do allotropy a escala
+  começa em −615 em vez de −1017, e o centro (435) cai no canal 93,2 dos 255 em vez de 79,2.
+  Com essa tabela reproduzida (a raiz truncada, 256 pontos e spline natural, como no cytolib)
+  no lugar da nossa,
+  sobra no máximo 1 evento por população: a curva em si é a mesma. A tabela do cytolib não foi
+  adotada: é um artefato dele, e o MIL-C usa a escala do FlowJo em todos os outros gates.
+- **As bordas do gráfico.** Os polígonos do cytolib param no canal 255 (o último dos 40 pontos
+  fica a 39/40 do caminho), deixam uma faixa entre o último ponto e os cantos do gráfico e põem
+  os lados de fora em −4000 canais. Aqui cada canto é a regra que define a curva, sem bordas:
+  um evento acima do topo de um eixo também cai num canto. Nos eventos simulados sobra no
+  máximo 1 evento por população, que não foi investigado; num arquivo com muitos eventos
+  saturados a diferença seria maior.
+- **A curva em si não se sabe qual é.** Nos mesmos eventos, a curva do GateLab muda até 1,6% de
+  um canto grande e um quarto de um canto pequeno (FITC PE Q2: 908 contra 667); braços retos,
+  até cinco vezes (4.473). Qual das curvas é a do FlowJo só um workspace do FlowJo com os seus
+  `.fcs` diz: a contagem do FlowJo fica ao lado de cada canto lido, e `count_mismatches` lista
+  os que não batem.
+
+Em `tests/test_curly_quadrant.py`: a leitura do XML do FlowJo 10.10, a geometria contra uma
+transcrição da construção do cytolib (no máximo 2 eventos por canto, os que ficam entre os 40
+segmentos e a curva), o canto como polígono, o projeto salvo e reaberto, a ida e volta pelo
+`.wsp` (os mesmos eventos) e pelo Gating-ML (no máximo 2 eventos por canto), as contagens do
+CytoML acima e o quadrante na janela.
+
 ---
 
 ## O que não foi feito
@@ -893,5 +987,9 @@ os arquivos lidos pelo flowCore: maior diferença relativa 3,5e-14.
 - A normalização não foi comparada com arquivos FCS brutos e `transformList` do CytoNorm: os
   eventos foram entregues já transformados, para comparar a normalização e não a transformação.
 - Os exemplos de controles do artigo do AutoSpill não foram obtidos (FlowRepository exige conta).
+
+- O quadrante curly não foi conferido com o FlowJo: não se achou um workspace com quadrantes
+  curly e os seus `.fcs` que pudesse ser baixado (os do FlowRepository que o GateLab cita pedem
+  login).
 - Os tempos de execução foram anotados com a máquina ocupada por outros processos e não servem
   como medida de desempenho.
