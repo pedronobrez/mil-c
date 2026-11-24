@@ -7,6 +7,7 @@ The command line: everything the window will do, without the window.
     python -m milc concat   DATA --wsp analysis.wsp --population PATH --out NAME
     python -m milc qc       DATA --out qc.csv --plots qc.pdf
     python -m milc gates    DATA --wsp analysis.wsp --out gates.wsp   (or gates.xml)
+    python -m milc autocomp CONTROLS --out spillover.csv
 """
 
 from __future__ import annotations
@@ -710,6 +711,61 @@ def cmd_qc(a) -> int:
     return 0
 
 
+def cmd_autocomp(a) -> int:
+    from . import autocomp
+    from .fcs import read_header as header
+    paths = []
+    for p in a.controls:
+        paths += _files(p) if os.path.isdir(p) else [p]
+    if not paths:
+        print("no FCS files among the controls", file=sys.stderr)
+        return 2
+    kv = header(paths[0])
+    n = int(kv["$PAR"])
+    channels = [kv[f"$P{i}N"].strip() for i in range(1, n + 1)]
+    detectors = ([d.strip() for d in a.detectors.split(",")] if a.detectors
+                 else autocomp.fluorescence(channels, kv))
+    by_name = {os.path.basename(p): p for p in paths}
+    primaries = {}
+    for item in a.assign or []:
+        file, _, det = item.rpartition("=")
+        if file not in by_name or (det not in detectors and det.lower() != "unstained"):
+            print(f"--assign {item}: expected FILE=DETECTOR or FILE=unstained, with FILE one "
+                  "of the controls and DETECTOR one of " + ", ".join(detectors), file=sys.stderr)
+            return 2
+        primaries[by_name[file]] = None if det.lower() == "unstained" else det
+    try:
+        controls = autocomp.load_controls(paths, detectors, a.gate, a.max_events or None)
+        r = autocomp.compute(paths, detectors, a.method, primaries, controls=controls,
+                             universal_negative=a.universal_negative)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    wide = max(len(c.name) for c in controls)
+    print(f"{'control':{wide}s} {'events':>9s}  detector")
+    for c in controls:
+        gated = f"  ({c.gated:.0%} in the scatter gate)" if c.gated is not None else ""
+        print(f"{c.name:{wide}s} {len(c.events):>9,d}  {c.primary or 'unstained'}{gated}")
+    print(f"\n{autocomp.METHODS[r.method]}; spillover in % (row: fluorochrome, "
+          "column: detector)")
+    cw = max(9, max(len(d) for d in detectors) + 1)
+    print(" " * cw + "".join(f"{d:>{cw}s}" for d in detectors))
+    for d, row in zip(detectors, r.matrix):
+        print(f"{d:{cw}s}" + "".join(f"{100 * v:>{cw}.3f}" for v in row))
+    if r.history:
+        print(f"\n{len(r.history)} iteration(s), "
+              + ("converged" if r.converged else "did not converge"))
+    if r.residual is not None:
+        print(f"largest spill left in the controls once compensated: "
+              f"{100 * r.largest_residual():.3f}%")
+    for note in r.notes:
+        print("note: " + note)
+    if a.out:
+        autocomp.write_csv(a.out, r)
+        print(f"matrix -> {a.out}")
+    return 0
+
+
 def cmd_gui(a) -> int:
     # imported by name, here, where a packager can see it. Asked for through
     # __import__ it was left out of the first bundle, which then passed its
@@ -867,6 +923,28 @@ def main(argv=None) -> int:
                    help="how many populations to draw under the flow rate, those suspect "
                         "for longest first")
     s.set_defaults(run=cmd_qc)
+
+    s = sub.add_parser("autocomp", help="a spillover matrix from single-stain controls")
+    s.add_argument("controls", nargs="+",
+                   help="the control FCS files, or a folder of them: one per fluorochrome, "
+                        "and optionally an unstained one (found by its name)")
+    s.add_argument("--method", choices=("autospill", "classic"), default="autospill",
+                   help="autospill: robust regression refined until no spill is left "
+                        "(Roca et al. 2021); classic: positive against negative population")
+    s.add_argument("--detectors", help="the detectors of the matrix, comma-separated; "
+                                       "default: those of the first file's $SPILL")
+    s.add_argument("--assign", action="append", metavar="FILE=DETECTOR",
+                   help="the detector of one control, in place of the brightest; "
+                        "FILE=unstained for the unstained one. May be repeated")
+    s.add_argument("--gate", action="store_true",
+                   help="keep the main population on forward and side scatter")
+    s.add_argument("--universal-negative", action="store_true",
+                   help="classic: the unstained control as every control's negative, "
+                        "not the control's own negative events")
+    s.add_argument("--max-events", type=int, default=100_000,
+                   help="per control, a random choice of this many; 0 for all")
+    s.add_argument("--out", metavar="FILE.csv", help="the matrix as proportions, as $SPILL has it")
+    s.set_defaults(run=cmd_autocomp)
 
     s = sub.add_parser("selftest", help="the whole route on invented data: is this build sound?")
     s.add_argument("--no-window", action="store_true", help="skip the part that needs Qt")

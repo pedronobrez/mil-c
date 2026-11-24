@@ -143,3 +143,18 @@ def test_files_without_a_detector_and_the_csv(clean, tmp_path):
     assert lines[0] == "," + ",".join(DETECTORS) and lines[2].startswith("PE-A,")
     assert ac.fluorescence(["FSC-A", "FSC-H", "SSC-A", "FITC-A", "FITC-H", "PE-A", "Time"]) \
         == ["FITC-A", "PE-A"]
+
+
+def test_the_command_line(clean, tmp_path, capsys):
+    from milc.cli import main
+    folder = os.path.dirname(clean[0])
+    out = tmp_path / "spill.csv"
+    assert main(["autocomp", folder, "--method", "classic", "--out", str(out)]) == 0
+    said = capsys.readouterr().out
+    assert "Unstained control" in said and "unstained" in said and out.exists()
+    assert any(line.startswith("PE stained control") and line.endswith("PE-A")
+               for line in said.splitlines())
+    # a control said to be another's detector, and a wrong one
+    pe = "PE stained control.fcs"
+    assert main(["autocomp", folder, "--assign", f"{pe}=BV999-A"]) == 2
+    assert "FILE=DETECTOR" in capsys.readouterr().err

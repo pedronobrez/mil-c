@@ -1965,9 +1965,13 @@ class CompensationDialog(QtWidgets.QDialog):
                              "their file, or of the workspace")
         self.discard = QtWidgets.QPushButton("Discard changes")
         self.discard.setToolTip("Forget what was typed and show the sample's matrix again")
+        self.controls = QtWidgets.QPushButton("From controls…")
+        self.controls.setToolTip("Compute a matrix from single-stain controls and put it in "
+                                 "the table, to apply like one typed by hand")
+        self.controls.clicked.connect(self.from_controls)
         close = QtWidgets.QPushButton("Close")
         close.setAutoDefault(False)
-        for b in (self.apply_selected, self.apply_all, self.back, self.discard):
+        for b in (self.apply_selected, self.apply_all, self.back, self.discard, self.controls):
             b.setAutoDefault(False)
         left = QtWidgets.QVBoxLayout()
         left.addWidget(self.samples, 1)
@@ -1984,6 +1988,7 @@ class CompensationDialog(QtWidgets.QDialog):
         buttons.addWidget(self.apply_all)
         buttons.addWidget(self.back)
         buttons.addWidget(self.discard)
+        buttons.addWidget(self.controls)
         buttons.addStretch(1)
         buttons.addWidget(close)
         layout = QtWidgets.QVBoxLayout(self)
@@ -2184,6 +2189,38 @@ class CompensationDialog(QtWidgets.QDialog):
     def _done(self) -> None:
         self._sources()
         self._load(self.current())
+
+    # --- a matrix from single-stain controls ---------------------------------------------
+
+    def controls_dialog(self):
+        """The dialog that computes a matrix from controls, for the
+        detectors of the matrix shown, beside the one the sample carries."""
+        from .autocomp_dialog import ControlsDialog
+        original, where = self.session.original_matrix(self.shown)
+        label = {"file": f"In {self.shown.name}'s file",
+                 "workspace": "In the FlowJo workspace"}.get(where, "The samples' matrix")
+        return ControlsDialog(self.channels, original, label,
+                              os.path.dirname(self.shown.path), self)
+
+    def from_controls(self) -> None:
+        if not self.channels:
+            return
+        d = self.controls_dialog()
+        if d.exec() and d.matrix() is not None:
+            self.put(d.matrix())
+
+    def put(self, matrix) -> None:
+        """Type a matrix into the table — the cells of the detectors it has
+        — as if by hand: nothing is applied until a button says so."""
+        for i, a in enumerate(self.channels):
+            for j, b in enumerate(self.channels):
+                if i != j and a in matrix.channels and b in matrix.channels:
+                    v = 100 * matrix.matrix[matrix.channels.index(a), matrix.channels.index(b)]
+                    # four figures: what a control measures, and no more
+                    self.table.item(i, j).setText("0" if abs(v) < 5e-4 else f"{v:.4g}")
+        self.table.resizeColumnsToContents()
+        self.state.setText("Computed from single-stain controls, not applied yet: select "
+                           "the samples it is for, then apply it.")
 
 
 class ExportDialog(QtWidgets.QDialog):
