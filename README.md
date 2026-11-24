@@ -73,15 +73,18 @@ ClusterExplorer plugins — works, and leaves three things to be desired:
 - Export the population shown, of the samples selected or of all, as FCS or CSV.
 - A gate drawn on one sample is every sample's, as on a FlowJo group — or only this one's.
 - What is drawn is kept beside the files (`MIL-C gates.json`) and is there next time.
-- **Quality…** checks each acquisition in the order it was acquired for three things: a flow
-  rate far from the usual one (a clog), an abrupt change of signal (a step, a bubble), and a
+- **Quality…** checks each acquisition in the order it was acquired for four things: a flow
+  rate far from the usual one (a clog), an abrupt change of signal (a step, a bubble), a
   moderate shift that lasts (a drift: a population's level, followed over a long window, away
-  from where it stays for longest). The bad stretches are removed as a first population, Clean,
-  that every gate, statistic and concatenation then starts from. The limits are in the dialog —
-  MAD limit (6), consecutive bins (5), events per bin, drift limit (0.25 of the spread of the
-  parameter's events; off does not look for drifts) — with Check again, and what is applied is
-  recorded with the limits used. Where more than a fifth of a file would go, look at the plots
-  before applying. No R needed; set beside PeacoQC and flowAI in `docs/comparacao.md`.
+  from where it stays for longest), and a moderate shift that does not (a shift: a short
+  stretch whose level stands apart from the bins on both sides). The bad stretches are removed
+  as a first population, Clean, that every gate, statistic and concatenation then starts from.
+  The limits are in the dialog — MAD limit (6), consecutive bins (5), events per bin, drift
+  limit and shift limit (both 0.25 of the spread of the parameter's events; off does not look)
+  — with Check again, and what is applied is recorded with the limits used. Where more than a
+  fifth of a file would go, look at the plots before applying. No R needed; set beside PeacoQC
+  and flowAI in `docs/comparacao.md`, with the limits measured on copies of real files with
+  defects of known size.
 - A **quadrant's arms can be moved one by one**: drag the small square on an arm to tilt that
   arm alone; the round handle at the centre moves all four. Until an arm is moved it is the
   plain quadrant, and old projects open unchanged.
@@ -279,7 +282,7 @@ concatenated `.fcs`, FlowJo's included; `--phenograph` takes `--k`, `--resolutio
 leiden|louvain` and `--min-cluster-size`, and `--transform` takes `biex`, `arcsinh` or `logicle`.
 
 `qc` only looks. To leave the bad stretches out, give `--qc` (with `--mad`, `--consecutive`,
-`--events-per-bin`, `--qc-channels` if the defaults do not suit) to `concat`, `stats` or
+`--events-per-bin`, `--drift`, `--shift`, `--qc-channels` if the defaults do not suit) to `concat`, `stats` or
 `export`: Clean becomes the first population for that run, gate paths are written as before,
 and `concat` also writes `NAME_qc.csv`. A folder where it was applied in the window is used
 as it is.
@@ -373,12 +376,16 @@ software it takes after, on the same input; `docs/comparacao.md` has the tables,
 - **Quality control**: on a planted step it removes what PeacoQC removes; a clog it finds and
   PeacoQC, which has no flow-rate check, does not; of a slow drift it removes as much (76 to
   97% against 74 to 98%; before the slow pass, 53 to 81%). On the 32 real files it removes
-  5.3% of the events, PeacoQC 5.1% and flowAI 12.0%, with no truth to say who is right, and
+  5.5% of the events (5.3% before the short pass), PeacoQC 5.1% and flowAI 12.0%, with no truth to say who is right, and
   not the same events: 56% of what PeacoQC removes this removes too. It leaves alone three
   files of which PeacoQC removes 12 to 31% with no channel moving, and takes more than a fifth
   of two (7Ctrl5, 14Case1) where several channels shift by a quarter to more than one spread.
-  A moderate defect that is short (0.3 of the spread over 5% of the file) is still not seen,
-  and the drift limit was chosen on these 32 files.
+  On copies of the real files with a defect of known size: a shift of 0.3 of the spread over
+  5% of the file is found in 24 of 32 (20 without the short pass; PeacoQC found it in 8 of 8
+  small ones, and removed 6.3% of the same files with no defect, where this removes 0.04%); a
+  lasting shift of 0.3 in 80% of the cases, of 0.25 in 56%. The real files lose the same
+  (5.5%) with the drift limit anywhere from 0.20 to 0.33 and the shift limit from 0.20 to
+  0.30: 0.25 is the middle of both. Where a shift becomes a defect the data cannot say.
 - **A workspace written here has not been opened in FlowJo.** It was read back by this program
   and by FlowKit and gated the same events: 32 samples, 192 populations, no event of
   difference. Its elements are those FlowJo 10.10 writes for samples, matrices, scales and

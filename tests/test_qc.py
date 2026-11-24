@@ -157,7 +157,7 @@ def test_slow_drift():
     assert 39.5 < lo < 42 and hi == t.max()
     assert removed_within(r, t, 40, 60) > 0.92
     assert removed_outside(r, t, 40, 60) < 0.005
-    fast = check(x, t, drift=0)
+    fast = check(x, t, drift=0, shift=0)
     assert fast.found == [[qc.SIGNAL]] and fast.counts[qc.DRIFT] == 0
     assert 0.75 < removed_within(fast, t, 40, 60) < 0.85
 
@@ -178,13 +178,47 @@ def test_moderate_shift_that_lasts():
     assert r.summary == ("To remove: 20.3% of 59,906 events, in 1 stretch(es) of time — "
                          "drift 12,150 (FSC-A). That is more than a fifth of the file: look "
                          "at the plots before applying.")
-    assert not check(x, t, drift=0).intervals
+    assert not check(x, t, drift=0, shift=0).intervals
+    # without the slow pass the short one sees some of it, against what follows:
+    # a shift at an end of the acquisition has neighbours on one side only
+    short = check(x, t, drift=0)
+    assert short.found == [[qc.SHIFT]] and 0 < removed_within(short, t, 0, 12) < 1
+    assert removed_outside(short, t, 0, 12) == 0
     # a shift of a tenth of the spread is under the limit, until the limit is lowered
     _, t, x = acquisition(21)
     x[t < 12, 0] += 0.1 * 9000
     assert not check(x, t).intervals
     low = check(x, t, drift=0.05)                 # measured: all of it, 0.8% of the rest
     assert removed_within(low, t, 0, 12) > 0.8 and removed_outside(low, t, 0, 12) < 0.02
+
+
+def test_moderate_shift_that_is_short():
+    """FSC 0.3 of its spread higher for 3 s, a twentieth of the file: too
+    little for five bins and too short for the slow window — the short
+    pass's case. It finds most of them, not all: the limit is 0.25 and
+    the shift 0.3, and its noise is a bin's."""
+    within, without, outside = [], [], []
+    for seed in range(40, 52):
+        _, t, x = acquisition(seed)
+        x[(t >= 30) & (t < 33), 0] += 0.3 * 9000
+        r = check(x, t)
+        within.append(removed_within(r, t, 30, 33))
+        outside.append(removed_outside(r, t, 30, 33))
+        without.append(removed_within(check(x, t, shift=0), t, 30, 33))
+        if seed == 40:
+            assert qc.SHIFT in r.found[0] and r.blamed == ["FSC-A"]
+            (j, a, b, level, near), = r.bins.shifts
+            assert r.populations[j] == "FSC-A" and level - near > 0.25 * 9000
+            assert r.bins.bad_shift[a:b, j].all() and r.bins.bad_shift.sum() == b - a
+    # measured: 75% of it on average, half or more in 9 of 12; 20% without the
+    # short pass; at most 0.7% of the rest. Over 20 seeds: 65%, 12 of 20
+    assert np.mean(within) > 0.6 and sum(w >= 0.5 for w in within) >= 8
+    assert np.mean(without) < 0.25 and max(outside) < 0.01
+    # a fifth of a spread is under the limit; a twentieth of the file at
+    # half a spread was found already by the fast pass
+    _, t, x = acquisition(40)
+    x[(t >= 30) & (t < 33), 0] += 0.2 * 9000
+    assert removed_within(check(x, t), t, 30, 33) < 0.2
 
 
 def test_drift_of_one_population():
@@ -198,7 +232,7 @@ def test_drift_of_one_population():
     # measured: all of it and 1.1% of the rest; 93 to 100% over 10 seeds,
     # with at most 3% of the rest
     assert removed_within(r, t, 45, 60) > 0.95 and removed_outside(r, t, 45, 60) < 0.02
-    assert not check(x, t, drift=0).intervals
+    assert not check(x, t, drift=0, shift=0).intervals
 
 
 def test_the_slow_pass_leaves_the_rest_as_it_was():
@@ -214,13 +248,14 @@ def test_the_slow_pass_leaves_the_rest_as_it_was():
     x[(t >= 10) & (t <= 11), :2] *= 0.3
     bubble = (x, t)
     for (x, t), found in ((clog, [qc.RATE]), (step, [qc.SIGNAL, qc.DRIFT]), (bubble, [qc.SIGNAL])):
-        with_it, without = check(x, t), check(x, t, drift=0)
+        with_it, without = check(x, t, shift=0), check(x, t, drift=0, shift=0)
         assert with_it.intervals == without.intervals and with_it.found == [found]
         assert np.array_equal(with_it.keep, without.keep)
     for seed in range(20, 24):
         _, t, x = acquisition(seed)
         assert not check(x, t).intervals
-        # 1.5 periods of a sine half a spread high: no level to drift from
+        # 1.5 periods of a sine half a spread high: no level to drift from,
+        # and nothing short
         x[:, 0] += 0.5 * 9000 * np.sin(2 * np.pi * 1.5 * t / 60)
         assert not check(x, t).intervals
     # the floor under the slow pass is what keeps a clean file whole: without
@@ -287,7 +322,8 @@ def test_what_is_reported_is_what_the_gate_removes():
     assert b.limits.shape == (6, 2) and b.rate_limits[0] < RATE < b.rate_limits[1]
     assert b.slow.shape == b.bad_drift.shape == b.medians.shape and b.window == 67
     assert b.slow_limits.shape == (6, 2) and not b.bad_drift.any()
-    assert list(r.counts) == [qc.RATE, qc.SIGNAL, qc.DRIFT, qc.ISLANDS]
+    assert b.bad_shift.shape == b.medians.shape and not b.bad_shift.any() and b.shifts == []
+    assert list(r.counts) == [qc.RATE, qc.SIGNAL, qc.DRIFT, qc.SHIFT, qc.ISLANDS]
     assert r.found == [[qc.SIGNAL]]
     assert r.summary == ("To remove: 2.0% of 60,237 events, in 1 stretch(es) of time — "
                          "signal 1,200 (FSC-A, SSC-A).")
@@ -556,8 +592,9 @@ def test_window(app, folder):
     assert d.table.rowCount() == 3 and d.every_button.isEnabled()
     assert [d.table.item(r, 0).text() for r in range(3)] == ["A1", "B1", "C1"]
     assert d.table.item(0, 2).text() == "0.0%" and d.table.item(1, 2).text() != "0.0%"
-    assert d.table.item(1, 6).text() == ", ".join(d.result.blamed)
-    assert d.table.item(1, 5).text() == "0" and d.table.item(2, 3).text() != "0"
+    assert d.table.item(1, 7).text() == ", ".join(d.result.blamed)
+    assert d.table.item(1, 5).text() == d.table.item(1, 6).text() == "0"
+    assert d.table.item(2, 3).text() != "0"
     assert d.ticked() == ["A1", "B1", "C1"]
     d.set_ticked("B1", False)
     d.apply_everyone()
@@ -610,10 +647,11 @@ def test_window_limits(app, tmp_path):
     g, s = w.gates, w.session
     g.samples.setCurrentRow(1)
     d = g.open_quality()
-    assert (d.mad.value(), d.consecutive.value(), d.drift.value()) == (6.0, 5, 0.25)
+    assert (d.mad.value(), d.consecutive.value(), d.drift.value(), d.shift.value()) == (
+        6.0, 5, 0.25, 0.25)
     assert d.events_per_bin.value() == 0 and d.events_per_bin.text() == "auto"
     assert d.settings() == d.used == {"mad": 6.0, "consecutive": 5, "events_per_bin": None,
-                                      "drift": 0.25}
+                                      "drift": 0.25, "shift": 0.25}
     assert not d.again_button.isEnabled()
     # the drift is what is found, and what the plot is on
     assert d.result.found == [[qc.DRIFT]] and d.channel.currentText() == "FSC-A"
@@ -624,20 +662,28 @@ def test_window_limits(app, tmp_path):
     assert shown["slow_limits"][0] < np.median(shown["slow"]) < shown["slow_limits"][1]
     assert shown["slow"][shown["bad_drift"]].max() > shown["slow_limits"][1]
 
-    # without the slow pass nothing is found; the button says there is something to check
+    # without the slow pass, and the short one, nothing is found; the button
+    # says there is something to check
     d.drift.setValue(0.0)
-    assert d.drift.text() == "off" and d.again_button.isEnabled()
+    d.shift.setValue(0.0)
+    assert d.drift.text() == d.shift.text() == "off" and d.again_button.isEnabled()
     assert d.result.intervals                        # not yet checked again
     d.check_again()
-    assert not d.again_button.isEnabled() and d.used["drift"] == 0.0
+    assert not d.again_button.isEnabled() and d.used["drift"] == d.used["shift"] == 0.0
     assert not d.result.intervals and d.summary.text().startswith("Nothing to remove")
     assert d.channel.currentText() == "FSC-A"
+    # the short pass alone sees the part of it that stands apart from what follows
+    d.shift.setValue(0.25)
+    d.check_again()
+    assert d.result.found == [[qc.SHIFT]] and d.series()["shifts"]
+    lo, hi, level, near = d.series()["shifts"][0]
+    assert lo < 10 and level > near + 0.3 * 9000
     d.drift.setValue(0.25)
     d.mad.setValue(4.0)
     d.consecutive.setValue(3)
     d.events_per_bin.setValue(200)
     d.check_again()
-    wanted = {"mad": 4.0, "consecutive": 3, "events_per_bin": 200, "drift": 0.25}
+    wanted = {"mad": 4.0, "consecutive": 3, "events_per_bin": 200, "drift": 0.25, "shift": 0.25}
     assert d.used == wanted and d.result.intervals
     assert np.array_equal(d.result.keep, s.quality(s.entries[1], **wanted).keep)
     assert int(d.result.bins.events[0]) == 200
@@ -647,9 +693,11 @@ def test_window_limits(app, tmp_path):
     assert {k: s.quality_settings[k] for k in wanted} == wanted
     assert s.load(s.entries[1]).count("Clean") == int(d.result.keep.sum())
     assert "Last applied with MAD limit 4, 3 consecutive bins, 200 events per bin, drift " \
-           "limit 0.25." in d.state.text()
+           "limit 0.25, shift limit 0.25." in d.state.text()
+    # a project applied before there was a short pass has no shift limit
     assert limits_text({"mad": 6.0, "consecutive": 5, "events_per_bin": None, "drift": 0.0}) == \
-        "MAD limit 6, 5 consecutive bins, auto events per bin, drift not judged"
+        "MAD limit 6, 5 consecutive bins, auto events per bin, drift not judged, short " \
+        "shifts not judged"
 
     # the table is of the limits of its own check, and is made again with new ones
     d.survey()
@@ -659,6 +707,7 @@ def test_window_limits(app, tmp_path):
     assert d.survey_used == wanted and d.table.item(1, 5).text() != "0"
     assert d.table.item(0, 2).text() == "0.0%"
     d.drift.setValue(0.0)
+    d.shift.setValue(0.0)
     d.mad.setValue(6.0)
     d.check_again()
     for _ in range(3):
@@ -673,11 +722,12 @@ def test_window_limits(app, tmp_path):
 
     # the dialog opens on what was last applied
     again = g.open_quality()
-    assert again.drift.value() == 0.0 and again.events_per_bin.value() == 200
+    assert again.drift.value() == again.shift.value() == 0.0
+    assert again.events_per_bin.value() == 200
     assert again.used == d.used and again.result.counts[qc.DRIFT] == 0
     again.remove()
     again.close()
-    assert g.open_quality().drift.value() == 0.25
+    assert (g.open_quality().drift.value(), g.open_quality().shift.value()) == (0.25, 0.25)
 
 
 def test_window_without_time(app, tmp_path):
@@ -762,9 +812,13 @@ def test_cli_checks_every_sample(folder, tmp_path, capsys):
     row = _rows(out)["E1"]
     assert int(row["Drift"]) > 8000 and row["Parameters"] == "FSC-A"
     assert 20 < float(row["Removed %"]) < 27         # measured: 25.3%
-    assert main(["qc", str(drifting), "--drift", "0", "--out", out]) == 0
-    assert _rows(out)["E1"]["Drift"] == "0"
+    assert row["Shift"] == "0"
+    assert main(["qc", str(drifting), "--drift", "0", "--shift", "0", "--out", out]) == 0
+    assert _rows(out)["E1"]["Drift"] == _rows(out)["E1"]["Shift"] == "0"
     assert int(_rows(out)["E1"]["Removed"]) < 0.5 * int(row["Removed"])
+    # the short pass alone sees some of it
+    assert main(["qc", str(drifting), "--drift", "0", "--out", out]) == 0
+    assert int(_rows(out)["E1"]["Shift"]) > 0 and _rows(out)["E1"]["Drift"] == "0"
     assert main(["qc", folder, "--channels", "nope"]) == 2
     assert main(["qc", str(tmp_path / "o")]) == 2
     assert not os.path.exists(os.path.join(folder, "MIL-C.json"))        # only looked at
@@ -799,6 +853,9 @@ def test_cli_cleans_before_gating_as_the_session_does(folder, tmp_path, capsys):
     assert main(["concat", folder, "--wsp", str(wsp), "--qc", "--drift", "0.5",
                  "--out", out + "5"]) == 0
     assert Dataset.load(out + "5.npz").provenance["quality"]["settings"]["drift"] == 0.5
+    assert main(["concat", folder, "--wsp", str(wsp), "--qc", "--shift", "0",
+                 "--out", out + "0"]) == 0
+    assert Dataset.load(out + "0.npz").provenance["quality"]["settings"]["shift"] == 0
     # and none of it touched the project
     with open(os.path.join(folder, "MIL-C.json"), encoding="utf-8") as f:
         assert f.read() == project
@@ -815,7 +872,7 @@ def test_cli_cleans_before_gating_as_the_session_does(folder, tmp_path, capsys):
     assert np.array_equal(ds.X, by_session.X)
     done = ds.provenance["quality"]
     assert done["settings"] == {"mad": 6.0, "consecutive": 5, "events_per_bin": None,
-                                "drift": 0.25, "channels": None}
+                                "drift": 0.25, "shift": 0.25, "channels": None}
     b = done["samples"]["B1"]
     assert b["removed"] == int((~s.quality(s.entries[1]).keep).sum()) > 0 and b["checked"]
     assert done["samples"]["A1"]["removed"] == 0 and b["timestep"] == TIMESTEP
@@ -905,11 +962,15 @@ def test_report_says_what_was_removed():
     quality["settings"].update(mad=4.0, events_per_bin=300, channels=["CD8", "CD4"])
     said = "\n".join(plate.summary(ds))
     assert "Limits: 4 MADs" in said and "bins of 300 events." in said
-    assert "drift" not in said                      # applied before there was a slow pass
+    assert "drift" not in said and "Shift" not in said   # applied before either pass
     quality["settings"]["drift"] = 0.25
     assert ("Drift: a lasting shift of a population's level by more than 0.25 of the spread "
             "of the parameter's events, and by more than 4 MADs of the slow level itself."
             ) in plate.summary(ds)
+    quality["settings"]["shift"] = 0.2
+    assert ("Shift: a short stretch whose level stood apart from the bins on either side by "
+            "more than 0.2 of the spread of the parameter's events, and by more than 4 MADs "
+            "of such differences over the whole acquisition.") in plate.summary(ds)
     assert "Parameters judged: CD8, CD4." in said
     # applied before the limits were kept: only what the gates say
     quality["settings"] = None

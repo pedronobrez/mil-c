@@ -344,6 +344,11 @@ def _quality_lines(done: dict) -> list[str]:
             lines.append(f"Drift: a lasting shift of a population's level by more than "
                          f"{s['drift']:g} of the spread of the parameter's events, and by "
                          f"more than {s.get('mad'):g} MADs of the slow level itself.")
+        if s.get("shift"):
+            lines.append(f"Shift: a short stretch whose level stood apart from the bins on "
+                         f"either side by more than {s['shift']:g} of the spread of the "
+                         f"parameter's events, and by more than {s.get('mad'):g} MADs of such "
+                         "differences over the whole acquisition.")
         lines.append("Parameters judged: " + (", ".join(s["channels"]) if s.get("channels")
                                               else "every one but Time") + ".")
     else:

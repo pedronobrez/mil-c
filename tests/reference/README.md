@@ -14,6 +14,7 @@ packages below are needed only to run these scripts.
 | `abundance_compare.py` + `abundance_edger.R` | `milc.abundance.differential` | edgeR (`glmQLFit`/`glmQLFTest`, `glmFit`/`glmLRT`), `diffcyt::testDA_edgeR` |
 | `phenograph_compare.py` | `milc.graphcluster.phenograph` | the authors' `PhenoGraph` (PyPI), with its Louvain and with Leiden |
 | `qc_compare.py` + `qc_peacoqc.R` | `milc.qc.check` | PeacoQC, flowAI |
+| `qc_calibrate.py` | `milc.qc.check` on copies of the real files with defects of known size | nothing (no R): its limits against what it finds |
 | `normalize_compare.py` + `normalize_cytonorm.R` | `milc.normalize.fit` / `apply` | CytoNorm (`saeyslab/CytoNorm`) |
 
 ## Installing
@@ -63,12 +64,14 @@ export RSCRIPT=Rscript                  # optional: which Rscript
 python3 tests/reference/abundance_compare.py 100     # tables per setting
 $REF/venv/bin/python tests/reference/phenograph_compare.py
 python3 tests/reference/qc_compare.py
+python3 tests/reference/qc_calibrate.py           # needs MILC_REF_DATA
 python3 tests/reference/normalize_compare.py
 ```
 
 On the day of the run, on a machine busy with other work, they took about
 10 minutes, an hour, 50 minutes and 10 minutes: PhenoGraph's own Jaccard
-step and PeacoQC on the larger files are what takes long.
+step and PeacoQC on the larger files are what takes long. `qc_calibrate.py`
+(about 8,000 checks, in four processes) took 15 minutes on the same busy machine.
 
 Each prints its tables and leaves them in `$MILC_REF_WORK/<name>/report.md`
 (and `.json`). Without `MILC_REF_DATA` only the simulated data are used.

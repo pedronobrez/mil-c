@@ -21,17 +21,19 @@ from ..gating import time_node
 from . import theme, worker
 from .flow import captioned, flow
 
-COLUMNS = ["Sample", "Events", "To remove", "Flow rate", "Signal", "Drift", "Note"]
-LIMITS = ("mad", "consecutive", "events_per_bin", "drift")
+COLUMNS = ["Sample", "Events", "To remove", "Flow rate", "Signal", "Drift", "Shift", "Note"]
+LIMITS = ("mad", "consecutive", "events_per_bin", "drift", "shift")
 
 
 def limits_text(settings: dict) -> str:
     """The limits of a check, in the words of the controls."""
     bins = settings.get("events_per_bin")
-    drift = settings.get("drift")
+    drift, shift = settings.get("drift"), settings.get("shift")
     return (f"MAD limit {settings.get('mad'):g}, {settings.get('consecutive')} consecutive "
             f"bins, {f'{bins:,d}' if bins else 'auto'} events per bin, "
-            + (f"drift limit {drift:g}" if drift else "drift not judged"))
+            + (f"drift limit {drift:g}" if drift else "drift not judged")
+            # a project applied before the short pass existed did not judge it
+            + (f", shift limit {shift:g}" if shift else ", short shifts not judged"))
 
 
 class QualityDialog(QtWidgets.QDialog):
@@ -63,8 +65,9 @@ class QualityDialog(QtWidgets.QDialog):
             "stretches to remove. Dashed: how far the flow rate, and the running median of "
             "the signal, may go before a bin is suspect; the bins beyond are marked. Thick "
             "line: the slow level of the signal, red over a stretch that went beyond the "
-            "dotted limits: a drift, taken from where it nears them. A parameter with several "
-            "populations is followed one population at a time.")
+            "dotted limits: a drift, taken from where it nears them. Red bar: a short stretch "
+            "whose level stood apart from its neighbours' (dashed bar): a shift. A parameter "
+            "with several populations is followed one population at a time.")
         note.setWordWrap(True)
         note.setProperty("role", "caption")
         self.rate_plot, self.signal_plot = self._plot(), self._plot()
@@ -113,7 +116,8 @@ class QualityDialog(QtWidgets.QDialog):
         layout.addWidget(flow(captioned("MAD limit", self.mad),
                               captioned("Consecutive bins", self.consecutive),
                               captioned("Events per bin", self.events_per_bin),
-                              captioned("Drift limit", self.drift), self.again_button))
+                              captioned("Drift limit", self.drift),
+                              captioned("Shift limit", self.shift), self.again_button))
         layout.addWidget(note)
         layout.addWidget(self.rate_plot, 2)
         layout.addLayout(top)
@@ -124,7 +128,7 @@ class QualityDialog(QtWidgets.QDialog):
         self.resize(900, 760)
 
         self.channel.currentIndexChanged.connect(self.draw)
-        for box in (self.mad, self.consecutive, self.events_per_bin, self.drift):
+        for box in (self.mad, self.consecutive, self.events_per_bin, self.drift, self.shift):
             box.valueChanged.connect(self._limits_changed)
         self.again_button.clicked.connect(self.check_again)
         self.survey_button.clicked.connect(self.survey)
@@ -177,8 +181,20 @@ class QualityDialog(QtWidgets.QDialog):
                               "taken for a drift, as a share of the spread of the "
                               "parameter's events. Smaller finds smaller drifts; off does "
                               f"not look for them. Usually {usual['drift']:g}.")
+        self.shift = QtWidgets.QDoubleSpinBox()
+        self.shift.setRange(0.0, 5.0)
+        self.shift.setSingleStep(0.05)
+        self.shift.setDecimals(2)
+        self.shift.setSpecialValueText("off")
+        self.shift.setValue(float(start["shift"] or 0))
+        self.shift.setToolTip("The smallest move of a short stretch (a few bins, up to the "
+                              "drift's window) away from the bins on either side that is "
+                              "taken for a shift, as a share of the spread of the "
+                              "parameter's events; it has to stand out by the MAD limit "
+                              "too. Smaller finds smaller shifts; off does not look for "
+                              f"them. Usually {usual['shift']:g}.")
         for box, wide in ((self.mad, 76), (self.consecutive, 64), (self.events_per_bin, 96),
-                          (self.drift, 88)):
+                          (self.drift, 88), (self.shift, 88)):
             box.setFixedWidth(wide)
         self.again_button = QtWidgets.QPushButton("Check again")
         self.again_button.setToolTip("Check this sample with these limits — and every "
@@ -189,7 +205,8 @@ class QualityDialog(QtWidgets.QDialog):
         """The limits as the controls have them, to call `qc.check` with."""
         return {"mad": float(self.mad.value()), "consecutive": int(self.consecutive.value()),
                 "events_per_bin": int(self.events_per_bin.value()) or None,
-                "drift": round(float(self.drift.value()), 2)}
+                "drift": round(float(self.drift.value()), 2),
+                "shift": round(float(self.shift.value()), 2)}
 
     def _limits_changed(self) -> None:
         self.again_button.setEnabled(self.settings() != self.used)
@@ -219,7 +236,8 @@ class QualityDialog(QtWidgets.QDialog):
         if was in self.result.populations:
             self.channel.setCurrentIndex(self.result.populations.index(was))
         elif self.result.checked:
-            bad = self.result.bins.bad_signal | self.result.bins.bad_drift
+            b = self.result.bins
+            bad = b.bad_signal | b.bad_drift | b.bad_shift
             if bad.any():
                 self.channel.setCurrentIndex(int(bad.sum(axis=0).argmax()))
         self.channel.blockSignals(False)
@@ -243,7 +261,8 @@ class QualityDialog(QtWidgets.QDialog):
         """What the two plots are drawn from, in the units of their axes:
         the time of each bin, its flow rate, the median of the population
         chosen (not a number where a bin has none of it), the limits of
-        both, the slow level with its own limits and the stretches shaded."""
+        both, the slow level with its own limits, the short stretches that
+        stood apart and the stretches shaded."""
         return qc_plots.series(self.result, self.channel.currentIndex(), self.step)
 
     def draw(self) -> None:
@@ -285,6 +304,11 @@ class QualityDialog(QtWidgets.QDialog):
                 plot.addItem(pg.PlotCurveItem(
                     s["time"], np.where(s["bad_drift"], s["slow"], np.nan), connect="finite",
                     pen=pg.mkPen(theme.danger(), width=3.2)))
+                for lo, hi, level, near in s["shifts"]:
+                    plot.addItem(pg.PlotCurveItem([lo, hi], [near, near], pen=pg.mkPen(
+                        theme.foreground(), width=1.2, style=QtCore.Qt.PenStyle.DashLine)))
+                    plot.addItem(pg.PlotCurveItem([lo, hi], [level, level],
+                                                  pen=pg.mkPen(theme.danger(), width=3.2)))
                 limits = [min(limits[0], s["slow_limits"][0]), max(limits[1], s["slow_limits"][1])]
             lo, hi = min(float(np.nanmin(y)), limits[0]), max(float(np.nanmax(y)), limits[1])
             plot.setYRange(lo, hi, padding=0.06)
@@ -332,6 +356,7 @@ class QualityDialog(QtWidgets.QDialog):
                      f"{r.counts[qc.RATE]:,d}" if r.checked else "—",
                      f"{r.counts[qc.SIGNAL]:,d}" if r.checked else "—",
                      f"{r.counts[qc.DRIFT]:,d}" if r.checked else "—",
+                     f"{r.counts[qc.SHIFT]:,d}" if r.checked else "—",
                      ", ".join(r.blamed) if r.checked else r.reason]
             self.table.setItem(row, 0, name)
             for col, text in enumerate(cells, start=1):

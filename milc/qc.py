@@ -14,9 +14,12 @@ the same number of events. A bin is suspect when
 - the running median, over five bins, of the bin medians of any population
   of any parameter lies more than `mad` MADs from that population's median
   over the whole acquisition (the signal: steps, bubbles, anything abrupt);
-- or the running median of the same bin medians over a long window lies
+- the running median of the same bin medians over a long window lies
   far from the level the population keeps for longest (the drift: a
-  moderate shift that lasts).
+  moderate shift that lasts);
+- or the bin medians of a short stretch, a few bins up to that window,
+  lie together away from those on either side of it (the shift: a
+  moderate shift that does not last).
 
 Suspect bins are removed, and so is a stretch of fewer than `consecutive`
 good bins between two removed ones.
@@ -51,6 +54,18 @@ What follows from that:
   drift is all of the departure, from where the slow level is seven tenths
   of the way to the limit: the part beyond the limit alone was a fifth of
   that real file in which the shift lasts a third.
+- The shift is what neither pass sees: a third of a spread over a
+  twentieth of the file is too little for five bins and too short for
+  the window. It is looked for as flowAI and flowClean look for changes
+  in the signal — a stretch whose level differs from its surroundings,
+  tried at every place and at a dozen lengths — and judged as the slow
+  pass judges a drift, twice: against the spread, over the whole file, of
+  the differences found at that length (`mad` MADs of them: with every
+  place and length tested, a limit in the units of one test would take
+  something from every file), and against `shift` times the spread of
+  the parameter's events. A stretch has to stand apart from both sides,
+  the same way: the foot of a step lies beyond one side only. What the
+  other passes found is no neighbour and is not found again.
 - Either way a defect is found only while less than half of the
   acquisition is affected. With more, the bad part is the reference. And
   a slow ramp is found from where it nears the limit, not from where it
@@ -77,9 +92,14 @@ The defaults: `mad` 6 and `consecutive` 5 are PeacoQC's. The bins are not:
 here they hold 1/500 of the file and at least 150 events, so 150 to 500
 for files of up to 250,000 events; PeacoQC's hold twice 1/500 of the file
 rounded up to the next 500 (150 is only its floor, never reached), so 500
-or 1,000 for the same files. `drift` 0.25 and the window were chosen on
-the 32 real files and the simulated defects of that comparison, not from
-a principle.
+or 1,000 for the same files. The window was chosen on the 32 real files
+and the simulated defects of that comparison. `drift` and `shift` were
+measured on copies of those files with shifts of known size put in, and
+on the files as they are (`docs/comparacao.md`, section 3): the files
+lose the same with `drift` anywhere from 0.20 to 0.33 and `shift` from
+0.20 to 0.30, and below or above that whole files change; 0.25 is the
+middle of both. Lower limits find smaller shifts in the copies, and the
+real files tell nothing more about where a shift becomes a defect.
 """
 
 from __future__ import annotations
@@ -120,11 +140,22 @@ SLOW_EVENTS, SLOW_SHARE = 10000, 0.25
 #: of the way to the limit
 CARRY = 0.7
 
-RATE, SIGNAL, DRIFT, ISLANDS = "flow rate", "signal", "drift", "islands"
+#: the short pass: the shortest stretch it tests, in bins, and the fewest
+#: neighbours on each side a stretch is compared with
+SHORT_MIN, SHORT_SIDE = 3, 8
+#: how many lengths of stretch it tests between SHORT_MIN and the window
+SHORT_LENGTHS = 12
+#: a bin's median is allowed this many of its own noise from the running
+#: median before the short pass clips it: one wild bin is not a stretch
+CLIP = 3.0
+
+RATE, SIGNAL, DRIFT, SHIFT, ISLANDS = "flow rate", "signal", "drift", "shift", "islands"
 #: the population quality control makes, above every other
 POPULATION = "Clean"
 #: the default of `check`'s `drift`
 DRIFT_LIMIT = 0.25
+#: the default of `check`'s `shift`
+SHIFT_LIMIT = 0.25
 
 
 @dataclass
@@ -155,6 +186,12 @@ class Bins:
     slow_limits: np.ndarray
     #: bins x populations
     bad_drift: np.ndarray
+    #: bins x populations: in a short stretch whose level stood apart
+    #: from its neighbours'
+    bad_shift: np.ndarray
+    #: every such stretch: (population, first bin, one past the last,
+    #: its level, its neighbours' level), on the population's scale
+    shifts: list
     #: what is removed in the end, the islands included
     bad: np.ndarray
 
@@ -167,7 +204,8 @@ class Result:
     keep: np.ndarray = field(repr=False)
     #: (first, last) Time of every stretch to remove, in the file's units
     intervals: list[tuple[float, float]] = field(default_factory=list)
-    #: events in the bins each check found: RATE, SIGNAL, DRIFT, ISLANDS.
+    #: events in the bins each check found: RATE, SIGNAL, DRIFT, SHIFT,
+    #: ISLANDS.
     #: A bin found by two checks is counted by both.
     counts: dict[str, int] = field(default_factory=dict)
     #: share of the events removed
@@ -182,8 +220,8 @@ class Result:
     scales: list = field(default_factory=list, repr=False)
     #: the parameters with a suspect population anywhere, the worst first
     blamed: list[str] = field(default_factory=list)
-    #: what found each stretch of `intervals`: RATE, SIGNAL and DRIFT, as
-    #: many as found a bin of it
+    #: what found each stretch of `intervals`: RATE, SIGNAL, DRIFT and
+    #: SHIFT, as many as found a bin of it
     found: list[list[str]] = field(default_factory=list)
     bins: Bins | None = field(default=None, repr=False)
 
@@ -281,6 +319,122 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return [(int(a), int(b)) for a, b in zip(edges[::2], edges[1::2])]
 
 
+def _lengths(longest: int) -> np.ndarray:
+    """The lengths of stretch the short pass tests: from SHORT_MIN bins to
+    `longest`, each a fixed factor longer than the one before."""
+    if longest < SHORT_MIN:
+        return np.array([], dtype=int)
+    return np.unique(np.round(np.geomspace(SHORT_MIN, longest, SHORT_LENGTHS)).astype(int))
+
+
+def _contrast(y: np.ndarray, use: np.ndarray, taken: np.ndarray, length: int):
+    """For every stretch of `length` bins: the mean of `y` over the bins
+    `use` inside it (its level), and how far that lies from the mean over
+    the bins `use` among as many (at least SHORT_SIDE) on the left, and on
+    the right.
+
+    Returns, per stretch, its level; the smaller of the two differences,
+    0 where they are of opposite signs (the stretch lies between its
+    neighbours, as at the foot of a step); and whether it can be said:
+    half of the stretch is to be `use`, and a side counts when half of it
+    is. With one side only — at an end of the acquisition, or beside what
+    was taken — the difference is from that side, which then has to be
+    whole. A stretch that holds a bin `taken` is not usable. Last, every
+    difference from one side: the noise the others are judged against."""
+    n = len(y)
+    side = max(int(length), SHORT_SIDE)
+
+    def cum(v):
+        return np.concatenate(([0.0], np.cumsum(v)))
+    total, held, gone = cum(np.where(use, y, 0.0)), cum(use), cum(taken)
+    a = np.arange(n - length + 1)
+    b = a + length
+    lo, hi = np.maximum(a - side, 0), np.minimum(b + side, n)
+    inside, left, right = held[b] - held[a], held[a] - held[lo], held[hi] - held[b]
+    level = (total[b] - total[a]) / np.maximum(inside, 1)
+    from_left = level - (total[a] - total[lo]) / np.maximum(left, 1)
+    from_right = level - (total[hi] - total[b]) / np.maximum(right, 1)
+    fine = (2 * inside >= length) & (gone[b] == gone[a])
+    has_left, has_right = fine & (2 * left >= side), fine & (2 * right >= side)
+    both = has_left & has_right
+    same = np.sign(from_left) == np.sign(from_right)
+    d = np.where(both, np.where(same, np.sign(from_left)
+                                * np.minimum(np.abs(from_left), np.abs(from_right)), 0.0),
+                 np.where(has_left & (left >= side), from_left,
+                          np.where(has_right & (right >= side), from_right, 0.0)))
+    usable = both | (has_left & (left >= side)) | (has_right & (right >= side))
+    noise = np.concatenate([from_left[has_left], from_right[has_right]])
+    return level, d, usable, noise
+
+
+def _short(medians: np.ndarray, smooth: np.ndarray, width: np.ndarray, found_by: np.ndarray,
+           longest: int, mad: float, limit: float) -> tuple[np.ndarray, list]:
+    """The short pass: stretches of a few bins whose level stands apart
+    from that of the bins on either side.
+
+    For every length of `_lengths(longest)` and every place, the mean of
+    the bin medians inside a stretch is compared with the mean of as many
+    bins (at least SHORT_SIDE) on the left, and with that on the right: a
+    stretch stands apart when it lies beyond both, the same way, and by
+    the smaller of the two differences — not one side of a step, which
+    lies beyond the other side only. The difference is judged against the
+    spread of such differences at that length over the whole acquisition —
+    `mad` MADs of it, one limit for every place and length tested at once,
+    where a test at a time would take one place in a thousand for a
+    defect — and against `limit` times the spread of the parameter's
+    events. The stretch furthest beyond the first limit is taken, and the
+    search is made again without it, until none is beyond both: a stretch
+    taken is not the neighbour of another. Bins `found_by` the other
+    passes count for nothing, for the same reason: neither as neighbours
+    nor inside a stretch, which may hold them (the fast pass may see the
+    middle of a shift) but has to hold as many others. Bin medians are
+    clipped to CLIP of their noise around the running median of five, so
+    that a single wild bin does not make a stretch on its own.
+
+    (bins x populations suspect, [(population, first, end, level, the
+    neighbours' level)])."""
+    n, k = medians.shape
+    bad = np.zeros((n, k), dtype=bool)
+    found: list = []
+    lengths = _lengths(longest)
+    if limit <= 0 or not len(lengths):
+        return bad, found
+    for j in range(k):
+        m, centre = medians[:, j], smooth[:, j]
+        ok = np.isfinite(m) & np.isfinite(centre)
+        if ok.sum() < MIN_BINS or not width[j] > 0:
+            continue
+        noise = _spread(m[ok] - centre[ok])
+        y = np.where(ok, np.clip(m, centre - CLIP * noise, centre + CLIP * noise), 0.0)
+        taken = np.zeros(n, dtype=bool)
+        # the spread of the differences at each length, once, over the
+        # acquisition as it is: what a stretch is judged against
+        spreads = {}
+        for length in lengths:
+            *_, differences = _contrast(y, ok & ~found_by, taken, length)
+            if len(differences) >= MIN_BINS:
+                spreads[int(length)] = _spread(differences)
+        spreads = {length: s for length, s in spreads.items() if s > 0}
+        while spreads:
+            best = None
+            for length, spread in spreads.items():
+                level, d, usable, _ = _contrast(y, ok & ~found_by & ~taken, taken, length)
+                far = np.abs(d)
+                score = np.where(usable & (far > mad * spread) & (far > limit * width[j]),
+                                 far / spread, 0.0)
+                i = int(np.argmax(score))
+                if score[i] > 0 and (best is None or score[i] > best[0]):
+                    best = (score[i], i, i + length, float(level[i]), float(level[i] - d[i]))
+            if best is None:
+                break
+            _, a, b, level, near = best
+            taken[a:b] = True
+            found.append((j, a, b, level, near))
+        bad[:, j] = taken
+    found.sort(key=lambda f: (f[1], f[0]))
+    return bad, found
+
+
 def _with_islands(flagged: np.ndarray, consecutive: int) -> np.ndarray:
     bad = flagged.copy()
     runs = _runs(flagged)
@@ -292,7 +446,8 @@ def _with_islands(flagged: np.ndarray, consecutive: int) -> np.ndarray:
 
 def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
           scales: list | None = None, mad: float = 6.0, consecutive: int = 5,
-          events_per_bin: int | None = None, *, drift: float = DRIFT_LIMIT) -> Result:
+          events_per_bin: int | None = None, *, drift: float = DRIFT_LIMIT,
+          shift: float = SHIFT_LIMIT) -> Result:
     """Check one acquisition.
 
     `events` holds one column for each of `channels`, the parameters to
@@ -308,7 +463,9 @@ def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
     `drift`: the smallest move of a population's slow level away from
     where it stays for longest that is taken for a drift, as a share of
     the spread of the parameter's events; larger removes less, and 0
-    leaves the drift unjudged.
+    leaves the drift unjudged. `shift`: the smallest move of a short
+    stretch away from the bins on either side that is taken for a shift,
+    in the same unit; larger removes less, and 0 leaves it unjudged.
     """
     n = len(events)
     size = int(events_per_bin or max(MIN_BIN, -(-n // MAX_BINS)))
@@ -368,7 +525,12 @@ def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
         for a, b in _runs(near):
             bad_drift[a:b, j] = bad_drift[a:b, j].any()
 
-    flagged = bad_rate | bad_signal.any(axis=1) | bad_drift.any(axis=1)
+    # the short pass, for what the others did not find
+    found_before = bad_rate | bad_signal.any(axis=1) | bad_drift.any(axis=1)
+    bad_shift, shifts = _short(medians, smooth, np.array(width), found_before, window, mad,
+                               shift)
+
+    flagged = found_before | bad_shift.any(axis=1)
     bad = _with_islands(flagged, consecutive)
     intervals = [(float(start[a]), float(end[b - 1])) for a, b in _runs(bad)]
     result = Result(True, np.ones(n, dtype=bool), intervals, channels=list(channels),
@@ -377,19 +539,20 @@ def check(events: np.ndarray, time: np.ndarray | None, channels: list[str],
     # events of a neighbouring bin on the very tick an interval ends at go too
     result.keep = result.gate("Time").contains(lambda _: time)
     result.removed = float(1.0 - result.keep.mean())
-    by = {RATE: bad_rate, SIGNAL: bad_signal.any(axis=1), DRIFT: bad_drift.any(axis=1)}
+    by = {RATE: bad_rate, SIGNAL: bad_signal.any(axis=1), DRIFT: bad_drift.any(axis=1),
+          SHIFT: bad_shift.any(axis=1)}
     result.counts = {**{what: int(count[where].sum()) for what, where in by.items()},
                      ISLANDS: int(count[bad & ~flagged].sum())}
     result.found = [[what for what, where in by.items() if where[a:b].any()]
                     for a, b in _runs(bad)]
-    result.blamed = _blamed(bad_signal | bad_drift, channel, channels)
+    result.blamed = _blamed(bad_signal | bad_drift | bad_shift, channel, channels)
     result.bins = Bins(start, end, count, rate,
                        (float(np.exp(usual - reach)), float(np.exp(usual + reach))),
                        medians, channel,
                        np.column_stack([centre - mad * spread, centre + mad * spread]),
                        bad_rate, bad_signal, slow, window,
                        np.column_stack([level - reach_slow, level + reach_slow]),
-                       bad_drift, bad)
+                       bad_drift, bad_shift, shifts, bad)
     result.summary = _summary(result, n, size)
     return result
 
@@ -412,7 +575,8 @@ def _summary(r: Result, n: int, size: int) -> str:
     found = []
     if r.counts[RATE]:
         found.append(f"flow rate {r.counts[RATE]:,d} events")
-    for what, bad in ((SIGNAL, r.bins.bad_signal), (DRIFT, r.bins.bad_drift)):
+    for what, bad in ((SIGNAL, r.bins.bad_signal), (DRIFT, r.bins.bad_drift),
+                      (SHIFT, r.bins.bad_shift)):
         if r.counts[what]:
             found.append(f"{what} {r.counts[what]:,d} "
                          f"({_named(_blamed(bad, r.bins.channel, r.channels))})")
