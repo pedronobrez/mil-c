@@ -269,6 +269,190 @@ def offset_quadrant(gate: "QuadrantGate", scales: list | None = None,
                               gate.quadrant, gate.group, gate.inside, scales)
 
 
+#: the curve of a curly quadrant as CytoML draws it (cytolib, src/gate.cpp,
+#: CurlyQuadGate::interpolate): on 255 channels of each axis, the arm to
+#: the right rises by 0.001·d², d the channels from the centre, and the arm
+#: going up leans right by as much. FlowJo writes no curve in a workspace.
+CURL_CHANNELS = 255.0
+CURL_POWER = 2.0
+CURL_BEND = 0.001
+#: where cytolib puts the top of an axis FlowJo gives no scale of its own
+CURL_TOP = 262144.0
+
+
+def _unbounded(scale) -> bool:
+    """Does the scale go on past its ends, so that a point beyond them is
+    still told apart? FlowJo's biexponential is a table, and stops."""
+    from .transforms import Biex
+    return not isinstance(scale, Biex)
+
+
+@dataclass
+class CurlyQuadrantGate:
+    """One corner of a plot cut in four by FlowJo's "curly quadrant": the
+    arms to the left of and below the centre are straight, the two others
+    bend away from it, the way the spread of a compensated negative
+    population grows with the intensity on the other axis.
+
+    The curve is measured in channels: each axis' position on its scale
+    (`scales`, from 0 to 1) times `channels`; an axis with no scale is
+    linear from 0 to `CURL_TOP`. With (cx, cy) the centre there and
+    (x, y) an event, it is
+
+        above the horizontal divider:  y >= cy + bend · max(x - cx, 0) ** power
+        right of the vertical divider: x >= cx + bend · max(y - cy, 0) ** power
+
+    and Q2 (upper right) is both, Q1 (upper left) only the first, Q3 (lower
+    right) only the second, Q4 neither — so every event is in exactly one
+    corner, one on a divider going to the side above or to the right, as
+    for `QuadrantGate`, which this is with `bend` 0.
+
+    `center` is in the file's units, in the order of `dims`. The default
+    curve is CytoML's (`CURL_BEND`, `CURL_POWER` on `CURL_CHANNELS`): FlowJo
+    computes its own and writes none of it (see milc/wsp.py)."""
+    dims: list[str]
+    center: list[float]
+    quadrant: str
+    group: str = ""
+    inside: bool = True
+    scales: list | None = None
+    bend: float = CURL_BEND
+    power: float = CURL_POWER
+    channels: float = CURL_CHANNELS
+
+    # --- where the curve is measured -------------------------------------------
+
+    def _per(self, k: int) -> float:
+        """Channels in one unit of the axis' shown coordinate."""
+        scale = (self.scales or [None, None])[k]
+        return self.channels if scale is not None else self.channels / CURL_TOP
+
+    def to_channels(self, values, k: int) -> np.ndarray:
+        scale = (self.scales or [None, None])[k]
+        return _scaled(np.asarray(values, dtype=np.float64), scale) * self._per(k)
+
+    def from_channels(self, channels, k: int) -> np.ndarray:
+        scale = (self.scales or [None, None])[k]
+        shown = np.asarray(channels, dtype=np.float64) / self._per(k)
+        return scale.inverse(shown) if scale is not None else shown
+
+    def centre_channels(self) -> tuple[float, float]:
+        return tuple(float(self.to_channels(np.float64(v), k))
+                     for k, v in enumerate(self.center))
+
+    def rise(self, d) -> np.ndarray:
+        """How far an arm has bent `d` channels from the centre."""
+        d = np.maximum(np.asarray(d, dtype=np.float64), 0.0)
+        return self.bend * d ** self.power if self.bend else np.zeros_like(d)
+
+    def sides(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(right of the vertical divider, above the horizontal one) for
+        events at (x, y) in channels."""
+        cx, cy = self.centre_channels()
+        with np.errstate(invalid="ignore", over="ignore"):
+            right = x >= cx + self.rise(y - cy)
+            up = y >= cy + self.rise(x - cx)
+        return right, up
+
+    def contains(self, column: Column) -> np.ndarray:
+        x = self.to_channels(column(self.dims[0]), 0)
+        y = self.to_channels(column(self.dims[1]), 1)
+        right, up = self.sides(x, y)
+        high_x, high_y = QUADRANTS[self.quadrant]
+        mask = (right if high_x else ~right) & (up if high_y else ~up)
+        return mask if self.inside else ~mask
+
+    # --- its shape ----------------------------------------------------------------
+
+    def arm_channels(self, arm: str, reach: float, steps: int = 96) -> np.ndarray:
+        """One arm from the centre out to `reach` channels along its axis,
+        n x 2 in channels: bent for `right` and `up`, straight for the
+        others."""
+        cx, cy = self.centre_channels()
+        d = np.linspace(0.0, max(float(reach), 0.0), steps if arm in ("right", "up") else 2)
+        if arm == "right":
+            return np.column_stack([cx + d, cy + self.rise(d)])
+        if arm == "up":
+            return np.column_stack([cx + self.rise(d), cy + d])
+        if arm == "left":
+            return np.column_stack([cx - d, np.full_like(d, cy)])
+        return np.column_stack([np.full_like(d, cx), cy - d])
+
+    def arms(self, reach: float | None = None, steps: int = 96) -> dict[str, np.ndarray]:
+        """The four arms in the file's units, each from the centre to
+        `reach` channels along its axis (by default twice the scale) — a
+        bent one only as far as both its coordinates are on their scales:
+        past the end of a scale that stops there (a biexponential) a point
+        cannot be told from the end, and the curve would run along it."""
+        reach = 2 * self.channels if reach is None else reach
+        centre = self.centre_channels()
+        tops = [self.channels if s is not None and not _unbounded(s) else np.inf
+                for s in (self.scales or [None, None])]
+        out = {}
+        for arm in ARMS:
+            far = reach
+            if arm in ("right", "up") and self.bend > 0:
+                along, across = (0, 1) if arm == "right" else (1, 0)
+                far = min(far, tops[along] - centre[along])
+                room = tops[across] - centre[across]
+                if np.isfinite(room) and room > 0:
+                    far = min(far, (room / self.bend) ** (1.0 / self.power))
+            pts = self.arm_channels(arm, max(far, 0.0), steps)
+            out[arm] = np.column_stack([self.from_channels(pts[:, k], k) for k in range(2)])
+        return out
+
+    def corner(self, xr: tuple[float, float], yr: tuple[float, float],
+               steps: int = 256) -> np.ndarray | None:
+        """This corner as a polygon, n x 2 on the gate's scales (the file's
+        units on an axis with none): bounded by its two arms, each followed
+        in `steps` straight pieces, and the box from `xr` to `yr`. The
+        centre first, then round counter-clockwise. None when the centre is
+        not inside the box."""
+        per = [self._per(0), self._per(1)]
+        box = [(lo * p, hi * p) for (lo, hi), p in zip((xr, yr), per)]
+        cx, cy = self.centre_channels()
+        (x0, x1), (y0, y1) = box
+        if not (x0 < cx < x1 and y0 < cy < y1):
+            return None
+
+        def inside(p):
+            return (p[:, 0] >= x0) & (p[:, 0] <= x1) & (p[:, 1] >= y0) & (p[:, 1] <= y1)
+
+        def clipped(arm):
+            """The arm up to where it leaves the box, that point included."""
+            reach = max(x1 - x0, y1 - y0)
+            pts = self.arm_channels(arm, reach, steps + 1)
+            while bool(inside(pts[-1:])[0]):     # not out yet: further
+                reach *= 2
+                pts = self.arm_channels(arm, reach, steps + 1)
+            out_at = int(np.argmin(inside(pts)))
+            a, b = pts[out_at - 1], pts[out_at]
+            # where the piece from the last point in to the first out
+            # crosses the box
+            t = 1.0
+            for k, (lo, hi) in enumerate(box):
+                for edge in (lo, hi):
+                    if (b[k] - edge) * (a[k] - edge) < 0:
+                        t = min(t, (edge - a[k]) / (b[k] - a[k]))
+            return np.vstack([pts[:out_at], a + t * (b - a)])
+
+        first, second = (clipped(arm) for arm in SECTORS[self.quadrant])
+        centre = np.array([cx, cy])
+
+        def angle(p):
+            return np.arctan2(p[1] - cy, p[0] - cx)
+        start = angle(first[-1])
+        sweep = (angle(second[-1]) - start) % (2 * np.pi)
+        corners = [np.array(p, dtype=np.float64) for p in ((x1, y1), (x0, y1), (x0, y0), (x1, y0))]
+        between = sorted((((angle(p) - start) % (2 * np.pi), k) for k, p in enumerate(corners)))
+        # the box is seen from the centre one turn round, so its corners
+        # between where the two arms leave it are those between their angles
+        ring = np.vstack([centre, first[1:]]
+                         + [corners[k][None, :] for turn, k in between if 0 < turn < sweep]
+                         + [second[:0:-1]])
+        return ring / np.array(per)
+
+
 AND, OR, NOT = "and", "or", "not"
 
 
@@ -373,7 +557,7 @@ class GateNode:
     gate and holds every event."""
     name: str
     gate: (RectangleGate | PolygonGate | EllipseGate | QuadrantGate
-           | OffsetQuadrantGate | BooleanGate | None) = None
+           | OffsetQuadrantGate | CurlyQuadrantGate | BooleanGate | None) = None
     children: list["GateNode"] = field(default_factory=list)
     #: the count another program reported for this population, when the
     #: tree was imported: what ours is checked against
@@ -462,6 +646,10 @@ def copy_tree(tree: GateNode, keep_counts: bool = True) -> GateNode:
             g = OffsetQuadrantGate(list(g.dims), list(g.center),
                                    {a: list(g.arms[a]) for a in ARMS}, g.quadrant,
                                    g.group, g.inside, list(g.scales) if g.scales else None)
+        elif isinstance(g, CurlyQuadrantGate):
+            g = CurlyQuadrantGate(list(g.dims), list(g.center), g.quadrant, g.group, g.inside,
+                                  list(g.scales) if g.scales else None, g.bend, g.power,
+                                  g.channels)
         elif isinstance(g, BooleanGate):
             g = BooleanGate(g.op, list(g.operands), inside=g.inside)
         elif isinstance(g, TimeGate):
@@ -526,6 +714,12 @@ def tree_to_dict(tree: GateNode) -> dict:
                        "arms": {a: [float(v) for v in g.arms[a]] for a in ARMS},
                        "quadrant": g.quadrant, "group": g.group,
                        "scales": [_scale_out(s) for s in (g.scales or [None, None])]}
+    elif isinstance(g, CurlyQuadrantGate):
+        out["gate"] = {"type": "curly_quadrant", "dims": g.dims, "inside": g.inside,
+                       "center": [float(v) for v in g.center], "quadrant": g.quadrant,
+                       "group": g.group, "bend": float(g.bend), "power": float(g.power),
+                       "channels": float(g.channels),
+                       "scales": [_scale_out(s) for s in (g.scales or [None, None])]}
     elif isinstance(g, BooleanGate):
         out["gate"] = {"type": "boolean", "op": g.op, "operands": list(g.operands)}
     elif isinstance(g, ClusterGate):
@@ -568,6 +762,13 @@ def tree_from_dict(d: dict) -> GateNode:
                                   {a: [float(v) for v in g["arms"][a]] for a in ARMS},
                                   g["quadrant"], g.get("group", ""), g.get("inside", True),
                                   scales if any(s is not None for s in scales) else None)
+    elif g and g["type"] == "curly_quadrant":
+        scales = [_scale_in(s) for s in g.get("scales") or []]
+        gate = CurlyQuadrantGate(list(g["dims"]), [float(v) for v in g["center"]],
+                                 g["quadrant"], g.get("group", ""), g.get("inside", True),
+                                 scales if any(s is not None for s in scales) else None,
+                                 float(g.get("bend", CURL_BEND)), float(g.get("power", CURL_POWER)),
+                                 float(g.get("channels", CURL_CHANNELS)))
     elif g and g["type"] == "boolean":
         gate = BooleanGate(g["op"], list(g["operands"]))
     elif g and g["type"] == "time":
@@ -594,13 +795,14 @@ def depends_on(node: GateNode, name: str) -> bool:
 def follow_scale(tree: GateNode, dim: str, scale) -> bool:
     """A parameter's axis was given another scale: the polygons drawn on
     it are tested on the new one, as their sides are now straight there,
-    and so are the arms of an offset quadrant.
+    and so are the arms of an offset quadrant, and a curly quadrant bends
+    in channels of the new one, as FlowJo redraws it on the axes it is on.
     (An ellipse keeps the scale it was drawn on; it cannot be carried
     over without becoming another shape.) Says whether anything changed."""
     changed = False
     for node in tree.walk():
         g = node.gate
-        if isinstance(g, (PolygonGate, OffsetQuadrantGate)) and dim in g.dims:
+        if isinstance(g, (PolygonGate, OffsetQuadrantGate, CurlyQuadrantGate)) and dim in g.dims:
             scales = list(g.scales or [None, None])
             scales[g.dims.index(dim)] = scale
             g.scales = scales if any(x is not None for x in scales) else None

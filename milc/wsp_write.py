@@ -20,6 +20,9 @@ How each thing is written:
   - an ellipse, on FlowJo's 256 channels: two foci and four points of
     the edge. That is defined only for linear and biexponential axes; on
     others it becomes a polygon.
+  - a curly quadrant, as FlowJo does: a `CurlyQuad` with its corner and
+    centre, and no curve — where `wsp.py` would draw the same curve again;
+    otherwise as the polygon of its corner.
   - a combination, as an AndNode, OrNode or NotNode naming its sisters.
   - Time, in seconds: FlowJo multiplies the file's Time by `$TIMESTEP`
     (its own range for Time in a workspace says so), and so does this.
@@ -35,11 +38,13 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from .gate_export import (WSP, ExportSample, Prepared, Report, Unwritable, affine, axis_scales,
-                          bend, counted, ellipse_axes, ellipse_covariance, ellipse_points,
-                          is_helper, off, on, prepare, scales_of, walk)
-from .gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode, PolygonGate,
-                     QuadrantGate, RectangleGate)
+                          bend, corner_polygon, counted, ellipse_axes, ellipse_covariance,
+                          ellipse_points, is_helper, off, on, prepare, scales_of, walk)
+from .gating import (AND, CURL_BEND, CURL_CHANNELS, CURL_POWER, NOT, OR, QUADRANTS, BooleanGate,
+                     CurlyQuadrantGate, EllipseGate, GateNode, PolygonGate, QuadrantGate,
+                     RectangleGate)
 from .transforms import Arcsinh, Biex, Linear, Log, Logicle, same
+from .wsp import curl_scale
 
 #: the version this claims to be written by: old enough for any FlowJo 10
 #: in use to open, and what other readers look for
@@ -274,7 +279,44 @@ class _Sample:
             return self.polygon(node, g.dims, g.vertices, scales_of(g), g.inside)
         if isinstance(g, EllipseGate):
             return self.ellipse(node)
+        if isinstance(g, CurlyQuadrantGate):
+            return self.curly(node)
         raise Unwritable(f"a kind of gate ({type(g).__name__}) a workspace does not hold")
+
+    def curly(self, node: GateNode) -> ET.Element:
+        """A corner of a curly quadrant, as FlowJo writes one: its corner
+        and centre, and no curve — which is whatever the reader draws. It
+        is written so only where `wsp.read_wsp` draws the same one again:
+        the curve of `gating`'s defaults, on the scales the parameters are
+        given in the file. Otherwise it is the polygon of its corner."""
+        g = node.gate
+        drawn = [s if s is not None else curl_scale(None) for s in scales_of(g)]
+        again = [self._curl_read_back(d) for d in g.dims]
+        if (all(same(a, b) for a, b in zip(again, drawn))
+                and (g.bend, g.power, g.channels) == (CURL_BEND, CURL_POWER, CURL_CHANNELS)):
+            high = QUADRANTS[g.quadrant]
+            attrs = {"eventsInside": "1" if g.inside else "0", **_DRAWN,
+                     "percentX": "0", "percentY": "0"}
+            el = ET.Element(q("gating", "CurlyQuad"), attrs)
+            for dim, at, h in zip(g.dims, g.center, high):
+                self.dimension(el, dim, **({"min": at} if h else {"max": at}))
+            return el
+        self.report.note(self.sample.name, getattr(node, "source", None) or node.path,
+                         "a corner of a curly quadrant whose curve a workspace would not "
+                         "give back (another scale, or another bend) is written as a polygon "
+                         "that follows it")
+        poly = corner_polygon(g, self.sample)
+        return self.polygon(node, poly.dims, poly.vertices, scales_of(poly), poly.inside)
+
+    def _curl_read_back(self, dim: str):
+        """The scale `wsp.read_wsp` measures a curly quadrant's curve on,
+        given the transform this parameter is written with."""
+        scale = self.scale(dim)
+        if isinstance(scale, (Biex, Logicle)):
+            return scale
+        if scale is None or isinstance(scale, Linear):
+            return curl_scale(Linear(0.0, scale.max if scale is not None else self.top(dim)))
+        return curl_scale(None)     # written as a scale the reader does not take
 
     # --- populations -------------------------------------------------------------------
 
@@ -432,7 +474,7 @@ def write_wsp(samples: list[ExportSample], path: str) -> Report:
     writers = []
     for sample in samples:
         try:
-            tree = prepare(sample, report)
+            tree = prepare(sample, report, curly=True)
             counts = counted(sample, tree, report)
         except Exception as exc:
             report.note(sample.name, "", f"its gates could not be written: {exc}")
@@ -461,7 +503,7 @@ def write_wsp(samples: list[ExportSample], path: str) -> Report:
     # hold (it is stored on the scales of a sample)
     trees = [_plain(el.find("SampleNode/Subpopulations")) for _, el in kept]
     shared = bool(trees) and bool(trees[0]) and all(t == trees[0] for t in trees) \
-        and "EllipsoidGate" not in trees[0]
+        and "EllipsoidGate" not in trees[0] and "CurlyQuad" not in trees[0]
     seen = set()
     for w, el in kept:
         if shared:

@@ -24,7 +24,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from .. import autogate, density, figures, order, views
 from ..gating import (AND, NOT, OR, QUADRANTS, BooleanGate, EllipseGate, GateNode,
                       PolygonGate, QuadrantGate, RectangleGate, depends_on)
-from ..gating import ARMS, OffsetQuadrantGate
+from ..gating import ARMS, CurlyQuadrantGate, OffsetQuadrantGate
 from ..gating import TimeGate, time_node
 from ..session import Session
 from ..transforms import Arcsinh, Biex, Log, Logicle, decade_ticks, display_range, same
@@ -275,6 +275,53 @@ class _Crossing(QtCore.QObject):
         """As dragging the centre of arms that are their own."""
         self.middle.setPos(x, y)
         self._let_go()
+
+
+class _Curl(QtCore.QObject):
+    """One curly quadrant on the plot: its four arms, the two that bend
+    drawn as the curves they are, and a handle at the centre that moves
+    them all. `shape(centre)` gives the arms, in the plot's coordinates,
+    of the crossing with its centre there."""
+
+    #: the centre was let go: (x, y) on the plot
+    sigMoved = QtCore.pyqtSignal(float, float)
+
+    def __init__(self, plot, centre, shape, pen, hover):
+        super().__init__()
+        self.centre = np.array(centre, dtype=np.float64)
+        self.shape = shape
+        self._busy = False
+        self.arms = {a: pg.PlotCurveItem(pen=pen) for a in ARMS}
+        fill = pg.mkBrush(theme.background())
+        self.middle = pg.TargetItem(self.centre.tolist(), size=11, symbol="o", pen=pen,
+                                    hoverPen=hover, brush=fill, hoverBrush=fill)
+        for item in self.arms.values():
+            plot.addItem(item, ignoreBounds=True)
+        self.middle.setZValue(20)
+        plot.addItem(self.middle, ignoreBounds=True)
+        self.middle.sigPositionChanged.connect(lambda _=None: self._dragged())
+        self.middle.sigPositionChangeFinished.connect(
+            lambda _=None: self.sigMoved.emit(*self.centre))
+        self._show()
+
+    def _show(self) -> None:
+        self._busy = True
+        for arm, line in self.shape(self.centre).items():
+            self.arms[arm].setData(line[:, 0], line[:, 1])
+        self.middle.setPos(*self.centre)
+        self._busy = False
+
+    def _dragged(self) -> None:
+        if self._busy:
+            return
+        p = self.middle.pos()
+        self.centre = np.array([p.x(), p.y()])
+        self._show()
+
+    def move_centre(self, x: float, y: float) -> None:
+        """As dragging the centre there and letting go."""
+        self.middle.setPos(x, y)
+        self.sigMoved.emit(*self.centre)
 
 
 class GatesTab(QtWidgets.QWidget):
@@ -1103,6 +1150,8 @@ class GatesTab(QtWidgets.QWidget):
         self._crossings = []
         #: the handles of each crossing, in the order of `_crossings`
         self._arms: list[_Crossing] = []
+        #: the curly quadrants, in the order of `_crossings` after the others
+        self._curls: list[_Curl] = []
         self._draw_gates(xdim, ydim, xr, yr)
         self._draw_quadrants(xdim, ydim, xr, yr, self.sample.masks(),
                              max(int(self.sample.mask(self.node.path).sum()), 1))
@@ -1190,7 +1239,7 @@ class GatesTab(QtWidgets.QWidget):
                 item = pg.EllipseROI(corner, [w, h], angle=float(np.degrees(g.angle)),
                                      pen=pen, hoverPen=hover)
                 anchor = (g.center[0] - g.radii[0], g.center[1] + g.radii[1])
-            elif isinstance(g, (QuadrantGate, OffsetQuadrantGate)):
+            elif isinstance(g, (QuadrantGate, OffsetQuadrantGate, CurlyQuadrantGate)):
                 continue   # the four corners of a crossing are drawn once, below
             elif isinstance(g, TimeGate):
                 # what quality control removed, to see and not to drag
@@ -1234,8 +1283,10 @@ class GatesTab(QtWidgets.QWidget):
         groups: dict[str, list[GateNode]] = {}
         for child in self.node.children:
             g = child.gate
-            if isinstance(g, (QuadrantGate, OffsetQuadrantGate)) and set(g.dims) == {xdim, ydim}:
-                groups.setdefault(g.group or child.name, []).append(child)
+            if (isinstance(g, (QuadrantGate, OffsetQuadrantGate, CurlyQuadrantGate))
+                    and set(g.dims) == {xdim, ydim}):
+                kind = "curly" if isinstance(g, CurlyQuadrantGate) else "straight"
+                groups.setdefault((kind, g.group or child.name), []).append(child)
         pen = pg.mkPen(theme.foreground(), width=1.6)
         hover = pg.mkPen(theme.accent(), width=2.2)
         for members in groups.values():
@@ -1244,24 +1295,20 @@ class GatesTab(QtWidgets.QWidget):
 
             def placed(point, flipped=flipped):
                 return self._to_display([point[::-1] if flipped else point], [xdim, ydim])[0]
+            labels = self._quadrant_labels(members, flipped, xr, yr, masks, here)
+            if isinstance(g, CurlyQuadrantGate):
+                curl = _Curl(self.plot, placed(list(g.center)),
+                             lambda c, g=g, flipped=flipped: self._curl_shape(g, c, flipped),
+                             pen, hover)
+                curl.sigMoved.connect(lambda px, py, m=members: self._curl_moved(m, px, py))
+                self._crossings.append((members, None, None, labels))
+                self._curls.append(curl)
+                continue
             if isinstance(g, OffsetQuadrantGate):
                 centre = placed(list(g.center))
                 ends = {(_MIRRORED[a] if flipped else a): placed(list(g.arms[a])) for a in ARMS}
             else:
                 centre, ends = placed([g.x, g.y]), None
-            labels = []
-            for child in members:
-                high_x, high_y = QUADRANTS[child.gate.quadrant]
-                if flipped:
-                    high_x, high_y = high_y, high_x
-                n = int(masks[child.path].sum())
-                label = pg.TextItem(f"{child.name}  {100 * n / here:.1f}%",
-                                    anchor=(1 if high_x else 0, 0 if high_y else 1),
-                                    color=theme.foreground(),
-                                    fill=pg.mkBrush(theme.legend_brush().color()))
-                label.setPos(xr[1] if high_x else xr[0], yr[1] if high_y else yr[0])
-                self.plot.addItem(label)
-                labels.append((child, label))
             crossing = _Crossing(self.plot, centre, ends, xr, yr, pen, hover)
             crossing.sigCrossingMoved.connect(
                 lambda px, py, m=members: self._crossing_moved(m, px, py))
@@ -1270,6 +1317,54 @@ class GatesTab(QtWidgets.QWidget):
                 "An arm cannot be turned onto or past the one next to it"))
             self._crossings.append((members, crossing.vertical, crossing.horizontal, labels))
             self._arms.append(crossing)
+
+    def _quadrant_labels(self, members, flipped, xr, yr, masks, here) -> list:
+        """Each corner's name and share, in its corner of the plot."""
+        labels = []
+        for child in members:
+            high_x, high_y = QUADRANTS[child.gate.quadrant]
+            if flipped:
+                high_x, high_y = high_y, high_x
+            n = int(masks[child.path].sum())
+            label = pg.TextItem(f"{child.name}  {100 * n / here:.1f}%",
+                                anchor=(1 if high_x else 0, 0 if high_y else 1),
+                                color=theme.foreground(),
+                                fill=pg.mkBrush(theme.legend_brush().color()))
+            label.setPos(xr[1] if high_x else xr[0], yr[1] if high_y else yr[0])
+            self.plot.addItem(label)
+            labels.append((child, label))
+        return labels
+
+    def _curl_shape(self, gate: CurlyQuadrantGate, centre, flipped: bool) -> dict:
+        """The four arms of a curly quadrant with its centre at `centre`
+        on the plot, in the plot's coordinates."""
+        xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
+        stored = self._to_stored([centre], [xdim, ydim])[0]
+        moved = CurlyQuadrantGate(list(gate.dims), [float(v) for v in
+                                                    (stored[::-1] if flipped else stored)],
+                                  gate.quadrant, gate.group, gate.inside, gate.scales,
+                                  gate.bend, gate.power, gate.channels)
+        out = {}
+        for arm, line in moved.arms().items():
+            line = line[:, ::-1] if flipped else line
+            out[_MIRRORED[arm] if flipped else arm] = self._to_display(line, [xdim, ydim])
+        # the straight arms are straight on any axes: on to the edge of the
+        # plot, past the end of a scale that stops
+        (x0, x1), (y0, y1) = self.plot.viewRange()
+        c = out["left"][0]
+        out["left"] = np.array([c, [min(x0 - (x1 - x0), c[0]), c[1]]])
+        out["down"] = np.array([c, [c[0], min(y0 - (y1 - y0), c[1])]])
+        return out
+
+    def _curl_moved(self, members, px: float, py: float) -> None:
+        """The centre of a curly quadrant was let go: its four corners
+        are cut there from now on, the curve going with it."""
+        xdim = self.x_axis.currentData()
+        sx, sy = self._to_stored([[px, py]], [xdim, self.y_axis.currentData()])[0]
+        for child in members:
+            g = child.gate
+            g.center = [float(sx), float(sy)] if g.dims[0] == xdim else [float(sy), float(sx)]
+        self._commit(redraw=False)
 
     def _crossing_moved(self, members, px: float, py: float) -> None:
         xdim, ydim = self.x_axis.currentData(), self.y_axis.currentData()
