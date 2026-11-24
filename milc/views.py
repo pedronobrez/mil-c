@@ -385,8 +385,8 @@ def outline(gate, scale_of, ranges: list[tuple[float, float]]) -> list[np.ndarra
         return [np.array([[px, ranges[1][0]], [px, ranges[1][1]]]),
                 np.array([[ranges[0][0], py], [ranges[0][1], py]])]
     if isinstance(gate, CurlyQuadrantGate):
-        # its arms in the file's units, out past the ends of its scales:
-        # on axes of other scales they are carried there point by point
+        # its arms in the file's units (the bent ones as far as their
+        # scales go): on axes of other scales, carried there point by point
         return [np.column_stack([_shown(line[:, k], shown[k]) for k in range(2)])
                 for line in gate.arms().values()]
     drawn = list(gate.scales or [None, None])
