@@ -29,6 +29,7 @@ from .sample import Sample, annotate
 from .transforms import Arcsinh, Biex, Linear, Logicle, from_spec, to_spec
 from .transforms import display_range
 from .wsp import Workspace, WspSample, read_wsp
+from .unmixing import Unmixing
 
 #: the one column a new folder starts with; every other is the user's
 GROUP = "Group"
@@ -157,6 +158,9 @@ class Session:
         #: file name → the matrix edited for that sample alone; None there
         #: keeps a sample on its original while the others share one
         self.own_matrices: dict[str, object] = {}
+        #: spectral unmixing (`unmixing.Unmixing`) in place of compensation,
+        #: for every file with its detectors; None: compensation as usual
+        self.unmixing: Unmixing | None = None
         #: batch normalisation, or None: {"batch": column, "reference":
         #: [column, value], "clusters": n}
         self.normalization: dict | None = None
@@ -229,6 +233,7 @@ class Session:
         from . import plate_store
         self.plates, self.current_plate = plate_store.read(folder, self._project.get("plates"))
         self._restore_annotations()
+        self.unmixing = Unmixing.from_dict(self._project.get("unmixing"))
         found = sorted(glob.glob(os.path.join(folder, "*.wsp")))
         self.set_workspace(found[0] if found else None)
         # the population chosen last time, if the gates still have it
@@ -406,10 +411,40 @@ class Session:
                 seen.append(m)
         return len(seen)
 
+    # --- spectral unmixing ------------------------------------------------------------
+    # An alternative to compensation, kept apart from it: where it is set,
+    # a file with the spectra's detectors is unmixed instead of compensated
+    # and its unmixed channels stand in for the detectors (`_open`).
+
+    def unmixes(self, e: Entry) -> bool:
+        """Is this file unmixed rather than compensated?"""
+        return self.unmixing is not None and self.unmixing.covers(e.channels)
+
+    def _open_unmixed(self, e: Entry) -> Sample:
+        from .fcs import read_fcs
+        return Sample(fcs=self.unmixing.apply_fcs(read_fcs(e.path)),
+                      compensation=self.unmixing.identity(), gates=e.gates)
+
+    def set_unmixing(self, unmixing: Unmixing | None) -> None:
+        """Unmix every file that has these spectra's detectors — or, with
+        None, go back to compensating them. Like a new matrix, it changes
+        the values under the gates and the concatenated events."""
+        if unmixing is not None and not any(unmixing.covers(e.channels) for e in self.usable()):
+            raise ValueError("no sample has the detectors of these spectra")
+        self.unmixing = unmixing
+        for e in self.entries:
+            e.sample = None
+        self._counts.clear()
+        self._fit = None
+        self._values_changed("the unmixing changed")
+        self.save_project()
+
     # --- scales ----------------------------------------------------------------------
 
     def fluorescence(self) -> set[str]:
-        """The channels a compensation matrix covers."""
+        """The channels a compensation matrix covers — or the unmixed ones."""
+        if self.unmixing is not None and any(self.unmixes(e) for e in self.usable()):
+            return set(self.unmixing.fluors)
         matrix, _ = self.current_matrix()
         return set(matrix.channels) if matrix is not None else set()
 
@@ -550,6 +585,7 @@ class Session:
                 file: (None if m is None else {"channels": m.channels,
                                                "matrix": np.asarray(m.matrix).tolist()})
                 for file, m in self.own_matrices.items()},
+            "unmixing": self.unmixing.to_dict() if self.unmixing is not None else None,
         }
         plates = getattr(self, "_project", {}).get("plates")
         if plates:   # as `save_plates` left them
@@ -860,6 +896,10 @@ class Session:
     # --- events ----------------------------------------------------------
 
     def _open(self, e: Entry) -> Sample:
+        if self.unmixes(e):
+            sample = self._open_unmixed(e)
+            sample.meta = {c: e.meta.get(c, "") for c in self.columns}
+            return sample
         matrix = self.matrix_of(e)
         sample = (Sample.open(e.path, compensation=matrix, gates=e.gates)
                   if matrix is not None else Sample.open(e.path, gates=e.gates))
@@ -1001,6 +1041,11 @@ class Session:
         if not entries:
             return []
         first = entries[0]
+        if self.unmixes(first):
+            u = self.unmixing
+            kept = u.kept(first.channels)
+            return ([(m or c, c) for c, m in zip(first.channels, first.markers) if c in kept]
+                    + [(m or c, "Comp-" + c) for c, m in zip(u.fluors, u.markers)])
         matrix = self.matrix_of(first)
         spill = None
         if matrix is None:
