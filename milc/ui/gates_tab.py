@@ -277,6 +277,14 @@ class _Crossing(QtCore.QObject):
         self._let_go()
 
 
+def _listed(names: list[str], most: int = 3) -> str:
+    """`a`, `a and b`, `a, b and c`, `a, b, c and 4 more`."""
+    names = list(names)
+    if len(names) > most:
+        return ", ".join(names[:most]) + f" and {len(names) - most} more"
+    return " and ".join([", ".join(names[:-1])] + names[-1:]) if len(names) > 1 else "".join(names)
+
+
 class GatesTab(QtWidgets.QWidget):
     sigStatus = QtCore.pyqtSignal(str)
     #: the gates of one sample or of all changed: counts elsewhere are stale
@@ -440,6 +448,26 @@ class GatesTab(QtWidgets.QWidget):
         said.addWidget(self.reviewed_button)
         self.review_bar.hide()
         right.addWidget(self.review_bar)
+        # fitted gates moved by hand, whose population changed since: not
+        # fitted again by themselves, so the hand's work is not lost unasked
+        self.outdated = QtWidgets.QLabel("")
+        self.outdated.setProperty("role", "warning")
+        self.outdated.setWordWrap(True)
+        self.refit_button = QtWidgets.QPushButton("Refit")
+        self.refit_button.setToolTip("Fit these gates again on their population as it is "
+                                     "now, giving up where they were moved by hand")
+        self.refit_button.clicked.connect(self.refit_outdated)
+        self.keep_button = QtWidgets.QPushButton("Keep")
+        self.keep_button.setToolTip("Leave them where they were moved to, and stop saying so")
+        self.keep_button.clicked.connect(self.keep_outdated)
+        self.outdated_bar = QtWidgets.QWidget()
+        said = QtWidgets.QHBoxLayout(self.outdated_bar)
+        said.setContentsMargins(0, 0, 0, 0)
+        said.addWidget(self.outdated, 1)
+        said.addWidget(self.refit_button)
+        said.addWidget(self.keep_button)
+        self.outdated_bar.hide()
+        right.addWidget(self.outdated_bar)
         right.addWidget(bar)
         looks = QtWidgets.QHBoxLayout()
         looks.addWidget(self.caption, 1)
@@ -788,6 +816,8 @@ class GatesTab(QtWidgets.QWidget):
                 self._fill_tree(select=self.node.path if self.node is not None else "")
             finally:
                 self._keep_axes = False
+        self._say_refitted()
+        self.show_review()
         self.sigScalesChanged.emit()
         self.sigGatesChanged.emit()   # a polygon follows its axis: counts may have moved
 
@@ -818,6 +848,7 @@ class GatesTab(QtWidgets.QWidget):
             finally:
                 self._keep_axes = False
         self.samples.setCurrentRow(row, QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
+        self._say_refitted()
         self.show_review()
         self.sigGatesChanged.emit()
 
@@ -830,10 +861,59 @@ class GatesTab(QtWidgets.QWidget):
             "and may no longer sit on its population. Look at them, then press Reviewed."
             if why else "")
         self.review_bar.setVisible(bool(why))
+        late = self.session.outdated()
+        if late:
+            gates = sorted({node.path for _, node in late})
+            samples = sorted({e.name for e, _ in late}, key=order.key)
+            one = len(gates) == 1 and len(late) == 1
+            self.outdated.setText(
+                f"{_listed(gates)} {'was' if len(gates) == 1 else 'were'} fitted automatically "
+                f"and then moved by hand on {_listed(samples)}; the population "
+                f"{'it is' if one else 'they are'} in has changed since. "
+                f"Refit, or keep {'it where it is' if one else 'them where they are'}.")
+        self.outdated_bar.setVisible(bool(late))
 
     def reviewed(self) -> None:
         self.session.clear_review()
         self.show_review()
+
+    def refit_outdated(self) -> None:
+        self.sigStatus.emit("Fitting the gates again…")
+        QtWidgets.QApplication.processEvents()
+        self.session.refit_outdated()
+        self._after_session_refit()
+
+    def keep_outdated(self) -> None:
+        self.session.keep_outdated()
+        self.show_review()
+
+    def _after_session_refit(self) -> None:
+        """The session fitted gates again: show them where they now are."""
+        if self.entry is not None:
+            self.sample = self.session.load(self.entry)
+            path = self.node.path if self.node is not None else ""
+            self._keep_axes = True
+            try:
+                self._fill_tree(select=path)
+            finally:
+                self._keep_axes = False
+        self._say_refitted()
+        self.show_review()
+        self.sigGatesChanged.emit()
+
+    def _say_refitted(self) -> None:
+        """What was fitted again because its population changed."""
+        done, missed = self.session.refitted, self.session.unfitted
+        if not done:
+            return
+        gates = sorted({path for _, path in done})
+        samples = {name for name, _ in done}
+        said = (f"Fitted again on the population as it now is: {_listed(gates)}, "
+                f"on {len(samples)} sample{'s' if len(samples) != 1 else ''}")
+        if missed:
+            said += (f"; nothing found on {', '.join(sorted({s for s, _, _ in missed}))} "
+                     f"({missed[0][2]}), where the gate stayed where it was")
+        self.sigStatus.emit(said)
 
     def matrix_source(self) -> str:
         """Which matrix the sample being looked at is compensated with:
@@ -895,6 +975,8 @@ class GatesTab(QtWidgets.QWidget):
             self._fill_tree(select=self.node.path if self.node is not None else "")
         finally:
             self._keep_axes = False
+        self._say_refitted()
+        self.show_review()
         self.sigGatesChanged.emit()
 
     def open_quality(self):
@@ -1512,6 +1594,11 @@ class GatesTab(QtWidgets.QWidget):
             node.fit, node.note = spec, autogate.note(spec)
             self.sigStatus.emit("Fitting the gate on every sample…")
             QtWidgets.QApplication.processEvents()
+        else:
+            # the same gate for every sample, fitted on this one's events:
+            # fitted there again when the population it is in changes
+            node.fit = {**spec, "sample": os.path.basename(self.entry.path)}
+            node.note = autogate.note(node.fit)
         self._commit()
         missed = self.session.unfitted
         if each and missed:
@@ -1640,13 +1727,12 @@ class GatesTab(QtWidgets.QWidget):
             self.rename(name.strip())
 
     def rename(self, name: str) -> None:
-        old, parent = self.node.name, self.node.parent
-        self.node.name = name
-        # a combination names what it is made of: it follows the new name
-        for sister in (parent.children if parent is not None else []):
-            if depends_on(sister, old):
-                sister.gate.operands = [name if o == old else o for o in sister.gate.operands]
-        self._commit()
+        # on every sample at once, so what each has of its own there (a gate
+        # fitted on its events, moved by hand) goes with the new name; a
+        # combination made of it follows too
+        self.session.rename_gate(self.entry, self.node.path, name,
+                                 everyone=self.everyone.isChecked())
+        self._commit(changed=False)
 
     def delete_selected(self) -> None:
         """The gate being looked at, and everything gated inside it."""
@@ -1673,10 +1759,14 @@ class GatesTab(QtWidgets.QWidget):
         self.samples.setCurrentRow(max(row, 0))
         self.sigGatesChanged.emit()
 
-    def _commit(self, redraw: bool = True) -> None:
-        """The tree of this sample changed: tell the session, count again."""
-        self.session.gates_changed(self.entry, everyone=self.everyone.isChecked())
+    def _commit(self, redraw: bool = True, changed: bool = True) -> None:
+        """The tree of this sample changed: tell the session (unless
+        `changed` is False: it was told already), count again."""
+        if changed:
+            self.session.gates_changed(self.entry, everyone=self.everyone.isChecked())
         self.sample = self.session.load(self.entry)
+        self._say_refitted()
+        self.show_review()
         path = self.node.path if self.node is not None else ""
         if redraw:
             self._keep_axes = True

@@ -335,8 +335,19 @@ Prioritárias:
 3. **Limpeza: defeito moderado e curto.** Um desvio de 0,3 do espalhamento em 5% do arquivo
    continua invisível; e o limite de deriva (0,25) foi escolhido nestes 32 arquivos — falta uma
    amostra que se sabe ruim para calibrá-lo.
-4. **Gates automáticos: refazer o ajuste** quando o gate pai muda, e não perder o ajuste à mão
-   ao renomear um gate ajustado por amostra.
+4. ~~**Gates automáticos: refazer o ajuste** quando o gate pai muda, e não perder o ajuste à mão
+   ao renomear um gate ajustado por amostra.~~ **Feito.** O gate proposto guarda como foi
+   achado e é ajustado de novo sozinho quando a população em que está muda (gate pai movido,
+   editado ou reajustado; compensação, escala, normalização ou limpeza): em cada amostra, se o
+   ajuste é por amostra, ou na amostra em que foi proposto, e dado a todas. O gate desenhado à
+   mão fica onde está. O proposto que depois foi movido à mão não é sobrescrito: uma barra diz
+   que ficou velho, com **Refit** e **Keep**. Renomear renomeia em todas as amostras de uma vez,
+   e o ajuste de cada uma vai junto; tudo fica no projeto. Nos 32 arquivos reais, com um gate de
+   singletes (banda) sob Cells e um vale de CD45 sob Live, ajustados por amostra: encolher Cells
+   em 15% e cortar pela metade o limite do corante em Live refez os 63 gates (32 bandas e 31
+   vales) em 3 s; o vale movido à mão na `3Ctrl3` ficou onde estava (corte 1.294) e foi listado
+   como velho, e o Refit o pôs em 811. O CD45 automático acompanha o CD45 do FlowJo antes (2.431
+   e 2.259 na `3Case1`) e depois (1.717 e 1.597). Não há desfazer para gates: não foi feito.
 5. **Quadrantes "curly" do FlowJo**: o workspace não guarda a curva; seria preciso reproduzir a
    que o FlowJo desenha.
 6. **Modelos**: ciclo celular com população aneuploide, debris e dobletes; conferir ciclo e

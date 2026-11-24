@@ -554,9 +554,41 @@ NOT_FITTED = "not fitted to this sample"
 
 
 def note(spec: dict) -> str:
-    """What to say of a population whose gate each sample has its own of."""
+    """What to say of a population whose gate each sample has its own of —
+    or, with a `sample` in the spec, that every sample shares."""
+    if spec.get("sample"):
+        return (f"fitted to the events of {spec['sample']} ({NAMES[spec['method']]}) and "
+                "given to every sample; fitted there again when the population it is "
+                "in changes")
     return (f"fitted to this sample's own events ({NAMES[spec['method']]}): each sample "
-            "has its own, and moving this one moves it here only")
+            "has its own, and moving this one moves it here only; fitted again when the "
+            "population it is in changes")
+
+
+# --- what a fitted gate was fitted on ------------------------------------------------
+
+def digest(value) -> str:
+    """A short fingerprint of plain values: the same for the same values,
+    whichever order a dict was built in, and after a trip through JSON."""
+    import hashlib
+    import json
+
+    def plain(o):
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        return o.item() if isinstance(o, np.generic) else str(o)
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), default=plain)
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def gate_digest(gate) -> str:
+    """Where a gate is: its shape and coordinates, not the scale a polygon
+    is tested on (that follows the axis, `gating.follow_scale`, and is no
+    move of the user's)."""
+    from .gating import GateNode, tree_to_dict
+    shape = dict(tree_to_dict(GateNode("", gate)).get("gate") or {})
+    shape.pop("scales", None)
+    return digest(shape)
 
 
 @dataclass

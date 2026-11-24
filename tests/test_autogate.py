@@ -442,6 +442,180 @@ def test_a_gate_fitted_on_each_sample_separately(tmp_path):
     assert again.load(a3).count("Cells") == s.load(third).count("Cells")
 
 
+def fitted_under_a_hand_drawn_gate(tmp_path):
+    """Every sample: `Big`, drawn by hand around every event on FSC, and in
+    it `Cells`, the largest population fitted on each sample's own events,
+    and in that the valley of the marker, fitted on each sample too."""
+    from milc.session import Session
+    folder, truth = shifting(tmp_path)
+    s = Session()
+    s.open_folder(folder)
+    first = s.usable()[0]
+    first.gates.add(GateNode("Big", RectangleGate(["FSC-A"], [0.0], [1e6])))
+    s.gates_changed(first)
+    spec = ag.make_spec(ag.POPULATION, ["FSC-A", "SSC-A"])
+    found = s.fit_gate(first, "Big", spec)
+    spec["near"] = list(found.near)
+    cells = first.gates.find("Big").add(GateNode("Cells", found.gate, fit=spec,
+                                                 note=ag.note(spec)))
+    marker = ag.make_spec(ag.VALLEY, ["Comp-PE-A"], side=ag.ABOVE)
+    cells.add(GateNode("CD4+", s.fit_gate(first, "Big", marker).gate, fit=marker))
+    s.gates_changed(first)
+    return s, folder, truth
+
+
+def centre(e, path="Big/Cells"):
+    return float(e.gates.find(path).gate.vertices[:, 0].mean())
+
+
+def test_fitted_gates_follow_their_parent_when_it_is_moved(tmp_path):
+    from milc.session import Session
+    s, folder, truth = fitted_under_a_hand_drawn_gate(tmp_path)
+    first, second, third, fourth = s.usable()
+    # on each sample the cells: where they are on that sample
+    assert [round(centre(e), -4) for e in s.usable()] == [90000, 90000, 120000, 90000]
+    before = {e.name: s.load(e).count("Big/Cells") for e in s.usable()}
+    assert all(3500 < n < 4000 for n in before.values())
+    # moved by hand on the second sample: that one is its own now
+    second.gates.find("Big/Cells").gate.vertices[:, 0] += 5000.0
+    s.gates_changed(second)
+    moved = centre(second)
+    # what is fitted inside it follows it, there only
+    assert s.refitted == [("a2", "Big/Cells/CD4+")] and s.outdated() == []
+
+    # the hand-drawn parent is narrowed to the debris: the cells fitted on each
+    # sample are fitted again there — the largest population is now the debris
+    first.gates.find("Big").gate.maxs = [45000.0]
+    s.gates_changed(first)
+    assert all(e.gates.find("Big").gate.maxs == [45000.0] for e in s.usable())
+    assert sorted(s.refitted) == sorted(
+        [(e.name, "Big/Cells") for e in (first, third, fourth)]
+        + [(e.name, "Big/Cells/CD4+") for e in s.usable()])
+    for e in (first, third, fourth):
+        assert 15000 < centre(e) < 25000, e.name
+        assert s.load(e).count("Big/Cells") < 0.5 * before[e.name]
+        assert s.load(e).count("Big/Cells") > 0.8 * (s.load(e).count("Big"))
+    # but not the one moved by hand: it is where it was, and said to be out of date
+    assert centre(second) == moved
+    late = s.outdated()
+    assert [(e.name, n.path) for e, n in late] == [("a2", "Big/Cells")]
+
+    # it stays out of date in the project
+    again = Session()
+    again.open_folder(folder)
+    assert [(e.name, n.path) for e, n in again.outdated()] == [("a2", "Big/Cells")]
+    assert centre(again.usable()[1]) == moved
+    assert centre(again.usable()[0]) == centre(first)
+    # and nothing else is fitted again for opening the folder and saving
+    again.gates_changed(again.usable()[0])
+    assert again.refitted == []
+
+    # one click fits it again, giving up the hand's work, and its child with it
+    again.refit_outdated()
+    assert sorted(again.refitted) == [("a2", "Big/Cells"), ("a2", "Big/Cells/CD4+")]
+    assert 15000 < centre(again.usable()[1]) < 25000 and again.outdated() == []
+    # or it is kept as it is: no longer out of date, but still its own
+    s.keep_outdated()
+    assert s.outdated() == [] and centre(second) == moved
+    third.gates.find("Big").gate.maxs = [1e6]
+    s.gates_changed(third)
+    assert centre(second) == moved and [n.path for _, n in s.outdated()] == ["Big/Cells"]
+    assert 80000 < centre(first) < 100000
+
+
+def test_fitted_gates_follow_the_values_under_them(tmp_path):
+    from milc.compensation import Compensation
+    from milc.transforms import Arcsinh
+    s, folder, truth = fitted_under_a_hand_drawn_gate(tmp_path)
+    first = s.usable()[0]
+    cut = first.gates.find("Big/Cells/CD4+").gate.mins[0]
+    s.load(first)
+    # values halved by another compensation: the valley is fitted again on them
+    s.set_matrix(Compensation(["PE-A"], np.array([[2.0]]), "edited"))
+    assert ("a1", "Big/Cells/CD4+") in s.refitted and ("a1", "Big/Cells") not in s.refitted
+    assert first.gates.find("Big/Cells/CD4+").gate.mins[0] == pytest.approx(cut / 2, rel=0.15)
+    assert s.review == "the compensation changed"   # hand-drawn gates are still to be looked at
+    # another scale on the axis: the same
+    s.set_scale(["PE-A"], Arcsinh(150.0))
+    assert ("a1", "Big/Cells/CD4+") in s.refitted
+    s.set_scale(["PE-A"], Arcsinh(150.0))
+    assert s.refitted == []
+
+
+def test_a_gate_fitted_on_one_sample_and_given_to_all(tmp_path):
+    from milc.session import Session
+    folder, truth = shifting(tmp_path)
+    s = Session()
+    s.open_folder(folder)
+    first, second, third, fourth = s.usable()
+    first.gates.add(GateNode("Big", RectangleGate(["FSC-A"], [0.0], [1e6])))
+    s.gates_changed(first)
+    spec = {**ag.make_spec(ag.POPULATION, ["FSC-A", "SSC-A"]), "sample": "a3.fcs"}
+    first.gates.find("Big").add(GateNode("Cells", s.fit_gate(third, "Big", spec).gate,
+                                         fit=spec, note=ag.note(spec)))
+    s.gates_changed(first)
+    assert s.unfitted == [] and "fitted to the events of a3.fcs" in ag.note(spec)
+    gates = [e.gates.find("Big/Cells").gate.vertices for e in s.usable()]
+    assert all(np.array_equal(v, gates[0]) for v in gates)    # the same gate everywhere
+    # the parent moved on the first sample: fitted again on the third's events, given to all
+    first.gates.find("Big").gate.maxs = [45000.0]
+    s.gates_changed(first)
+    assert {name for name, _ in s.refitted} == {"a1", "a2", "a3", "a4"}
+    gates = [e.gates.find("Big/Cells").gate.vertices for e in s.usable()]
+    assert all(np.array_equal(v, gates[0]) for v in gates)
+    assert np.array_equal(gates[0], s.fit_gate(third, "Big", spec).gate.vertices)
+    assert 15000 < centre(first) < 25000
+    # moved on one sample only: there it is its own, fitted again on that one's
+    fourth.gates.find("Big").gate.maxs = [1e6]
+    s.gates_changed(fourth, everyone=False)
+    assert s.refitted == [("a4", "Big/Cells")] and 80000 < centre(fourth) < 100000
+    assert 15000 < centre(third) < 25000
+
+
+def test_renaming_keeps_what_each_sample_has_of_its_own(tmp_path):
+    from milc.gating import BooleanGate
+    from milc.session import Session
+    s, folder, truth = fitted_under_a_hand_drawn_gate(tmp_path)
+    first, second, third, fourth = s.usable()
+    cells = first.gates.find("Big/Cells")
+    cells.add(GateNode("Low", RectangleGate(["Comp-PE-A"], [None], [100.0])))
+    cells.add(GateNode("Not CD4", BooleanGate("NOT", ["CD4+"])))
+    s.gates_changed(first)
+    own = {e.name: e.gates.find("Big/Cells/CD4+").gate.mins[0] for e in s.usable()}
+    assert own["a1"] < own["a2"] < own["a3"]
+    second.gates.find("Big/Cells/CD4+").gate.mins = [5000.0]      # by hand, there only
+    s.gates_changed(second)
+    shapes = {e.name: centre(e) for e in s.usable()}
+
+    s.rename_gate(first, "Big/Cells/CD4+", "CD4 pos")
+    assert s.refitted == [] and s.outdated() == []
+    for e in s.usable():
+        node = e.gates.find("Big/Cells/CD4 pos")
+        assert node.fit["method"] == "valley" and node.fitted is not None
+        assert node.gate.mins[0] == (5000.0 if e.name == "a2" else own[e.name]), e.name
+        assert e.gates.find("Big/Cells/Not CD4").gate.operands == ["CD4 pos"]
+        assert "Big/Cells/CD4+" not in [n.path for n in e.gates.walk()]
+    # a fitted parent renamed: each sample's own outline stays, and so do its children
+    s.rename_gate(second, "Big/Cells", "Lymphocytes")
+    assert s.refitted == []
+    assert {e.name: centre(e, "Big/Lymphocytes") for e in s.usable()} == shapes
+    assert second.gates.find("Big/Lymphocytes/CD4 pos").gate.mins == [5000.0]
+
+    # and after the folder is opened again
+    again = Session()
+    again.open_folder(folder)
+    for e in again.usable():
+        assert e.gates.find("Big/Lymphocytes/CD4 pos").gate.mins[0] == \
+            (5000.0 if e.name == "a2" else own[e.name])
+        assert centre(e, "Big/Lymphocytes") == shapes[e.name]
+    assert again.outdated() == []
+    # the moved one still counts as moved: a parent change leaves it alone
+    a1 = again.usable()[0]
+    a1.gates.find("Big").gate.maxs = [2e5]
+    again.gates_changed(a1)
+    assert again.usable()[1].gates.find("Big/Lymphocytes/CD4 pos").gate.mins == [5000.0]
+
+
 # --- in the window ----------------------------------------------------------------------------
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -489,7 +663,9 @@ def test_automatic_gates_in_the_window(app, tmp_path, monkeypatch):
     assert g.node.children == [] and w.session.populations() == []
     cells = g.accept_proposal("Cells")
     assert g.proposal is None and g.box._shape is None
-    assert isinstance(cells.gate, PolygonGate) and cells.fit is None and cells.note == ""
+    # the same gate for every sample, but how it was fitted, and on which, is kept
+    assert isinstance(cells.gate, PolygonGate) and cells.fit["sample"] == "a1.fcs"
+    assert cells.note.startswith("fitted to the events of a1.fcs")
     assert ag.jaccard(s.mask("Cells"), truth["a1"][0]) > 0.85
     # like any polygon: on the plot with its share, on every sample the same, to be dragged
     child, roi, label = next(o for o in g._overlays if o[0] is cells)
@@ -527,7 +703,7 @@ def test_automatic_gates_in_the_window(app, tmp_path, monkeypatch):
     # the negative side takes the other name; the same coordinates everywhere when not asked
     g.per_sample.setChecked(False)
     negative = g.auto_gate(ag.VALLEY, side=ag.BELOW)
-    assert negative.name == "CD4-" and negative.fit is None
+    assert negative.name == "CD4-" and negative.fit["sample"] == "a1.fcs"
     assert negative.gate.maxs == cd4.gate.mins
     assert len({e.gates.find("Population/CD4-").gate.maxs[0] for e in w.session.usable()}) == 1
     assert [e.gates.find("Population/CD4+").gate.mins[0] for e in w.session.usable()] == cuts
@@ -535,7 +711,7 @@ def test_automatic_gates_in_the_window(app, tmp_path, monkeypatch):
     g.per_sample.setChecked(True)
     g.everyone.setChecked(False)
     here = g.auto_gate(ag.VALLEY, "Here", side=ag.ABOVE)
-    assert here.fit is None and "Population/Here" not in w.session.populations()
+    assert here.fit["sample"] == "a1.fcs" and "Population/Here" not in w.session.populations()
     g.everyone.setChecked(True)
     g.per_sample.setChecked(False)
 
@@ -592,4 +768,70 @@ def test_automatic_gates_in_the_window(app, tmp_path, monkeypatch):
     g.box.sigPoint.emit(50000.0, 20000.0)
     assert len(g._crossings) == 1 and not g.quad_button.isChecked()
     assert w.minimumSizeHint().width() <= 1280
+    w.close()
+
+
+def test_fitted_gates_refit_and_rename_in_the_window(app, tmp_path):
+    from milc.ui import worker
+    from milc.ui.shell import MainShell
+
+    folder, truth = shifting(tmp_path)
+    w = MainShell()
+    w.open_folder(folder)
+    w.show()
+    g = w.gates
+    w.tabs.setCurrentWidget(g)
+    for _ in range(3):
+        worker.wait_all()
+        app.processEvents()
+    said = []
+    g.sigStatus.connect(said.append)
+    s = w.session
+    a1, a2, a3, a4 = s.usable()
+    g.set_axes("FSC-A", "SSC-A")
+    g.add_rectangle(0.0, 0.0, 250000.0, 250000.0, "Big")
+    g.select("Big")
+    g.per_sample.setChecked(True)
+    cells = g.auto_gate(ag.POPULATION, "Cells")
+    assert cells.fit and "sample" not in cells.fit
+    assert not g.outdated_bar.isVisibleTo(g)
+
+    # moved by hand on the second sample
+    g.samples.setCurrentRow(1)
+    app.processEvents()
+    assert g.entry is a2
+    g.select("Big")
+    child, roi, _ = next(o for o in g._overlays if o[0].name == "Cells")
+    roi.setPos(roi.pos().x() + 5000, roi.pos().y())
+    g._gate_moved(child, roi)
+    moved = centre(a2)
+    # renamed on the first: the second keeps its own
+    g.samples.setCurrentRow(0)
+    app.processEvents()
+    g.select("Big/Cells")
+    g.rename("Lymphocytes")
+    assert centre(a2, "Big/Lymphocytes") == moved and s.refitted == []
+
+    # the parent narrowed: fitted again where not moved by hand, and said
+    g.select("Big")
+    big = a1.gates.find("Big")
+    big.gate.mins, big.gate.maxs = [0.0, 0.0], [45000.0, 250000.0]
+    g._commit()
+    assert "Fitted again on the population as it now is: Big/Lymphocytes, on 3 samples" \
+        in said[-1]
+    assert 15000 < centre(a1, "Big/Lymphocytes") < 25000
+    assert centre(a2, "Big/Lymphocytes") == moved
+    assert g.outdated_bar.isVisibleTo(g)
+    assert "Big/Lymphocytes was fitted automatically and then moved by hand on a2" \
+        in g.outdated.text()
+    w.resize(1052, 760)
+    app.processEvents()
+    g.grab().save(str(tmp_path / "outdated.png"))
+    if os.environ.get("MILC_SHOTS"):
+        g.grab().save(os.path.join(os.environ["MILC_SHOTS"], "gates_outdated.png"))
+    assert w.minimumSizeHint().width() <= 1052
+    # one click: fitted again there too
+    g.refit_button.click()
+    assert 15000 < centre(a2, "Big/Lymphocytes") < 25000
+    assert not g.outdated_bar.isVisibleTo(g) and s.outdated() == []
     w.close()

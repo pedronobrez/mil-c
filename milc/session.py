@@ -23,7 +23,7 @@ from .dataset import Dataset, concatenate
 from .compensation import Compensation, strip_prefix
 from .fcs import read_header, write_fcs
 from .gating import ClusterGate, GateNode, copy_tree, follow_scale, tree_from_dict, tree_to_dict
-from .gating import TimeGate, keep_times, time_node, unwrap, wrap
+from .gating import BooleanGate, TimeGate, keep_times, time_node, unwrap, wrap
 from .gating import keep_fits
 from .sample import Sample, annotate
 from .transforms import Arcsinh, Biex, Linear, Logicle, from_spec, to_spec
@@ -182,6 +182,10 @@ class Session:
         #: after `gates_changed`: (sample, population, why) for each gate
         #: that was to be fitted on a sample's own events and could not be
         self.unfitted: list[tuple[str, str, str]] = []
+        #: after `gates_changed` and every change of the values gated:
+        #: (sample, population) of each fitted gate fitted again on its
+        #: population as it now is
+        self.refitted: list[tuple[str, str]] = []
         #: the last FlowSOM, kept for its map and tree
         self.flowsom = None
         #: the pages of several panels (`plate.Plate`), kept with the project
@@ -392,6 +396,7 @@ class Session:
         self._counts.clear()
         self._fit = None      # the curves were fitted on the values as they were compensated
         self._values_changed("the compensation changed")
+        self.refit_on_new_values()
         self.save_project()
 
     def distinct_matrices(self) -> int:
@@ -434,6 +439,7 @@ class Session:
                     if follow_scale(e.gates, dim, scale) and e.sample is not None:
                         e.sample._masks = None
         self._counts.clear()
+        self.refit_on_new_values()
         self.save_project()
 
     def reset_scale(self, channels: list[str]) -> None:
@@ -574,7 +580,18 @@ class Session:
     def gates_changed(self, e: Entry, everyone: bool = True) -> None:
         """`e`'s tree was edited. With `everyone`, the other files get a
         copy — FlowJo's group, where one gate is every sample's gate.
-        Counts are forgotten and the trees saved beside the files."""
+        Counts are forgotten and the trees saved beside the files.
+
+        A gate fitted on the events (`fit`) whose population changed under
+        it is fitted again on the new one — this sample's first, so a gate
+        every sample shares is given to the others as fitted here — unless
+        it was moved by hand since: that one is `outdated` instead."""
+        self.unfitted, self.refitted = [], []
+        if e.sample is not None:
+            e.sample.gates, e.sample._masks = e.gates, None
+        # a gate shared by every sample and fitted on another one is fitted
+        # there once that one has this tree
+        self._refit([e], shared=not everyone)
         changed = [e]
         to_fit = []
         if everyone:
@@ -592,10 +609,10 @@ class Session:
             c.edited, c.borrowed = True, False
             if c.sample is not None:
                 c.sample.gates, c.sample._masks = c.gates, None
-        self.unfitted = []
         for other, nodes in to_fit:
             for node in nodes:           # parents first: each is fitted inside the last
-                self._fit_here(other, node, e.name)
+                self._fit_here(other, node, f"The gate is where it is on {e.name}.")
+        self._refit()
         self._counts.clear()
         self._keep_population()
         self.save_project()
@@ -629,21 +646,189 @@ class Session:
         return autogate.propose(spec, values, [self.axis_range(e, d) for d in spec["dims"]],
                                 scales)
 
-    def _fit_here(self, e: Entry, node: GateNode, source: str) -> None:
-        """`node` came with a tree copied from the sample `source` and is
-        one fitted on each sample: fit it on this one. Where nothing can
-        be proposed here the copy stays, and says so."""
+    def _fit_here(self, e: Entry, node: GateNode, kept: str, on: str | None = None) -> None:
+        """`node` is a gate fitted on the events: fit it on this sample's.
+        Where nothing can be proposed here the gate stays where it was,
+        and says so with `kept`. Either way it is now fitted on what is
+        under it (`on`, its digest, when it is already known)."""
         from . import autogate
+        if e.sample is not None:
+            e.sample._masks = None
         proposal = self.fit_gate(e, node.parent.path, node.fit)
         if proposal.found:
             node.gate = proposal.gate
             node.note = autogate.note(node.fit)
         else:
-            node.note = (f"{autogate.NOT_FITTED}: {proposal.why}. "
-                         f"The gate is where it is on {source}.")
+            node.note = f"{autogate.NOT_FITTED}: {proposal.why}. {kept}"
             self.unfitted.append((e.name, node.path, proposal.why))
+        node.fitted = {"on": on or self._fitted_on(e, node)[0],
+                       "gate": autogate.gate_digest(node.gate)}
         if e.sample is not None:
             e.sample._masks = None
+
+    def _fitted_on(self, e: Entry, node: GateNode) -> tuple[str, Entry]:
+        """(digest, sample) of what `node`'s gate is fitted on: the gates
+        above it (and the sisters a combination above it is made of), the
+        compensation, the normalisation where samples are read normalised
+        and the scales of its axes. The sample is `e`, or — for a gate
+        fitted on one sample and given to all — that one, as long as its
+        gates above this one are still the same as `e`'s."""
+        from . import autogate
+
+        def chain(n: GateNode) -> list:
+            out, n = [], n.parent
+            while n is not None and n.gate is not None:
+                link = [autogate.gate_digest(n.gate)]
+                if isinstance(n.gate, BooleanGate) and n.parent is not None:
+                    sisters = {c.name: c for c in n.parent.children}
+                    link += [autogate.gate_digest(sisters[o].gate) if o in sisters else o
+                             for o in n.gate.operands]
+                out.append(link)
+                n = n.parent
+            return out
+        above, basis = chain(node), e
+        source = (node.fit or {}).get("sample")
+        if source and source != os.path.basename(e.path):
+            other = next((x for x in self.usable() if os.path.basename(x.path) == source), None)
+            if other is not None and other.gates is not None:
+                try:
+                    twin = other.gates.find(node.path)
+                except KeyError:
+                    twin = None
+                if twin is not None and twin.fit == node.fit and chain(twin) == above:
+                    basis = other
+        # the compensation only where a compensated parameter is cut
+        dims, n = list(node.fit["dims"]), node.parent
+        while n is not None and n.gate is not None:
+            dims += list(getattr(n.gate, "dims", None) or getattr(n.gate, "channels", None)
+                         or ["Comp-"])        # a combination: whatever its sisters cut
+            n = n.parent
+        m = self.matrix_of(basis) if any(str(d).startswith("Comp-") for d in dims) else None
+        values = {"matrix": None if m is None else [list(m.channels),
+                                                    np.asarray(m.matrix, dtype=float).tolist()],
+                  "scales": [to_spec(self.scale_of(d)) for d in node.fit["dims"]]}
+        if self.normalization and self.normalization.get("everywhere"):
+            values["normalization"] = self.normalization
+        if source:      # fitted on one sample's events: on which, too
+            values["sample"] = os.path.basename(basis.path)
+        return autogate.digest([above, values]), basis
+
+    def _refit(self, entries: list[Entry] | None = None, shared: bool = True) -> None:
+        """Fit again every fitted gate whose population changed under it
+        since it was fitted — parents before children, as each is fitted
+        inside the last — except where it was moved by hand since: those
+        are left where they are (`outdated`). A gate fitted for the first
+        time here is only noted as fitted on what is under it now. Without
+        `shared`, a gate fitted on another sample's events and given to all
+        is left for later."""
+        from . import autogate
+        entries = self.usable() if entries is None else entries
+        for _ in range(16):          # a shared gate waits for its sample's
+            moved = False
+            for x in entries:
+                if x.gates is None:
+                    continue
+                for node in x.gates.walk():
+                    if not node.fit or node.gate is None:
+                        continue
+                    if not shared and node.fit.get("sample") not in (
+                            None, os.path.basename(x.path)):
+                        continue
+                    on, basis = self._fitted_on(x, node)
+                    if node.fitted is None:
+                        node.fitted = {"on": on, "gate": autogate.gate_digest(node.gate)}
+                        continue
+                    if node.fitted.get("on") == on or self._adjusted(node):
+                        continue
+                    if basis is x:
+                        self._fit_here(x, node, "The gate is where it was.", on)
+                    else:
+                        twin = basis.gates.find(node.path)
+                        if (twin.fitted or {}).get("on") != on or self._adjusted(twin):
+                            continue           # not fitted there yet, or not to be
+                        node.gate = copy_tree(GateNode("", twin.gate)).gate
+                        node.note, node.fitted = twin.note, dict(twin.fitted)
+                        if x.sample is not None:
+                            x.sample._masks = None
+                    self.refitted.append((x.name, node.path))
+                    moved = True
+            if not moved:
+                break
+        if self.refitted:
+            self._counts.clear()
+
+    @staticmethod
+    def _adjusted(node: GateNode) -> bool:
+        """Was this fitted gate moved by hand after it was fitted?"""
+        from . import autogate
+        return bool(node.fitted) and node.fitted.get("gate") != autogate.gate_digest(node.gate)
+
+    def outdated(self) -> list[tuple[Entry, GateNode]]:
+        """The fitted gates moved by hand whose population has changed
+        since they were fitted: not fitted again, so as not to lose what
+        was done by hand, until `refit_outdated` or `keep_outdated`."""
+        out = []
+        for e in self.usable():
+            for node in (e.gates.walk() if e.gates is not None else []):
+                if (node.fit and node.fitted and self._adjusted(node)
+                        and node.fitted.get("on") != self._fitted_on(e, node)[0]):
+                    out.append((e, node))
+        return out
+
+    def refit_outdated(self, which: list[tuple[Entry, GateNode]] | None = None) -> None:
+        """Fit these (all the `outdated`) again, giving up what was moved
+        by hand."""
+        from . import autogate
+        self.unfitted, self.refitted = [], []
+        for e, node in (self.outdated() if which is None else which):
+            node.fitted["gate"] = autogate.gate_digest(node.gate)   # as if not moved
+        self._refit()
+        self._after_refit()
+
+    def keep_outdated(self, which: list[tuple[Entry, GateNode]] | None = None) -> None:
+        """Keep these (all the `outdated`) where they were moved to: they
+        are taken as fitted on their population as it is now."""
+        for e, node in (self.outdated() if which is None else which):
+            node.fitted["on"] = self._fitted_on(e, node)[0]
+            e.edited, e.borrowed = True, False
+        self.save_project()
+
+    def refit_on_new_values(self) -> None:
+        """The values gated, or the gates above some fitted ones, changed
+        for every sample: fit those again (`_refit`)."""
+        self.unfitted, self.refitted = [], []
+        self._refit()
+        self._after_refit(save=False)
+
+    def _after_refit(self, save: bool = True) -> None:
+        for e in self.usable():
+            if e.name in {name for name, _ in self.refitted}:
+                e.edited, e.borrowed = True, False
+                if e.sample is not None:
+                    e.sample._masks = None
+        self._counts.clear()
+        if save:
+            self.save_project()
+
+    def rename_gate(self, e: Entry, path: str, name: str, everyone: bool = True) -> None:
+        """Rename the population at `path` of `e` — and, with `everyone`,
+        the same population of every other sample first, so what each has
+        of its own there (a gate fitted on its events, or moved by hand)
+        follows the new name instead of being taken for another gate. A
+        combination made of it follows too."""
+        def rename(tree: GateNode) -> None:
+            try:
+                node = tree.find(path)
+            except KeyError:
+                return
+            old, node.name = node.name, name
+            for sister in (node.parent.children if node.parent is not None else []):
+                if isinstance(sister.gate, BooleanGate) and old in sister.gate.operands:
+                    sister.gate.operands = [name if o == old else o for o in sister.gate.operands]
+        for other in (self.usable() if everyone else [e]):
+            if other.gates is not None:
+                rename(other.gates)
+        self.gates_changed(e, everyone=everyone)
 
     def discard_gates(self) -> None:
         """Back to the workspace's gates: the saved ones are deleted. The
@@ -752,6 +937,7 @@ class Session:
             if e.sample is not None:
                 e.sample._masks = None
         self._counts.clear()
+        self.refit_on_new_values()
         if save:
             self.save_project()
 
@@ -1062,6 +1248,8 @@ class Session:
                     "the batch normalisation was turned off" if was and not everywhere else
                     "the batch normalisation changed")
         self._fit = None
+        if was or everywhere:
+            self.refit_on_new_values()
         self.save_project()
 
     def reference_batches(self) -> dict[str, list[Entry]]:
