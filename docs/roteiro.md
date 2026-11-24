@@ -50,7 +50,7 @@ material de divulgação.
 | Recurso | FlowJo | MIL-C | Outros que têm |
 |---|---|---|---|
 | Gate manual no tempo | S | P (retângulo sobre Time) | todos |
-| flowAI / flowCut / PeacoQC | P (plugins, exigem R) | **S** (método próprio, embutido: vazão e sinal no tempo; não comparado com eles) | OMIQ, FCS Express, Cytobank |
+| flowAI / flowCut / PeacoQC | P (plugins, exigem R) | **S** (método próprio, embutido: vazão, sinal, deriva e desvio curto no tempo; comparado com PeacoQC e flowAI em `docs/comparacao.md`) | OMIQ, FCS Express, Cytobank |
 | Relatório de QC | P | P (tabela por amostra do que a limpeza tira) | FCS Express, Kaluza, FlowLogic |
 
 ### Gates
@@ -301,9 +301,11 @@ Coisas feitas que ainda dependem de um olhar de fora:
   ajustou outra curva às contagens do FlowJo, e as duas chegam a mudar um quarto de um canto
   pequeno. Se tiver um workspace assim com os `.fcs`, a contagem do FlowJo ao lado de cada canto
   diz qual está mais perto.
-- **A limpeza automática, sem gabarito.** Nos 32 arquivos reais tira 5,3% do total (antes da
-  passada lenta, 1,4%); o PeacoQC tira 5,1% e o flowAI 12,0% dos mesmos arquivos, e não são os
-  mesmos eventos. Não há como dizer quem tem razão sem uma amostra que se sabe ruim.
+- **A limpeza automática, sem gabarito.** Nos 32 arquivos reais tira 5,5% do total (antes da
+  passada lenta, 1,4%; antes da curta, 5,3%); o PeacoQC tira 5,1% e o flowAI 12,0% dos mesmos
+  arquivos, e não são os mesmos eventos. As amostras que se sabem ruins foram feitas (cópias dos
+  seus arquivos com um defeito de tamanho conhecido): dizem quanto de cada tamanho é achado, não
+  a partir de que tamanho um deslocamento estraga a análise.
 - **A normalização "em Gates e Statistics".** Os gates foram desenhados nos valores originais:
   depois de ligá-la, vale rever cada um.
 - **As matrizes de compensação dos arquivos diferem entre os dias** (4 matrizes nas 32
@@ -316,9 +318,13 @@ Coisas feitas que ainda dependem de um olhar de fora:
 - **Um workspace que declare escala logicle.** A leitura foi testada só num XML escrito à mão.
 - **Um workspace escrito pelo MIL-C aberto no FlowJo.** Nunca foi aberto lá. Conferir: se abre;
   se as contagens batem; o gate de tempo (escrito em segundos); elipses; os nós And/Or/Not.
-- **A limpeza com a passada lenta, nos seus arquivos.** Agora ela tiraria 32,7% da `7Ctrl5` e
-  22,8% da `14Case1`, e mais de um décimo de `14Case3` e `` 14Case4` ``. Os desvios foram medidos,
-  mas só você sabe se essas aquisições tiveram problema: olhe os gráficos antes de aplicar.
+- **A limpeza com as passadas lenta e curta, nos seus arquivos.** Agora ela tiraria 33,3% da
+  `7Ctrl5` e 26,0% da `14Case1` (a curta acrescenta os primeiros 25 s, de partida), e mais de um
+  décimo de `14Case3` e `` 14Case4` ``. A calibração mostra que o programa faz com esses arquivos o
+  que faz com uma cópia em que o mesmo defeito foi posto de propósito (os corantes 0,25 a 0,3
+  do desvio acima no primeiro terço: 96 a 100% removidos), e que o resultado é o mesmo com
+  qualquer limite de deriva de 0,20 a 0,33. Mas só você sabe se um deslocamento desse tamanho
+  estraga a análise: olhe os gráficos antes de aplicar.
 - **A autocompensação com controles de verdade.** Só foi rodada em controles simulados e nos
   quatro do flowCore. No primeiro experimento com controles de uma cor, comparar a matriz com a
   do FACSDiva ou do FlowJo; e conferir o detector que cada controle recebeu.
@@ -399,14 +405,25 @@ uma população de índice 1,5 a uns 3; onde a segunda população cai sobre o S
 `docs/comparacao.md` §6. **O FlowJo e o ModFit não estão disponíveis aqui; nada foi posto ao
 lado deles.**
 
+Feito na noite de 23 de novembro: a limpeza ganhou uma terceira passada, curta, para desvios
+moderados que não duram (um trecho de poucos bins cujo nível se destaca dos dois lados), com o
+seu limite no diálogo ("Shift limit", 0,25), na linha de comando (`--shift`), nos gráficos e no
+relatório; e os dois limites foram medidos em cópias dos 32 arquivos com defeitos de tamanho
+conhecido (`docs/comparacao.md` §3, `tests/reference/qc_calibrate.py`). Um desvio de 0,3 do
+espalhamento em 5% do arquivo: achado em 24 das 32 cópias (20 sem a passada curta). Os arquivos
+reais perdem o mesmo com o limite de deriva de 0,20 a 0,33 e o de desvio curto de 0,20 a 0,30;
+0,25 ficou, no meio das duas faixas. `check` ficou cerca de um terço mais lento (os 32 arquivos
+de 5,5 para 7,5 s).
+
 Prioritárias:
 
 1. ~~**Autocompensação por single stains** (e AutoSpill)~~ — feito: ver "Autocompensação"
    abaixo.
 2. **Unmixing espectral**, para citômetros espectrais.
-3. **Limpeza: defeito moderado e curto.** Um desvio de 0,3 do espalhamento em 5% do arquivo
-   continua invisível; e o limite de deriva (0,25) foi escolhido nestes 32 arquivos — falta uma
-   amostra que se sabe ruim para calibrá-lo.
+3. ~~**Limpeza: defeito moderado e curto.**~~ **Feito** (passada curta; limites medidos em
+   cópias com defeito conhecido). Falta: um arquivo real com defeito anotado por quem adquiriu,
+   para dizer a partir de que tamanho um deslocamento é defeito; e um desvio curto de 2% ou
+   menos do arquivo ainda passa, salvo se for grande (0,5 do desvio em 1%: 20 das 32 cópias).
 4. ~~**Gates automáticos: refazer o ajuste** quando o gate pai muda, e não perder o ajuste à mão
    ao renomear um gate ajustado por amostra.~~ **Feito.** O gate proposto guarda como foi
    achado e é ajustado de novo sozinho quando a população em que está muda (gate pai movido,

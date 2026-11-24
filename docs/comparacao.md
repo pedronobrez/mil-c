@@ -18,7 +18,7 @@ instalar os pacotes e rodar). Eles não fazem parte da suíte de testes.
 |---|---|---|
 | `abundance.differential` | edgeR 4.10.7, diffcyt 1.32.1 | Chamado do mesmo jeito, o edgeR dá os mesmos números (p dentro de 0,06% no teste QL e 2% no LRT em 95% dos clusters). Contra os *padrões* do edgeR 4 e do diffcyt a diferença é maior, por desenho. A comparação achou dois defeitos no teste QL, que foram corrigidos. |
 | `graphcluster.phenograph` | PhenoGraph 1.5.7 (PyPI) | Mesmo número de clusters, com diferença de um ou dois, e partições tão parecidas com as do pacote quanto duas corridas do pacote entre si (ARI 0,71 nos eventos reais; 0,73 pacote contra pacote). |
-| `qc.check` | PeacoQC 1.22.0, flowAI 1.42.0 | Defeitos nítidos (degrau, entupimento) são achados igual ou melhor. Desvios lentos e moderados o PeacoQC achava e o nosso não (1,4% dos eventos reais removidos contra 5,1%): `qc.check` ganhou uma passada lenta e, medido de novo, acha-os no nível do PeacoQC (5,25% contra 5,13% dos eventos reais; 76% contra 74% de uma deriva injetada), sem as remoções dele em arquivos cujas medianas não se movem. |
+| `qc.check` | PeacoQC 1.22.0, flowAI 1.42.0 | Defeitos nítidos (degrau, entupimento) são achados igual ou melhor. Desvios lentos e moderados o PeacoQC achava e o nosso não (1,4% dos eventos reais removidos contra 5,1%): `qc.check` ganhou uma passada lenta e, medido de novo, acha-os no nível do PeacoQC (5,25% contra 5,13% dos eventos reais; 76% contra 74% de uma deriva injetada), sem as remoções dele em arquivos cujas medianas não se movem. Depois, uma passada curta acha um desvio de 0,3 do espalhamento em 5% do arquivo em 24 de 32 cópias dos arquivos reais (20 sem ela; PeacoQC 8 de 8 nas que recebeu, removendo 6,3% delas sem defeito), e os limites foram medidos em cópias com defeito conhecido: 0,25 fica no meio da faixa em que os arquivos reais perdem o mesmo (5,5%). |
 | `gating.CurlyQuadrantGate` lido por `wsp.read_wsp` | CytoML 2.24.0 (cytolib 2.24.0) | Os mesmos eventos em cada canto, a menos dos que a tabela da biexponencial do cytolib põe noutro lugar (até 65 de 40.000; no máximo 1 com a tabela dele no lugar da nossa). Contra o FlowJo, nada medido (§7). |
 | `normalize.fit` / `apply` | CytoNorm 2.0.13 (GitHub) | Sem clusters é a mesma curva (diferença média de 1e-5 do eixo). Com clusters, os dois programas diferem entre si tanto quanto duas sementes de um mesmo. Fora da faixa das referências o nosso é deliberadamente mais contido. |
 | `autocomp.autospill` / `classic` | AutoSpill 0.2.0 (GitHub), flowStats 4.24.0 | Nos mesmos eventos o nosso AutoSpill dá a matriz do pacote a 2e-5 (simulado) e 3e-4 (controles reais do flowCore), com o mesmo número de iterações. Em simulação acha a matriz verdadeira a 0,04 ponto percentual; o clássico, a 0,3. Os exemplos do próprio AutoSpill (FlowRepository) não puderam ser baixados. |
@@ -566,10 +566,12 @@ ao longo do arquivo todo (1,5 período, até 0,8 do desvio) não tira nada.
 - Dois arquivos reais perdem mais de um quinto (7Ctrl5 32,7%, 14Case1 22,8%) e dois mais de um
   décimo (14Case3, 14Case4`). Em todos há deslocamento medido (tabela do item 1), mas não há a
   verdade: ninguém sabe se esses eventos estavam errados. O diálogo avisa quando passa de um
-  quinto, e os limites estão nele para mudar.
+  quinto, e os limites estão nele para mudar. (A calibração abaixo mede o que se pode dizer
+  disso.)
 - Um defeito moderado e curto continua invisível: a passada rápida não tem sensibilidade e a
   lenta não tem resolução. Em simulação, 0,3 do desvio durante 5% do arquivo: 13,5% do
-  defeito removido, antes e depois.
+  defeito removido, antes e depois. (Medido de novo abaixo, com a passada curta que veio
+  depois.)
 - Uma deriva que atravessa o arquivo inteiro sem trecho estável não é removida (em simulação,
   uma senoide de até 0,8 do desvio: nada). É de propósito: não há nível de que se afastar.
 - Quando mais da metade do arquivo está deslocada, o que sai é a outra parte (em simulação, 60%
@@ -582,6 +584,219 @@ Resumo: nos defeitos nítidos o nosso continua igual ou melhor que o PeacoQC e t
 vazão que ele não tem; nos desvios sustentados de 0,3 a 0,7 desvio, que eram a falha, está agora
 no nível do PeacoQC (97,3% contra 97,6% e 76,2% contra 74,2% do defeito conhecido), sem as
 remoções dele em arquivos cujas medianas não se movem.
+
+### Depois: a passada curta, e os limites medidos em amostras que se sabem ruins
+
+Medido na noite de 23 de novembro, com o `qc.py` já com a passada lenta. Duas perguntas ficaram
+abertas acima: um defeito moderado e curto (0,3 do desvio durante 5% do arquivo) não era visto;
+e o limite de deriva, 0,25, tinha sido escolhido nos mesmos 32 arquivos em que foi medido.
+Faltava uma amostra que se soubesse ruim. Ela foi feita: cópias dos arquivos reais com um defeito
+de tamanho conhecido escrito nos valores que o `qc.check` julga (compensados, na escala de
+exibição), em unidades do desvio dos eventos do parâmetro — a mesma unidade dos dois limites.
+O script é `tests/reference/qc_calibrate.py` (sem R); a parte com o PeacoQC e o flowAI usou o
+`qc_peacoqc.R` de sempre.
+
+#### A passada curta (`shift`, padrão 0,25)
+
+Para cada população seguida, para 12 comprimentos de trecho (de 3 bins até a janela da passada
+lenta, em progressão geométrica) e para cada posição, a média das medianas dos bins do trecho é
+comparada com a média de outros tantos bins (no mínimo 8) à esquerda e, separadamente, à direita.
+O trecho se destaca quando está além dos dois lados, no mesmo sentido; a diferença é a menor das
+duas. Ela é julgada duas vezes, como a deriva: contra o espalhamento dessas diferenças naquele
+comprimento, no arquivo inteiro (`mad` MADs, o mesmo 6 das outras passadas — com todas as
+posições e comprimentos testados, um limite na unidade de um teste só tiraria algo de todo
+arquivo), e contra `shift` vezes o desvio dos eventos do parâmetro. Toma-se o trecho mais além
+do limite, e a busca recomeça sem ele, até não sobrar nenhum. O que as outras passadas acharam
+não conta, nem como vizinho nem dentro do trecho. Uma mediana de bin isolada e muito fora é
+cortada a 3 vezes o ruído dos bins em torno da mediana corrida de 5, para que um bin só não
+faça um trecho. É a ideia da checagem de sinal do flowAI (achar mudanças nas medianas dos bins)
+e do flowClean, com o limite feito para muitos testes de uma vez.
+
+Duas versões anteriores foram medidas e descartadas, nos mesmos casos:
+
+| Versão | Sintética, 5% × 0,3: do defeito | Sintética, 10% × 0,5: do resto | 32 reais: removido (antes 5,25%) |
+|---|---|---|---|
+| Média dos dois lados juntos | 94,7 | 17,5 | 6,99 |
+| Idem, sem contar como vizinho o que outra passada achou | 94,7 | 1,3 | 6,77 |
+| **Os dois lados separados, mesmo sentido** | 88,5 | 1,1 | **5,53** |
+
+(10 sementes por linha, limite 0,2 nas três.) Com os dois lados juntos, o trecho ao lado de um
+defeito parece deslocado pela metade do defeito, e saía junto; e o pé de um degrau longo que
+nenhuma passada achou parecia um trecho curto. Nos arquivos reais, a primeira versão tirava mais
+13% de 14Case1 e 13% de 14Case2 por esse efeito de borda.
+
+**Quanto acha**, nas cópias dos 32 arquivos: um trecho de 1, 2, 5 ou 10% dos eventos, num lugar
+que o arquivo sem defeito mantém inteiro, com todos os FSC e SSC deslocados. Arquivos (de 32) em
+que metade do defeito ou mais é removida, com a passada curta e (entre parênteses) sem ela:
+
+| Duração | 0,1 | 0,2 | 0,3 | 0,4 | 0,5 | 0,75 | Do resto, % |
+|---|---|---|---|---|---|---|---|
+| 1% | 10 (10) | 10 (10) | 14 (14) | 17 (15) | 20 (18) | 24 (24) | 0,08 (0,07) |
+| 2% | 10 (10) | 11 (11) | 15 (14) | 27 (23) | 30 (29) | 31 (31) | 0,09 (0,08) |
+| 5% | 10 (10) | 13 (11) | **24 (20)** | 31 (28) | 32 (31) | 32 (32) | 0,31 (0,24) |
+| 10% | 10 (10) | 12 (12) | 25 (20) | 31 (29) | 32 (30) | 32 (32) | 0,96 (0,70) |
+
+Média do defeito removida em 5% × 0,3: 73% com a passada curta, 61% sem. Os 10 arquivos que
+"acham" até um desvio de 0,1 são os grandes do dia 14 (de 109 a 247 mil eventos), e é a passada
+rápida que acha: os bins têm de 219 a 495 eventos, e o desvio do parâmetro inteiro, a unidade,
+soma as populações de FSC e SSC — 0,1 dele deve ser muito para a de células (não foi conferido
+população por população). Nos 20 arquivos com menos de 100 mil eventos, 5% × 0,3: 13
+achados com a passada curta, 9 sem (63% contra 46% do defeito). Com limite 0,2 ou 0,3 em vez de
+0,25 a tabela quase não muda (5% × 0,3: 25 e 21 arquivos).
+
+O que segura a passada é o limite em MADs. Só para ela (as outras passadas com 6), em 5% × 0,3
+e nos 32 arquivos como estão:
+
+| MADs da passada curta | 5% × 0,3: achados | Do defeito | 32 reais: removido |
+|---|---|---|---|
+| 6 (o padrão, o mesmo das outras) | 24 de 32 | 73% | 5,53% |
+| 5 | 29 | 86% | 5,99% |
+| 4 | 32 | 95% | 6,43% |
+
+Ficou 6: cada MAD a menos tira quase meio ponto percentual a mais dos arquivos reais,
+sem que se saiba se aquilo era defeito. Quem quiser mais pode baixar o limite de MAD no diálogo
+(ele vale para as três passadas).
+
+Em simulação (as aquisições de `tests/test_qc.py`, 20 sementes): FSC 0,3 acima durante 3 s, no
+meio do arquivo, 65% do defeito removido em média (metade ou mais em 12 de 20), contra 17% sem a
+passada curta; no começo do arquivo, 84%; nunca mais que 0,7% do resto. Em 180 aquisições
+limpas simuladas (15, 60 e 250 s; 300 e 1.000 eventos/s; 10, 25 e 48% na população brilhante;
+12,7 milhões de eventos) a passada curta não removeu nenhum evento a mais, com limite 0,20 ou
+0,15 (e então nem com 0,25): as mesmas 8 aquisições perdem os mesmos 0,21 por mil.
+
+**Nos 32 arquivos como estão** o total vai de 5,25% para 5,53%, em três arquivos:
+
+| Arquivo | Sem / com a passada curta (%) | O que ela acrescenta | Canais mais deslocados no acréscimo (fração do desvio) | Do acréscimo, o PeacoQC remove | O flowAI remove |
+|---|---|---|---|---|---|
+| 14Case1 | 22,8 / 26,0 | os primeiros 25 s, de partida: vazão baixa, APC alto, FSC baixo | PE-Cy7 0,36; APC-Cy7 0,29; APC 0,28 | 0% | 64% |
+| 7Case5 | 4,5 / 5,9 | o fim do arquivo, junto do que já saía | SSC-H 0,58; SSC-A 0,51 | 0% | 15% |
+| 7Ctrl5 | 32,7 / 33,3 | dois trechos curtos junto do começo | APC 0,24; PE 0,22 | 0% | 19% |
+
+Contra o PeacoQC, nos 32: do que o nosso remove ele remove 52% (antes 55%); do que ele remove o
+nosso remove 56% (igual); Jaccard 0,37 (antes 0,38). Contra o flowAI: do que o nosso remove ele
+remove 47%.
+
+**O tempo de `check`** sobe pouco: medido com a máquina ocupada (ver abaixo, "O que não foi
+feito"), o melhor de três: 14Case5 (247 mil eventos) de 0,38 para 0,57 s; 14Case1 de 0,28 para
+0,33 s; os 32 arquivos de 5,5 para 7,5 s ao todo.
+
+#### Amostras que se sabem ruins, também no PeacoQC e no flowAI
+
+Oito arquivos pequenos de que o nosso não remove quase nada (0,04% em média; 3Case2, 3Case5, 3Ctrl4, 7Case2, 7Case3`,
+7Ctrl1, 7Ctrl2, 7Ctrl4; de 20 a 66 mil eventos), cada um com sete defeitos, um de cada vez. O
+PeacoQC recebeu os mesmos valores que o nosso; o flowAI, os valores brutos com o mesmo defeito
+(o deslocamento compensado levado de volta pela matriz de spillover). Percentual do defeito
+removido (arquivos com metade ou mais) / percentual do resto removido além do que o arquivo
+sem defeito já perdia:
+
+| Defeito | Tamanho | Nosso, padrão | Nosso, `drift` 0,15 | Nosso, `drift` 0,4 | Nosso sem a passada curta | PeacoQC | flowAI |
+|---|---|---|---|---|---|---|---|
+| FSC e SSC, 5% dos eventos | 0,3 | 66 (5/8) / 0,2 | 66 (5/8) / 0,2 | 66 (5/8) / 0,2 | 39 (2/8) / 0,0 | 95 (8/8) / 1,7 | 5 (0/8) / 0,0 |
+| FSC e SSC, 40–60% | 0,15 | 1 (0/8) / 0,0 | 33 (3/8) / 0,2 | 1 (0/8) / 0,0 | 1 (0/8) / 0,0 | 40 (3/8) / 0,4 | 7 (0/8) / 0,0 |
+| idem | 0,25 | 47 (4/8) / 0,1 | 96 (8/8) / 1,7 | 14 (1/8) / 0,0 | 43 (4/8) / 0,0 | 71 (5/8) / 1,3 | 7 (0/8) / 0,0 |
+| idem | 0,4 | 100 (8/8) / 1,9 | 100 (8/8) / 4,1 | 86 (7/8) / 0,2 | 100 (8/8) / 1,9 | 100 (8/8) / 1,8 | 7 (0/8) / 0,0 |
+| Todos os corantes, primeiros 30% | 0,15 | 33 (3/8) / 0,0 | 96 (8/8) / 0,2 | 25 (2/8) / 0,0 | 33 (3/8) / 0,0 | 100 (8/8) / 1,3 | 14 (0/8) / 0,0 |
+| idem | 0,25 | 99 (8/8) / 0,0 | 100 (8/8) / 2,1 | 73 (6/8) / 0,3 | 99 (8/8) / 0,0 | 100 (8/8) / 2,6 | 14 (0/8) / 0,0 |
+| idem | 0,4 | 100 (8/8) / 1,8 | 100 (8/8) / 3,2 | 100 (8/8) / 0,1 | 100 (8/8) / 1,8 | 100 (8/8) / 2,4 | 14 (0/8) / 0,0 |
+| Sem defeito: removido | | 0,04 | 0,04 | 0,04 | 0,04 | 6,30 | 9,22 |
+
+O PeacoQC acha mais dos defeitos pequenos — a passada curta em 5% × 0,3 (95% contra 66%) e as
+derivas de 0,15 — mas remove 6,3% desses mesmos arquivos sem defeito, onde o nosso remove 0,04%,
+e de 1,3 a 2,6% do resto quando há defeito. Para tirar o que ele tira das derivas de 0,15 o
+nosso precisaria de `drift` 0,15, que nos 32 arquivos reais corta 24% de 7Case1 (abaixo). O
+flowAI, nos valores brutos e nos seus padrões, não achou nenhum desses defeitos: as checagens
+dele são de vazão e de mudanças grandes de sinal.
+
+#### O limite de deriva: 0,25 continua, agora medido
+
+Arquivos que o padrão deixa quase inteiros (menos de 1% removido: 18 dos 32), cada um com
+quatro defeitos duradouros de sete tamanhos: todos os corantes deslocados nos primeiros 30%;
+só PE-A nos últimos 25%; todos os corantes numa rampa de zero até o tamanho nos últimos 30%;
+FSC e SSC de 40 a 60%. Percentual do defeito removido (casos com metade ou mais), as quatro
+formas juntas, 72 casos por célula; "resto": o que sai além do que o arquivo sem defeito perde:
+
+| `drift` | 0,10 | 0,15 | 0,20 | 0,25 | 0,30 | 0,40 | 0,50 | Do resto, % |
+|---|---|---|---|---|---|---|---|---|
+| 0,15 | 26 (19) | 45 (32) | 69 (49) | 84 (63) | 88 (69) | 93 (71) | 94 (71) | 1,05 |
+| 0,20 | 19 (13) | 27 (20) | 51 (35) | 77 (54) | 85 (61) | 91 (71) | 93 (71) | 0,67 |
+| **0,25** | 17 (12) | 19 (13) | 32 (22) | **56 (38)** | **80 (55)** | 90 (69) | 92 (71) | 0,43 |
+| 0,30 | 17 (12) | 18 (12) | 27 (18) | 43 (28) | 70 (49) | 88 (66) | 91 (70) | 0,25 |
+| 0,40 | 17 (12) | 17 (12) | 22 (14) | 34 (21) | 54 (37) | 79 (60) | 89 (66) | 0,10 |
+| 0,50 | 17 (12) | 17 (12) | 22 (14) | 34 (21) | 52 (37) | 69 (52) | 84 (64) | 0,07 |
+| desligada | 17 (12) | 17 (12) | 21 (13) | 33 (20) | 51 (36) | 68 (51) | 78 (58) | 0,08 |
+
+(Passada curta no padrão; sem ela, em 0,25, a linha é quase a mesma: 55 (38) em 0,25 e 79 (55) em
+0,3.) Os 17% que saem até de um deslocamento de 0,1 são 12 casos: os três defeitos de corantes
+em 3Ctrl2, 3Ctrl4, 3Ctrl5 e 7Ctrl2. A unidade é o desvio do parâmetro inteiro, que soma as
+populações; provavelmente uma população estreita de um corante se desloca nesses arquivos muitas
+vezes o seu próprio ruído, e a passada rápida vê (não foi conferido). Por forma, com o limite em
+0,25: corantes no começo, 64% em 0,2, 96,5% em 0,25 e 99,9% em 0,3; só PE-A no fim, 30% em 0,25
+e 77% em 0,3; a rampa, 52% em 0,3 e 72% em 0,5 (sai do ponto em que a rampa chega perto do
+limite, não de onde começa); FSC e SSC no meio, 54% em 0,25 e 93% em 0,3.
+
+E os 32 arquivos como estão, percentual de todos os eventos removido conforme o limite de deriva
+(passada curta no padrão), e os arquivos que mudam:
+
+| `drift` | 0,15 | 0,16 | 0,17 | 0,18 | 0,19 | **0,20** | 0,22 | **0,25** | 0,28 | 0,30 | **0,33** | 0,36 | 0,40 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Todos | 6,59 | 6,49 | 6,48 | 6,47 | 6,05 | 5,54 | 5,54 | 5,53 | 5,51 | 5,48 | 5,49 | 4,32 | 4,25 |
+| 7Case1 | 24,4 | 24,0 | 24,0 | 24,0 | 0,6 | 0,6 | 0,6 | 0,6 | 0,6 | 0,6 | 0,6 | 0,6 | 0,6 |
+| 14Ctrl1 | 11,1 | 11,1 | 11,1 | 11,1 | 11,1 | 7,1 | 7,1 | 7,1 | 6,9 | 6,5 | 5,7 | 1,1 | 1,1 |
+| 14Ctrl2 | 5,6 | 3,8 | 3,6 | 3,4 | 3,2 | 0,4 | 0,4 | 0,4 | 0,4 | 0,4 | 0,4 | 0,4 | 0,4 |
+| 14Case3 | 16,7 | 16,7 | 16,7 | 16,7 | 16,7 | 16,7 | 16,7 | 16,5 | 16,5 | 16,5 | 14,5 | 0,2 | 0,2 |
+| 14Case4` | 11,3 | 11,3 | 11,3 | 11,3 | 11,3 | 11,3 | 11,3 | 11,3 | 11,3 | 11,3 | 15,5 | 15,5 | 14,9 |
+| 7Ctrl5 | 33,3 | 33,3 | 33,3 | 33,3 | 33,3 | 33,3 | 33,3 | 33,3 | 33,3 | 33,3 | 33,3 | 30,3 | 29,3 |
+
+O limite de `shift`, do mesmo jeito (deriva em 0,25): 5,83% de 0,12 a 0,18; 5,81% em 0,19;
+5,53% de 0,20 a 0,25; 5,51% em 0,30; 5,36% em 0,35 e 5,31% em 0,40. Abaixo de 0,20, 7Case1 perde
+16,6%; acima de 0,30, 14Case1 perde menos (23,6 e 22,8%).
+
+O que isso diz:
+
+1. **De 0,20 a 0,33 os arquivos reais perdem o mesmo** (5,48 a 5,54%). Nessa faixa quem decide o
+   que sai de um arquivo real é o outro limite, o de MADs da curva lenta, que é do próprio
+   arquivo; o piso só decide em arquivos estáveis — que é o caso das cópias. Abaixo de 0,20 três
+   arquivos começam a perder trechos sem deslocamento visível (7Case1 24%); acima de 0,33,
+   14Case3 e 14Ctrl1 deixam de perder o ressalto e o começo deslocado que se veem nos gráficos.
+2. **0,25 fica no meio dessa faixa** (no meio geométrico, 0,257): é o valor mais longe dos dois
+   degraus. 0,20 acharia mais nas cópias (deslocamentos de 0,25: 56% para 77% do defeito), sem custo nos 32
+   arquivos, mas a 0,01 do degrau de 7Case1; com outro aparelho ou outro painel, esse degrau pode
+   estar noutro lugar. O padrão ficou 0,25; o diálogo deixa baixar.
+3. **Onde um deslocamento vira defeito os dados não dizem.** As cópias dizem o que o nosso acha
+   de cada tamanho; os arquivos reais, que abaixo de 0,20 o que aparece não tem forma de defeito.
+   Por isso a tabela acima é de sensibilidade, não de acerto.
+4. **7Ctrl5 (33,3%) e 14Case1 (26,0%)**: a calibração apoia o que o nosso faz neles, no sentido de
+   que é o que ele faz com um defeito conhecido igual. Em 7Ctrl5 o primeiro terço tem os corantes
+   deslocados de 0,25 a 0,35 do desvio: nas cópias, "todos os corantes nos primeiros 30%" de
+   0,25 sai em 96,5%, e de 0,3 em 99,9%. O 7Ctrl5 perde o mesmo com qualquer limite de 0,15
+   a 0,33, 30% em 0,36 e 1% em 0,50. 14Case1 tem um afundamento de mais de um desvio (APC-Cy7
+   1,23): perde de 24,8 a 26,0% com qualquer limite de 0,15 a 0,50. O que a calibração não
+   diz é se um deslocamento de 0,3 do desvio, sustentado por um terço da aquisição, estraga a
+   análise que se quer fazer — isso é de quem conhece o experimento.
+
+#### Arquivos públicos com problema conhecido
+
+Os exemplos que vêm com o flowAI (`Bcells`, 3 aquisições de um LSRII) e com o PeacoQC
+(`111.fcs`, 10 mil eventos), compensados quando a matriz deles se deixa inverter (a dos
+`Bcells` é singular e ficou sem compensar) e transformados por `estimateLogicle`; o nosso julgou
+esses valores como estão (sem escala). Percentual removido e onde (fração do tempo):
+
+| Arquivo | Nosso | PeacoQC | flowAI |
+|---|---|---|---|
+| Bcells 1 (64.562 eventos) | 24,0 (0,51–1,00: vazão, sinal, deriva) | 15,6 (0,55–1,00) | 40,6 (0–0,07 e 0,53–1,00, em pedaços) |
+| Bcells 2 (30.562) | 6,3 (0,94–1,00: sinal e a passada curta; sem ela, 2,8) | 11,7 (0,93–1,00) | 25,7 (0–0,02 e 0,87–1,00) |
+| Bcells 3 (30.000) | 0 | 0 | 42,4 |
+| 111.fcs (10.000) | 10,5 (0–0,09: sinal, deriva) | 50,0 (0–0,30, 0,54–0,70, 0,97–1,00) | 8,0 |
+
+Em Bcells 1 o defeito é nítido: a partir de 27 s a vazão cai a um décimo e o SSC satura. Os
+três acham; o nosso começa cerca de 2 s antes do PeacoQC, onde a vazão já sobe e PE-Texas Red já se
+afasta (com `drift` 0,4 o nosso dá exatamente o trecho dele, Jaccard 0,99). Em Bcells 2 a passada
+curta é o que leva o nosso ao fim do arquivo que o PeacoQC remove (do que ele remove, o nosso
+remove 54%; sem ela, 24%). Em 111.fcs os primeiros 9 s têm quatro canais visivelmente fora
+(G610, G780, G710 começam na metade do nível e sobem; R710 começa alto); o nosso remove isso e
+mais nada, e o resto do arquivo é plano nos gráficos. O PeacoQC remove metade do arquivo, com
+bins de 500 eventos — 20 bins ao todo. São só quatro arquivos e nenhum tem gabarito de evento;
+mostram que o nosso não erra o defeito nítido, não que acerta os moderados.
 
 ---
 
