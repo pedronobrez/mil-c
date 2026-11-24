@@ -15,6 +15,7 @@ packages below are needed only to run these scripts.
 | `phenograph_compare.py` | `milc.graphcluster.phenograph` | the authors' `PhenoGraph` (PyPI), with its Louvain and with Leiden |
 | `qc_compare.py` + `qc_peacoqc.R` | `milc.qc.check` | PeacoQC, flowAI |
 | `normalize_compare.py` + `normalize_cytonorm.R` | `milc.normalize.fit` / `apply` | CytoNorm (`saeyslab/CytoNorm`) |
+| `curly_compare.py` + `curly_cytoml.R` | `milc.gating.CurlyQuadrantGate` read by `milc.wsp` | CytoML (`flowjo_to_gatingset`), event by event |
 
 ## Installing
 
@@ -64,6 +65,7 @@ python3 tests/reference/abundance_compare.py 100     # tables per setting
 $REF/venv/bin/python tests/reference/phenograph_compare.py
 python3 tests/reference/qc_compare.py
 python3 tests/reference/normalize_compare.py
+python3 tests/reference/curly_compare.py             # needs CytoML: BiocManager::install("CytoML")
 ```
 
 On the day of the run, on a machine busy with other work, they took about

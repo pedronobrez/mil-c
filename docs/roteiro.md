@@ -28,7 +28,7 @@ material de divulgação.
 | Ver e editar keywords | S | N | FCS Express, OMIQ, CellEngine |
 | Anotação de amostras em colunas livres | S | **S** | OMIQ, CellEngine |
 | Agrupar por metadados, mais de uma coluna | S | **S** | OMIQ, CellEngine |
-| Ler workspace do FlowJo (.wsp) | S | **S** (retângulo, polígono, quadrante, booleano e elipse; os três últimos por regras não conferidas com o FlowJo) | FlowKit; Floreada escreve |
+| Ler workspace do FlowJo (.wsp) | S | **S** (retângulo, polígono, quadrante, booleano, elipse e quadrante curvo; os quatro últimos por regras não conferidas com o FlowJo) | FlowKit; Floreada escreve |
 | GatingML | N? | N | FCS Express, Cytobank?, FlowKit |
 
 ### Compensação e escalas
@@ -60,7 +60,7 @@ material de divulgação.
 | Retângulo, polígono, faixa (1D) | S | **S** | todos |
 | Elipse | S | **S** (desenhada aqui e lida do .wsp) | FCS Express, CellEngine, Kaluza, Floreada |
 | Quadrante | S | **S** (idem) | idem |
-| Quadrante deslocado, angulado, curvo | S | N | Kaluza (parte) |
+| Quadrante deslocado, angulado, curvo | S | **S** (braços móveis desenhados aqui; o curvo, "curly", só lido do .wsp, com a curva do CytoML) | Kaluza (parte) |
 | Booleanos (E / OU / NÃO) | S | **S** | FCS Express, Cytobank, Kaluza |
 | Autogate por contorno, gate magnético | S | N | Kaluza (contorno) |
 | Autogating por modelo | P (plugins) | N | OMIQ, Cytobank, FlowLogic, openCyto |
@@ -273,6 +273,14 @@ Coisas feitas que ainda dependem de um olhar de fora:
 - **Um workspace com elipse, quadrante ou booleano.** As regras de leitura vieram do FlowKit e
   do CytoML; nenhum arquivo nosso tem esses gates. A contagem do FlowJo aparece ao lado de cada
   população lida assim: é só comparar.
+- **Um workspace com quadrante "curly" e os seus arquivos.** O FlowJo não grava a curva no
+  workspace — só o centro e o canto, como num quadrante comum — e o manual dá o modelo
+  (p2 = a·√p1 + b), não o `a`. A curva usada é a do CytoML (0,001·d² em 255 canais de cada
+  eixo). Bate com o CytoML evento a evento, a menos da tabela da biexponencial do cytolib (até
+  65 eventos de um canto em 40.000); com o FlowJo, não foi medida. Outro programa (GateLab)
+  ajustou outra curva às contagens do FlowJo, e as duas chegam a mudar um quarto de um canto
+  pequeno. Se tiver um workspace assim com os `.fcs`, a contagem do FlowJo ao lado de cada canto
+  diz qual está mais perto.
 - **A limpeza automática, sem gabarito.** Nos 32 arquivos reais tira 5,3% do total (antes da
   passada lenta, 1,4%); o PeacoQC tira 5,1% e o flowAI 12,0% dos mesmos arquivos, e não são os
   mesmos eventos. Não há como dizer quem tem razão sem uma amostra que se sabe ruim.
@@ -325,7 +333,8 @@ conhecida de 81 para 97% e de 54 para 76%; nos 32 arquivos reais de 1,4 para 5,3
 PeacoQC 5,1%); quadrante de braços móveis e gates automáticos (botão Auto…); proliferação,
 ciclo celular e cinética (botão Model…; proliferação conferida com o flowFit, os outros dois só
 em simulação); exportação dos gates como workspace do FlowJo e Gating-ML 2.0 (relido aqui e
-pelo FlowKit sem diferença de eventos; **nunca aberto no FlowJo**).
+pelo FlowKit sem diferença de eventos; **nunca aberto no FlowJo**); quadrantes "curly" lidos
+do workspace com a curva do CytoML (conferidos com o CytoML 2.24.0, não com o FlowJo).
 
 Prioritárias:
 
@@ -337,8 +346,10 @@ Prioritárias:
    amostra que se sabe ruim para calibrá-lo.
 4. **Gates automáticos: refazer o ajuste** quando o gate pai muda, e não perder o ajuste à mão
    ao renomear um gate ajustado por amostra.
-5. **Quadrantes "curly" do FlowJo**: o workspace não guarda a curva; seria preciso reproduzir a
-   que o FlowJo desenha.
+5. ~~**Quadrantes "curly" do FlowJo**~~ **Feito em parte**: lidos do workspace, desenhados com
+   as duas curvas e o centro arrastável, gravados no projeto e exportados (de volta como curly
+   no `.wsp`; em polígonos no Gating-ML). A curva é a do CytoML; falta conferir com o FlowJo
+   num workspace real com os arquivos, e desenhar um novo aqui.
 6. **Modelos**: ciclo celular com população aneuploide, debris e dobletes; conferir ciclo e
    cinética com um arquivo real e com o FlowJo ou o ModFit.
 
@@ -373,6 +384,12 @@ Documentação e páginas dos fabricantes, consultadas em 22 de novembro de 2026
 - **Infinicyt:** bdbiosciences.com (infinicyt-software).
 - **Floreada:** floreada.io.
 - **Código aberto:** cytoflow.readthedocs.io, flowkit.readthedocs.io.
+- **Quadrante "curly"** (consultado em 23 de novembro de 2026): docs.flowjo.com/flowjo/graphs-and-gating/advanced-gates/gw-gatecurlyquad
+  (o modelo); github.com/RGLab/CytoML, `inst/include/CytoML/winFlowJoWorkspace.hpp` (como lê o
+  `CurlyQuad`) e github.com/RGLab/cytolib, `src/gate.cpp`, `CurlyQuadGate::interpolate` (a
+  curva); github.com/Benchling-Open-Source/allotropy, `tests/parsers/flowjo/testdata/flowjo_example_2.wsp`
+  (um workspace do FlowJo 10.10 com quadrantes curly); github.com/david-priest/GateLab,
+  `src/engine/models.ts` (outra curva, ajustada às contagens do FlowJo; não conferida).
 - **Revisão cruzada:** graphpad.com/guides/best-flow-cytometry-analysis-software — publicada pelo
   fabricante do Prism, do OMIQ e do FCS Express, portanto não neutra.
 
