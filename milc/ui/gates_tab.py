@@ -531,6 +531,8 @@ class GatesTab(QtWidgets.QWidget):
                 lambda _checked=False, k=kind: self.open_model(k))
         self.model_button.setMenu(models)
         looks.addWidget(self.model_button)
+        from .unmixing_dialog import button as unmixing_button
+        looks.addWidget(unmixing_button(self))
         right.addLayout(looks)
         right.addWidget(self.stack, 1)
 

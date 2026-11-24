@@ -1,12 +1,13 @@
-# Quatro métodos do MIL-C ao lado dos pacotes originais
+# Métodos do MIL-C ao lado dos pacotes originais
 
-Medido em 23 de novembro de 2026. Quatro métodos do MIL-C foram escritos a partir dos artigos e
+Medido em 23 de novembro de 2026. Os métodos do MIL-C foram escritos a partir dos artigos e
 só tinham sido conferidos por simulação. Aqui cada um foi posto ao lado do programa em que se
 inspira, com a mesma entrada, e o que está escrito é o que foi medido. Onde um número não foi
-medido, ele não aparece.
+medido, ele não aparece. As §1 a §4 são da primeira rodada; as §5 a §8 (autocompensação, ciclo
+celular e cinética, quadrante "curly", unmixing espectral) são da segunda.
 
-A §7, do mesmo dia, é de outro tipo: o quadrante "curly" do FlowJo, cuja curva o workspace não
-guarda, posto ao lado da leitura que o CytoML faz dele.
+A §7 é de outro tipo: o quadrante "curly" do FlowJo, cuja curva o workspace não guarda, posto
+ao lado da leitura que o CytoML faz dele.
 
 Os scripts que produzem tudo isto estão em `tests/reference/` (o `README.md` de lá diz como
 instalar os pacotes e rodar). Eles não fazem parte da suíte de testes.
@@ -23,6 +24,7 @@ instalar os pacotes e rodar). Eles não fazem parte da suíte de testes.
 | `autocomp.autospill` / `classic` | AutoSpill 0.2.0 (GitHub), flowStats 4.24.0 | Nos mesmos eventos o nosso AutoSpill dá a matriz do pacote a 2e-5 (simulado) e 3e-4 (controles reais do flowCore), com o mesmo número de iterações. Em simulação acha a matriz verdadeira a 0,04 ponto percentual; o clássico, a 0,3. Os exemplos do próprio AutoSpill (FlowRepository) não puderam ser baixados. |
 | `cellcycle.fit` | o BrdU das mesmas células (223 arquivos públicos de BrdU/PI) | O FlowJo e o ModFit não estão aqui. Sem gate de singletos, os agregados achados (24,8%) batem com o que o gate tira (25,6%; r = 0,90) e as fases ficam as dos singletos. Nos 39 controles o Dean-Jett-Fox dá 6,6 pontos de S a menos que o BrdU (DP 5,8); o Watson, 3,9 a mais com DP 13,5. |
 | `kinetics.curve` / `measure` | as mesmas definições refeitas em R (flowCore) | Iguais até 1e-13 em 23 arquivos reais com Time. Confere a aritmética; nenhum fluxo de cálcio público foi alcançado. |
+| `unmixing` (espectral) | SpectroFlo 3.3.0 (arquivos já desmisturados), AutoSpectral (GitHub, f38f2d5) | Com os espectros do SpectroFlo, o nosso OLS reproduz os valores gravados por ele (1e-7 do maior valor). Os espectros tirados aqui dos mesmos controles de beads têm cosseno mediano 0,99994 com os dele (pior: ViaKrome 808, 0,966). Contra as funções do AutoSpectral, OLS, WLS por evento, similaridade e número de condição coincidem a 1e-9 ou melhor. |
 
 Versões: R 4.6.1, Bioconductor 3.23, limma 3.68.5, flowCore 2.24.0, FlowSOM 2.20.0, leidenalg
 0.12.0, Python 3.14.6, em macOS arm64. Todos os pacotes instalaram; nenhuma comparação foi
@@ -976,6 +978,80 @@ transcrição da construção do cytolib (no máximo 2 eventos por canto, os que
 segmentos e a curva), o canto como polígono, o projeto salvo e reaberto, a ida e volta pelo
 `.wsp` (os mesmos eventos) e pelo Gating-ML (no máximo 2 eventos por canto), as contagens do
 CytoML acima e o quadrante na janela.
+
+---
+
+## 8. Unmixing espectral (`milc/unmixing.py`), o SpectroFlo e o AutoSpectral
+
+### O que foi comparado
+
+- **SpectroFlo 3.3.0** (Cytek), por meio dos arquivos que ele mesmo desmisturou. Não há como
+  rodar o SpectroFlo aqui; mas o conjunto de dados traz cada arquivo duas vezes, como adquirido
+  (`Raw`) e como o SpectroFlo o desmisturou (`Unmixed`), evento por evento. Daí se tira a
+  matriz que ele aplicou, por mínimos quadrados, e dela os espectros de referência dele.
+- **AutoSpectral** (DrCytometer, GitHub, commit `f38f2d5`, AGPL-3.0): as quatro funções que
+  correspondem às nossas — `unmix.ols`, `unmix.wls.per.cell`, `cosine.similarity` e
+  `calculate.condition.number` (que o pacote chama de "Complexity Index") — carregadas de uma
+  cópia da pasta `R/` dele, sem instalar o pacote. Nenhum código dele está neste repositório.
+
+Script: `tests/reference/unmixing_compare.py` (e `unmixing_autospectral.R`).
+
+### Dados
+
+"AutoSpectral: Bead unmixed" (Burton, Dooley e Liston; Mendeley Data, doi
+10.17632/x7z4bdvv7y.1, CC BY 4.0): Aurora de 5 lasers, 64 detectores; 42 controles de uma cor
+em beads UltraComp, beads negativas e células de baço não marcadas. Só os controles foram
+baixados (cerca de 260 MB dos 7,4 GB do arquivo zip, por requisições de faixa; o script faz
+isso com `--fetch`). As amostras (baço, pulmão e cérebro, de 100 a 450 MB cada) não foram
+baixadas.
+
+### Concordância medida
+
+| Medida | Resultado |
+|---|---|
+| Os valores do SpectroFlo como função linear dos brutos | erro máximo 3,7e-7 do maior valor; a matriz muda entre os 44 arquivos no máximo 3,9e-6 da maior entrada. É uma matriz só, 64 × 43 (42 fluorocromos e AF) |
+| Os espectros dele, pinv(U) | máximos de cada linha entre 0,999999 e 1,000001: é OLS sobre espectros com pico 1, o que o MIL-C faz |
+| Nosso OLS com os espectros dele, nos eventos brutos | os valores gravados por ele, a 1,3e-7 do maior valor |
+| Nossos espectros (mesmos controles, negativo = eventos fracos do próprio controle) contra os dele | cosseno mediano 0,99994; os mais baixos: ViaKrome 808 0,966, Spark UV 387 0,997, Alexa Fluor 532 0,998; AF 0,9994. Maior diferença num detector (pico = 1): mediana 0,009, máximo 0,26 (ViaKrome 808) |
+| O mesmo, com as beads negativas como negativo | mediana 0,99995; ViaKrome 808 0,972; máximo 0,25 |
+| Pico em outro detector | só o BUV615: o nosso em UV10, o dele em YG3 (o BUV615 é excitado pelo UV e pelo amarelo-verde, e os dois picos são parecidos) |
+| Índice de complexidade (número de condição) | 76,60 com os nossos espectros (76,07 com beads negativas); 73,84 com os dele |
+| Valores desmisturados das beads positivas (5% mais brilhantes), no próprio canal, nosso ÷ dele | mediana 1,0010 (de 0,991 a 1,023) |
+| Maior mediana que vai para outro canal, em fração do próprio | nosso: mediana 0,005, máximo 0,05; dele: mediana 0,011, máximo 0,34 (ViaKrome 808; cFluor BYG750 0,07; Spark UV 387 0,07) |
+| AutoSpectral, OLS, nos espectros do SpectroFlo e 2.996 eventos | diferença máxima 1,0e-14 do maior valor |
+| AutoSpectral, WLS por evento (peso 1 / max(\|y\|, 125)) | 1,1e-14 |
+| AutoSpectral, similaridade de cosseno | 8,0e-10 (ele soma 1e-9 à norma) |
+| AutoSpectral, número de condição | 73,839717 contra 73,839715 (ele imprime 73,84); a diferença vem de normalizarmos cada linha pelo seu máximo, que nos espectros dele fica a 1e-6 de 1 |
+| A biblioteca de espectros do Aurora do AutoSpectral, lida por `read_csv` | 157 espectros × 64 detectores |
+
+WLS contra OLS, com os nossos espectros: nas 222.287 células não marcadas o desvio robusto de
+cada canal cai a 0,92 do OLS (mediana; de 0,82 a 1,04); nas beads mais brilhantes de 11
+controles, nos outros canais, a 0,96 (de 0,69 a 1,10). Tempo, nas mesmas 222.287 células com
+43 espectros: OLS 0,02 s, WLS 12,8 s.
+
+### Onde diferem e por quê
+
+- **Os nossos espectros explicam melhor as próprias beads, mas isso é circular**: foram tirados
+  desses mesmos eventos. O que a tabela mostra é que o método de extração (pico, 5% mais
+  brilhantes, mediana menos a do negativo) chega perto do espectro do SpectroFlo, não que um
+  seja mais certo que o outro.
+- **ViaKrome 808** é o único espectro longe (cosseno 0,966). Os eventos de beads usados pelo
+  SpectroFlo foram escolhidos pelo usuário em gates que não estão nos arquivos; uma escolha
+  diferente dos positivos pode explicar a diferença; isso não foi verificado.
+- **O complexity index da Cytek não tem fórmula publicada.** O que se mediu é o número de
+  condição da matriz de espectros, como o AutoSpectral calcula. Que o SpectroFlo mostre o mesmo
+  número não foi conferido: ele não aparece nos arquivos.
+- **O WLS da Cytek não foi comparado**: o SpectroFlo deste conjunto usou OLS (a matriz é uma
+  só, linear). O nosso WLS é o "por evento" do AutoSpectral, com o mesmo piso de 125.
+
+### O que não foi feito
+
+- As amostras de tecido do conjunto não foram desmisturadas aqui nem comparadas com as do
+  SpectroFlo; nem foi testado o controle de AF por tecido.
+- Nenhum arquivo do Sony ID7000 ou do BD FACSymphony A5 SE foi aberto. Os nomes de detector
+  deles não foram vistos; a escolha automática dos detectores (tudo que não é FSC, SSC ou Time,
+  só as áreas) não foi vista neles, e o diálogo não deixa escolher os detectores à mão (um CSV
+  de espectros deixa).
 
 ---
 

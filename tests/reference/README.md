@@ -19,6 +19,7 @@ packages below are needed only to run these scripts.
 | `cellcycle_compare.py` | `milc.cellcycle.fit` on PI alone | the BrdU of the same cells, gated here (no DNA-histogram program could be run) |
 | `kinetics_compare.py` + `kinetics_flowcore.R` | `milc.kinetics.curve` / `measure` | the same definitions written again in R on flowCore (arithmetic only) |
 | `curly_compare.py` + `curly_cytoml.R` | `milc.gating.CurlyQuadrantGate` read by `milc.wsp` | CytoML (`flowjo_to_gatingset`), event by event |
+| `unmixing_compare.py` + `unmixing_autospectral.R` | `milc.unmixing` | SpectroFlo's own unmixed files; AutoSpectral's R functions (`DrCytometer/AutoSpectral`) |
 
 ## Installing
 
@@ -97,6 +98,26 @@ The real data are only read; nothing is written beside them.
 around (files named `<day><Case|Ctrl><animal>.fcs` and the FlowJo
 workspace with the gates down to `Live/CD45`); `common.py` says how it is
 read.
+
+## Spectral unmixing
+
+`unmixing_compare.py` needs the bead controls of the public dataset "AutoSpectral: Bead
+unmixed" (Mendeley Data, doi 10.17632/x7z4bdvv7y.1, CC BY 4.0), raw and as SpectroFlo unmixed
+them. `--fetch` takes only those (about 260 MB) out of the 7.4 GB archive with HTTP range
+requests, into an empty folder of your own:
+
+```sh
+export MILC_REF_SPECTRAL=$REF/spectral            # an empty folder: Raw/ and Unmixed/ go here
+python3 tests/reference/unmixing_compare.py --fetch
+# optional: AutoSpectral's R folder (AGPL-3.0), not installed, only four files sourced
+git clone --depth 1 https://github.com/DrCytometer/AutoSpectral $REF/AutoSpectral
+export AUTOSPECTRAL_R=$REF/AutoSpectral/R
+python3 tests/reference/unmixing_compare.py
+```
+
+The run written up used AutoSpectral commit f38f2d5. Putting AutoSpectral's
+`inst/extdata/Aurora_spectral_reference_library.csv` in `$MILC_REF_SPECTRAL` also has it read
+as a CSV of spectra.
 
 `phenograph_compare.py` calls nothing but
 `graphcluster.phenograph(X, k=, resolution=, seed=)`, so it can be run

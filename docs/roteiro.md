@@ -39,7 +39,7 @@ material de divulgação.
 | Editor de matriz | S | **S** (por amostra, ou uma para todas) | FCS Express, OMIQ, CellEngine, Kaluza |
 | Autocompensação por single stains | S | **S** (positivo × negativo; detector primário pelo brilho, com troca à mão; gate de scatter opcional) | FCS Express, OMIQ, FlowLogic, Floreada |
 | AutoSpill | S | **S** (conferido com o pacote em R) | Floreada, R |
-| Unmixing espectral | S | N | FCS Express, OMIQ |
+| Unmixing espectral | S | **S** (OLS e WLS, AF, similaridade; ver abaixo) | FCS Express, OMIQ |
 | Biexponencial | S | **S** (a do FlowJo, conferida) | FCS Express |
 | Logicle, hyperlog | S | **S** (logicle; hyperlog não) | Floreada (logicle), R |
 | Arcsinh, logarítmica | S | **S** | OMIQ, Cytobank, CellEngine |
@@ -340,6 +340,31 @@ e o Dean-Jett-Fox dá uns 6 pontos de S a menos que as células BrdU+ nos contro
 mais largo por natureza; o Watson erra pouco na média e muito em cada arquivo. A cinética bate
 com as mesmas contas refeitas em R até 1e-13 — o que confere a aritmética, não um fluxo de
 cálcio de verdade, que não achei público.
+
+### Unmixing espectral (23 de novembro de 2026)
+
+Feito, em primeira versão: o item 2 da lista abaixo. "Unmixing…" em Gates abre um diálogo
+onde se marcam os controles de uma cor e o fluorocromo de cada um, o controle não marcado, a
+autofluorescência como mais um espectro e o método (OLS, ou WLS com pesos de Poisson por
+evento, como o da Cytek). Mostra os espectros, a matriz de similaridade e o índice de
+complexidade, e quanto de cada controle o conjunto deixa sem explicar; os espectros também
+entram e saem por CSV. Aplicado, cada amostra com aqueles detectores é desmisturada em vez de
+compensada: os canais desmisturados, com o nome do fluorocromo, tomam o lugar dos detectores e
+são canais de fluorescência comuns para gates, estatística, clusters e figuras. Vai com o
+projeto, e mudar o unmixing avisa que o concatenado ficou velho, como uma matriz nova. Os
+arquivos convencionais não mudam: os dados do experimento abertos antes e depois dão os mesmos
+canais, a mesma matriz, os mesmos valores e as mesmas contagens.
+
+Conferido (`docs/comparacao.md` §8) num conjunto público do Aurora, 42 controles em beads com
+64 detectores, que traz cada arquivo bruto e desmisturado pelo SpectroFlo 3.3: com os espectros
+do SpectroFlo o nosso OLS dá os valores dele (1e-7); os espectros tirados aqui dos mesmos
+controles têm cosseno mediano 0,99994 com os dele (o pior, ViaKrome 808, 0,966); e OLS, WLS,
+similaridade e número de condição dão os números das funções do AutoSpectral. **Não
+conferido**: o WLS e o índice de complexidade da própria Cytek (o conjunto usou OLS, e a fórmula
+do índice não é publicada); arquivos do Sony ID7000 e do FACSymphony A5 SE; as amostras de
+tecido do conjunto. Falta: matriz de espalhamento (SSM), AF por célula ou vários AF, unmixing
+por amostra, escolha manual dos detectores no diálogo; e o WLS é lento em arquivos grandes
+(13 s para 222 mil eventos com 43 espectros).
 
 ### Próximas implementações, na ordem em que eu faria
 
